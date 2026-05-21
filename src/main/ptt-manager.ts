@@ -109,6 +109,9 @@ export class PTTManager extends EventEmitter {
       if (this.heldSince !== null) return;
       this.heldSince = Date.now();
       this.startEmitted = false;
+      // Emit 'arm' immediately so the host can start capturing audio NOW,
+      // before the debounce. Otherwise we lose the first 150ms of speech.
+      this.emit("arm");
       this.holdTimer = setTimeout(() => {
         this.startEmitted = true;
         this.emit("start");

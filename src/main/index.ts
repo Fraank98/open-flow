@@ -175,24 +175,32 @@ async function main(): Promise<void> {
     onQuit: () => app.quit(),
   });
 
-  ptt.on("start", () => {
+  // 'arm' fires immediately on Option DOWN — start mic + reset orchestrator
+  // NOW so we don't lose the first 150ms of speech to the debounce. Don't
+  // change the coordinator state yet (that happens on confirmed 'start').
+  ptt.on("arm", () => {
     orchestrator.reset();
-    coordinator.startRecording();
     recorderWin.webContents.send("audio:start");
+  });
+  ptt.on("start", () => {
+    coordinator.startRecording();
     menubar.setStatus("Recording…");
   });
   ptt.on("stop", async () => {
     recorderWin.webContents.send("audio:stop");
     await new Promise((r) => setTimeout(r, 250));
     const samples = orchestrator.snapshot();
-    const lang = (await preferencesStore.load()).language;
-    await coordinator.finishWithAudio(samples, SAMPLE_RATE, lang);
+    const currentPrefs = await preferencesStore.load();
+    await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {
+      useLlmCleanup: currentPrefs.useLlmCleanup,
+    });
     menubar.setStatus("Idle");
   });
   ptt.on("cancel", () => {
-    // User tapped Option briefly without holding — cancel any in-flight
-    // recording state so the next real press starts fresh.
-    coordinator.cancel();
+    // User tapped Option briefly (< debounce) — stop the mic we eagerly
+    // started on 'arm', discard the audio, and stay idle.
+    recorderWin.webContents.send("audio:stop");
+    orchestrator.reset();
     menubar.setStatus("Idle");
   });
 

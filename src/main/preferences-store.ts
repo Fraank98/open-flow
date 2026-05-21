@@ -8,6 +8,7 @@ export interface Preferences {
   hotkeyAccelerator: string;
   language: string;
   debugLogging: boolean;
+  useLlmCleanup: boolean;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -17,6 +18,7 @@ export const DEFAULT_PREFS: Preferences = {
   hotkeyAccelerator: "Alt+Space",
   language: "auto",
   debugLogging: false,
+  useLlmCleanup: true,
 };
 
 export class PreferencesStore {

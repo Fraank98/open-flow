@@ -75,35 +75,65 @@ export class PipelineCoordinator {
     this.setState("idle");
   }
 
-  async finishWithAudio(samples: Float32Array, sampleRate: number, language: string): Promise<void> {
+  async finishWithAudio(
+    samples: Float32Array,
+    sampleRate: number,
+    language: string,
+    options: { useLlmCleanup?: boolean } = {},
+  ): Promise<void> {
     if (this.state !== "recording") return;
+    const useLlmCleanup = options.useLlmCleanup !== false; // default true
 
+    const totalStart = Date.now();
     try {
       this.setState("transcribing");
       const wavBytes = encodeWav(samples, sampleRate);
+      await this.deps.logger.info("pipeline start", {
+        audioSamples: samples.length,
+        audioSeconds: +(samples.length / sampleRate).toFixed(2),
+        language,
+        useLlmCleanup,
+      });
       const t = await this.deps.transcribe({ wavBytes, language });
+      await this.deps.logger.info("transcribed", {
+        text: t.text,
+        detectedLang: t.language,
+        durationMs: t.durationMs,
+      });
       if (this.cancelled) {
         this.setState("idle");
         return;
       }
       if (t.text.trim().length === 0) {
-        await this.deps.logger.info("empty transcript, skipping cleanup");
+        await this.deps.logger.info("empty transcript, skipping pipeline");
         this.setState("idle");
         return;
       }
 
-      this.setState("cleaning");
-      const c = await this.deps.clean(t.text);
-      if (this.cancelled) {
-        this.setState("idle");
-        return;
+      let textToInject = t.text;
+      if (useLlmCleanup) {
+        this.setState("cleaning");
+        const c = await this.deps.clean(t.text);
+        await this.deps.logger.info("cleaned", {
+          text: c.text,
+          usedFallback: c.usedFallback,
+          durationMs: c.durationMs,
+        });
+        if (this.cancelled) {
+          this.setState("idle");
+          return;
+        }
+        textToInject = c.text;
+      } else {
+        await this.deps.logger.info("LLM cleanup disabled — using raw transcript");
       }
 
       this.setState("injecting");
-      const r = await this.deps.inject(c.text);
+      const r = await this.deps.inject(textToInject);
       if (!r.pasted) {
         await this.deps.logger.warn("paste failed, text left in clipboard", { reason: r.reason });
       }
+      await this.deps.logger.info("pipeline done", { totalMs: Date.now() - totalStart });
       this.setState("idle");
     } catch (err) {
       await this.deps.logger.error("pipeline failure", {

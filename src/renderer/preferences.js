@@ -8,6 +8,7 @@ async function init() {
 
   $("#hotkey").value = prefs.hotkeyAccelerator;
   $("#debug").checked = prefs.debugLogging;
+  $("#cleanup").checked = prefs.useLlmCleanup !== false;
 
   const langSel = $("#language");
   for (const lang of catalog.languages) {
@@ -84,6 +85,7 @@ async function init() {
       whisperModelId: selectedWhisper,
       llmModelId: selectedLlm,
       debugLogging: $("#debug").checked,
+      useLlmCleanup: $("#cleanup").checked,
     };
     await window.openFlowPrefs.save(next);
     $("#status").textContent = "Saved. Restart the app for hotkey/model changes to take effect.";
