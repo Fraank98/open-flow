@@ -1,0 +1,38 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; font-family: -apple-system, system-ui, sans-serif; background: #1e1e1e; color: #eee; }
+#root { max-width: 560px; margin: 0 auto; padding: 32px; }
+header h1 { font-size: 18px; margin-bottom: 24px; opacity: 0.7; font-weight: 500; }
+
+.step { display: none; }
+.step.active { display: block; }
+.step h2 { font-size: 22px; margin-bottom: 14px; }
+.step p { margin-bottom: 14px; line-height: 1.5; }
+.muted { opacity: 0.6; font-size: 13px; }
+
+button { background: #2a2a2c; color: #fff; border: 1px solid #3a3a3c; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; margin-right: 6px; }
+button:hover:not(:disabled) { background: #34343a; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.primary { background: #0a84ff; border-color: #0a84ff; padding: 10px 20px; font-size: 14px; margin-top: 20px; }
+button.primary:hover:not(:disabled) { background: #1090ff; }
+
+.perm { padding: 14px; background: #2a2a2c; border-radius: 8px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.perm strong { font-size: 14px; }
+.status { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: #444; }
+.status.granted { background: #2c6e2c; color: #fff; }
+.status.denied { background: #6e2c2c; color: #fff; }
+
+.tier { padding: 14px; background: #2a2a2c; border-radius: 8px; margin-bottom: 10px; cursor: pointer; border: 2px solid transparent; }
+.tier:hover { background: #34343a; }
+.tier.selected { border-color: #0a84ff; }
+.tier strong { display: block; margin-bottom: 4px; }
+.tier .desc { font-size: 12px; opacity: 0.75; }
+
+.progress-container { margin-top: 20px; }
+.progress-label { font-size: 13px; margin-bottom: 6px; }
+.progress-bytes { font-size: 11px; opacity: 0.6; margin-top: 4px; }
+progress { width: 100%; height: 6px; }
+
+.error { background: #6e2c2c; padding: 12px; border-radius: 8px; margin-top: 12px; font-size: 13px; }
+.hidden { display: none; }
+
+kbd { background: #444; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
