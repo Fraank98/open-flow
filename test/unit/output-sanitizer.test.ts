@@ -53,4 +53,21 @@ describe("sanitizeLlmOutput", () => {
     const result = sanitizeLlmOutput("Hi.", "hi");
     expect(result.usedFallback).toBe(false);
   });
+
+  it("does not strip 'sure' followed by keywords when no colon preamble structure exists", () => {
+    expect(sanitizeLlmOutput("Sure, cleaned my room today.", "sure cleaned my room today").text)
+      .toBe("Sure, cleaned my room today.");
+    expect(sanitizeLlmOutput("Sure, corrected the report yesterday.", "sure corrected the report yesterday").text)
+      .toBe("Sure, corrected the report yesterday.");
+    expect(sanitizeLlmOutput("Sure here's the deal.", "sure here is the deal").text)
+      .toBe("Sure here's the deal.");
+    expect(sanitizeLlmOutput("Sure here is my answer.", "sure here is my answer").text)
+      .toBe("Sure here is my answer.");
+  });
+
+  it("does not strip standalone 'Cleaned' followed by content without colon", () => {
+    // "Cleaned the dishes" should not be stripped (no colon = no preamble structure)
+    expect(sanitizeLlmOutput("Cleaned the dishes earlier.", "cleaned the dishes earlier").text)
+      .toBe("Cleaned the dishes earlier.");
+  });
 });

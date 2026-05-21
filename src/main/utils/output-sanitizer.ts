@@ -4,10 +4,10 @@ export interface SanitizedOutput {
 }
 
 const NOISY_PREFIX_PATTERNS: RegExp[] = [
-  /^\s*sure[,!.]?\s*(here\s+is|here's|cleaned|corrected)\s*(the\s+)?(cleaned|corrected)?\s*(version|text)?\s*:?\s*\n?/i,
-  /^\s*here\s+(is|are)\s+the\s+cleaned\s+(text|version)\s*:?\s*\n?/i,
-  /^\s*cleaned\s+text\s*:?\s*\n?/i,
-  /^\s*cleaned\s*:?\s*\n?/i,
+  /^\s*sure[,!.]?\s*(here\s+is|here's|cleaned|corrected)\s*(the\s+)?(cleaned|corrected)?\s*(version|text)?\s*:\s*\n?/i,
+  /^\s*here\s+(is|are)\s+the\s+cleaned\s+(text|version)\s*:\s*\n?/i,
+  /^\s*cleaned\s+text\s*:\s*\n?/i,
+  /^\s*cleaned\s*:\s*\n?/i,
 ];
 
 const SHORT_OUTPUT_THRESHOLD = 50; // chars
