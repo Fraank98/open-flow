@@ -58,8 +58,30 @@ Headless modules live under `src/main/`:
 - On Apple Silicon, Node must run natively (arm64). The build script auto-reexecs via `arch -arm64` if needed, but tests assume the runtime path is also arm64.
 - Tiny Whisper model produces imperfect transcriptions — fine for integration tests, but use `base` or larger for real use.
 
-## Status / next plans
+## Status
 
-- Plan 1 — Foundation (this repo) — done
-- Plan 2 — Electron shell (hotkey, audio capture, overlay, paste) — pending
-- Plan 3 — Distribution (setup wizard, model manager, .dmg, CI) — pending
+- ✅ Plan 1 — Foundation (headless Whisper + LLM cleanup)
+- ✅ Plan 2 — Electron shell (hotkey, audio, overlay, paste)
+- ✅ Plan 3 — Distribution (setup wizard, model manager, .dmg, CI)
+
+## Install (end-user)
+
+Download the latest `.dmg` from the [Releases page](../../releases), drag `open-flow.app` to Applications, then **right-click → Open** the first time (the build is unsigned).
+
+On first launch, a setup wizard walks you through:
+
+1. Granting microphone + accessibility permissions
+2. Picking a quality tier (Fast / Balanced / Max)
+3. Downloading the chosen AI models
+
+Then press `Option+Space` over any text field to start dictating.
+
+## Build a release locally
+
+```bash
+npm install
+npm run fetch-binaries
+npm run package
+```
+
+Produces `release/open-flow-<version>-arm64.dmg`. See `docs/release-process.md` for the full release workflow.
