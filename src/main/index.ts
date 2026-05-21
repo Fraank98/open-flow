@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 
 import { PipelineCoordinator } from "./pipeline-coordinator.js";
 import { AudioOrchestrator } from "./audio-orchestrator.js";
-import { HotkeyManager } from "./hotkey-manager.js";
+import { PTTManager } from "./ptt-manager.js";
 import { OverlayWindow } from "./overlay-window.js";
 import { MenubarApp } from "./menubar-app.js";
 import { createDefaultTextInjector } from "./text-injector.js";
@@ -153,14 +153,14 @@ async function main(): Promise<void> {
     await logger.error("recorder error", { message });
   });
 
-  const hotkey = new HotkeyManager({ accelerator: prefs.hotkeyAccelerator });
+  const ptt = new PTTManager();
   const prefsWindow = new PreferencesWindow({ modelManager, preferencesStore });
   const menubar = new MenubarApp({
     onToggleEnabled: () => {
       if (menubar.isEnabled()) {
-        hotkey.register();
+        ptt.start();
       } else {
-        hotkey.unregister();
+        ptt.stop();
       }
     },
     onOpenPreferences: () => {
@@ -169,33 +169,40 @@ async function main(): Promise<void> {
     onQuit: () => app.quit(),
   });
 
-  hotkey.on("start", () => {
+  ptt.on("start", () => {
     orchestrator.reset();
     coordinator.startRecording();
     recorderWin.webContents.send("audio:start");
     menubar.setStatus("Recording…");
   });
-  hotkey.on("stop", async () => {
+  ptt.on("stop", async () => {
     recorderWin.webContents.send("audio:stop");
     await new Promise((r) => setTimeout(r, 250));
     const samples = orchestrator.snapshot();
     const lang = (await preferencesStore.load()).language;
     await coordinator.finishWithAudio(samples, SAMPLE_RATE, lang);
-    hotkey.reset();
+    menubar.setStatus("Idle");
+  });
+  ptt.on("cancel", () => {
+    // User tapped Option briefly without holding — cancel any in-flight
+    // recording state so the next real press starts fresh.
+    coordinator.cancel();
     menubar.setStatus("Idle");
   });
 
-  const reg = hotkey.register();
-  if (!reg.ok) {
-    await logger.error("hotkey registration failed", { reason: reg.reason, accelerator: prefs.hotkeyAccelerator });
-  } else {
-    await logger.info("hotkey registered", { accelerator: prefs.hotkeyAccelerator });
+  try {
+    ptt.start();
+    await logger.info("PTT started (hold Right or Left Option to dictate)");
+  } catch (err) {
+    await logger.error("PTT start failed", {
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 
   menubar.create();
 
   app.on("will-quit", () => {
-    hotkey.unregister();
+    ptt.stop();
     overlay.destroy();
     menubar.destroy();
   });
