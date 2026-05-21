@@ -28,9 +28,10 @@ build_whisper() {
   if [[ ! -d "$src" ]]; then
     git clone --depth 1 --branch "$WHISPER_TAG" "$WHISPER_REPO" "$src"
   fi
-  cmake -S "$src" -B "$src/build" -DWHISPER_METAL=ON -DCMAKE_BUILD_TYPE=Release >/dev/null
-  cmake --build "$src/build" -j --target whisper-cli
-  cp "$src/build/bin/whisper-cli" "$BIN_DIR/whisper-cli"
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release >/dev/null
+  # whisper.cpp v1.7.1 names the CLI target "main"; later versions renamed it to "whisper-cli".
+  cmake --build "$src/build" -j --target main
+  cp "$src/build/bin/main" "$BIN_DIR/whisper-cli"
   chmod +x "$BIN_DIR/whisper-cli"
   echo "[ok] whisper-cli → $BIN_DIR/whisper-cli"
 }
