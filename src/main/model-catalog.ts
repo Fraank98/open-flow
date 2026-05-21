@@ -33,16 +33,15 @@ export const LLM_MODELS: readonly ModelDescriptor[] = [
   {
     id: "qwen-0.5b",
     filename: "qwen2.5-0.5b-instruct-q4_k_m.gguf",
-    sizeBytes: 397_807_104,
-    // Pinned at time of writing; verified after download.
-    sha256: "c10c5ec9eea0a30dbfe85e09ab7be1ee0a08abad9c8c12b9d49b8aceb33ce28d",
+    sizeBytes: 491_400_032,
+    sha256: "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
     url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
   },
   {
     id: "qwen-1.5b",
     filename: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-    sizeBytes: 1_117_322_752,
-    sha256: "0ba90fa2c8e4cd3cd64537ab3cffd2fadce9a9b09c5b0e2a7c50aa2eb6bf3404",
+    sizeBytes: 1_117_320_736,
+    sha256: "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
     url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
   },
 ];

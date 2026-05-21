@@ -69,9 +69,25 @@ async function init() {
     updateContinue();
   });
 
+  async function startDownload() {
+    $("#dl-error").classList.add("hidden");
+    $("#dl-actions").classList.add("hidden");
+    $("#dl-stage").textContent = "Preparing…";
+    $("#dl-progress").value = 0;
+    $("#dl-bytes").textContent = "";
+    await window.openFlowSetup.startDownload(selectedTierId);
+  }
+
   $("#tier-continue").addEventListener("click", async () => {
     goto("download");
-    await window.openFlowSetup.startDownload(selectedTierId);
+    await startDownload();
+  });
+
+  $("#dl-retry").addEventListener("click", async () => {
+    await startDownload();
+  });
+  $("#dl-back").addEventListener("click", () => {
+    goto("tier");
   });
 
   window.openFlowSetup.onDownloadProgress(({ stage, bytes, total }) => {
@@ -86,6 +102,7 @@ async function init() {
     } else {
       $("#dl-error").classList.remove("hidden");
       $("#dl-error").textContent = "Download failed: " + (error ?? "unknown");
+      $("#dl-actions").classList.remove("hidden");
     }
   });
 

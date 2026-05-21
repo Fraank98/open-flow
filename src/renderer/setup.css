@@ -33,6 +33,7 @@ button.primary:hover:not(:disabled) { background: #1090ff; }
 progress { width: 100%; height: 6px; }
 
 .error { background: #6e2c2c; padding: 12px; border-radius: 8px; margin-top: 12px; font-size: 13px; }
+#dl-actions { margin-top: 16px; display: flex; gap: 10px; }
 .hidden { display: none; }
 
 kbd { background: #444; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
