@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# If we're on Apple Silicon hardware but running under Rosetta (x86_64 process,
+# e.g. because the parent Node was installed as x86_64), re-exec natively. The
+# arm64 binaries cannot be built reliably from an x86_64 shell because cmake's
+# host feature detection picks the wrong toolchain triplet.
+if [[ "$(uname -m)" == "x86_64" ]] && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+  echo "[reexec] Apple Silicon detected but running as x86_64; re-executing under arch -arm64..."
+  exec arch -arm64 bash "$0" "$@"
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="$ROOT/resources/bin"
 BUILD_DIR="$BIN_DIR/build-tmp"
@@ -28,7 +37,9 @@ build_whisper() {
   if [[ ! -d "$src" ]]; then
     git clone --depth 1 --branch "$WHISPER_TAG" "$WHISPER_REPO" "$src"
   fi
-  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release >/dev/null
+  # GGML_NATIVE=OFF disables -mcpu=native+nodotprod+noi8mm+nosve which Apple
+  # clang 17 doesn't accept. Metal GPU acceleration is unaffected.
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
   # whisper.cpp v1.7.1 names the CLI target "main"; later versions renamed it to "whisper-cli".
   cmake --build "$src/build" -j --target main
   cp "$src/build/bin/main" "$BIN_DIR/whisper-cli"
@@ -46,7 +57,7 @@ build_llama() {
   if [[ ! -d "$src" ]]; then
     git clone --depth 1 --branch "$LLAMA_TAG" "$LLAMA_REPO" "$src"
   fi
-  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF >/dev/null
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
   cmake --build "$src/build" -j --target llama-cli
   cp "$src/build/bin/llama-cli" "$BIN_DIR/llama-cli"
   chmod +x "$BIN_DIR/llama-cli"
