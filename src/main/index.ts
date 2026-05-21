@@ -34,7 +34,6 @@ const BIN_DIR = app.isPackaged
   : join(APP_ROOT, "resources", "bin");
 const WHISPER_BIN = join(BIN_DIR, "whisper-cli");
 const LLAMA_BIN = join(BIN_DIR, "llama-cli");
-const FLAG_MONITOR_BIN = join(BIN_DIR, "flag-monitor");
 
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
@@ -154,18 +153,12 @@ async function main(): Promise<void> {
     await logger.error("recorder error", { message });
   });
 
-  const ptt = new PTTManager({ binaryPath: FLAG_MONITOR_BIN });
-  ptt.on("error", (err: Error) => {
-    void logger.error("PTT runtime error", { message: err.message });
-  });
-  ptt.on("diagnostic", (line: string) => {
-    void logger.info("PTT diagnostic", { line });
-  });
+  const ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged });
   ptt.on("ready", () => {
-    void logger.info("PTT helper ready (Option monitor armed)");
+    void logger.info("PTT armed (in-process NSEvent monitor)");
   });
   ptt.on("trustRequired", () => {
-    void logger.error("PTT helper reports no Accessibility trust");
+    void logger.error("PTT requires Accessibility — prompt shown to user");
   });
   const prefsWindow = new PreferencesWindow({ modelManager, preferencesStore });
   const menubar = new MenubarApp({
@@ -203,20 +196,15 @@ async function main(): Promise<void> {
     menubar.setStatus("Idle");
   });
 
-  try {
-    ptt.start();
-    await logger.info("PTT started (hold either Option key to dictate)");
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await logger.error("PTT start failed", { message });
+  ptt.start();
+  if (!ptt.isTrusted()) {
+    await logger.error("PTT start failed: not trusted for Accessibility");
     const choice = dialog.showMessageBoxSync({
       type: "warning",
-      title: "open-flow can't capture the hotkey",
-      message: "Accessibility permission is required",
+      title: "open-flow needs Accessibility access",
+      message: "Hold-to-dictate requires macOS Accessibility permission",
       detail:
-        "Hold-to-dictate detects when you press Option globally via macOS Accessibility.\n\n" +
-        "Open System Settings → Privacy & Security → Accessibility and enable open-flow, then quit and relaunch.\n\n" +
-        `Underlying error: ${message}`,
+        "Open System Settings → Privacy & Security → Accessibility and enable open-flow, then quit and relaunch the app.",
       buttons: ["Open System Settings", "Quit", "Continue without hotkey"],
       defaultId: 0,
       cancelId: 2,
@@ -229,6 +217,8 @@ async function main(): Promise<void> {
       app.quit();
       return;
     }
+  } else {
+    await logger.info("PTT armed");
   }
 
   menubar.create();

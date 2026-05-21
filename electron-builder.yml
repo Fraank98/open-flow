@@ -10,8 +10,13 @@ files:
   - dist/**/*
   - src/renderer/**/*
   - resources/icons/**/*
+  - build/Release/ptt_monitor.node
   - package.json
   - "!**/.DS_Store"
+
+# Native .node bundles must live outside the asar so dlopen works.
+asarUnpack:
+  - "build/Release/*.node"
 
 extraResources:
   - from: resources/bin
@@ -19,7 +24,6 @@ extraResources:
     filter:
       - "whisper-cli"
       - "llama-cli"
-      - "flag-monitor"
 
 asar: true
 

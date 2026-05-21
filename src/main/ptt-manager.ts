@@ -1,124 +1,119 @@
 import { EventEmitter } from "node:events";
-import { ChildProcess, spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+interface NativePttModule {
+  start: (cb: (state: "DOWN" | "UP") => void) => boolean;
+  stop: () => void;
+  isTrusted: () => boolean;
+  requestTrust: () => boolean;
+}
+
+function loadNativeAddon(appRoot: string, isPackaged: boolean): NativePttModule {
+  // In packaged builds, the .node file lives at app.asar.unpacked/build/Release/.
+  // In dev, at <repo>/build/Release/. We resolve both via createRequire so the
+  // native module is loaded with the right module-search semantics under ESM.
+  const require_ = createRequire(import.meta.url);
+  const candidates = isPackaged
+    ? [
+        join(appRoot, "..", "app.asar.unpacked", "build", "Release", "ptt_monitor.node"),
+        join(appRoot, "build", "Release", "ptt_monitor.node"),
+      ]
+    : [join(appRoot, "build", "Release", "ptt_monitor.node")];
+  let lastErr: unknown = null;
+  for (const path of candidates) {
+    try {
+      return require_(path) as NativePttModule;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw new Error(
+    `Could not load ptt_monitor.node. Tried: ${candidates.join(", ")}. Last error: ${
+      lastErr instanceof Error ? lastErr.message : String(lastErr)
+    }`,
+  );
+}
 
 export interface PTTManagerOptions {
-  /** Path to the compiled flag-monitor Swift binary. */
-  binaryPath: string;
+  /** Repo root (for dev) or asar root (for packaged). Used to resolve the native addon. */
+  appRoot: string;
+  /** Whether the app is running from a packaged .app bundle. */
+  isPackaged: boolean;
   /** Minimum hold duration to count as PTT vs accidental tap (ms). */
   minHoldMs?: number;
 }
 
 /**
- * Push-to-talk manager using a tiny Swift helper that wraps
- * NSEvent.addGlobalMonitorForEvents(.flagsChanged). The helper requires only
- * macOS Accessibility permission (not Input Monitoring) — same model as
- * Wispr Flow and similar dictation apps.
+ * Push-to-talk manager using an in-process Native Node addon (Objective-C++)
+ * that wraps NSEvent.addGlobalMonitorForEvents on .flagsChanged events.
  *
- * The helper writes "DOWN\n" / "UP\n" to stdout when the Option modifier key
- * is held / released globally. This class spawns it, parses the stream, and
- * emits 'start', 'stop', and 'cancel' events with a debounce against
- * accidental taps.
+ * Because the monitor runs in the Electron main process itself (not a spawned
+ * child binary), macOS TCC sees a single Accessibility entry — same UX as
+ * Wispr Flow and similar dictation apps. No Input Monitoring required.
+ *
+ * Emits:
+ *   - 'start'  when Option is held past minHoldMs
+ *   - 'stop'   when Option is released after a successful 'start'
+ *   - 'cancel' if the user releases before minHoldMs (accidental tap)
+ *   - 'trustRequired' if Accessibility is not granted
+ *   - 'ready'  after the monitor is armed
  */
 export class PTTManager extends EventEmitter {
-  private readonly binaryPath: string;
+  private readonly native: NativePttModule;
   private readonly minHoldMs: number;
-  private child: ChildProcess | null = null;
+  private running = false;
   private heldSince: number | null = null;
   private startEmitted = false;
   private holdTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: PTTManagerOptions) {
     super();
-    this.binaryPath = opts.binaryPath;
     this.minHoldMs = opts.minHoldMs ?? 150;
+    this.native = loadNativeAddon(opts.appRoot, opts.isPackaged);
   }
 
   start(): void {
-    if (this.child) return;
-
-    const child = spawn(this.binaryPath, [], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    this.child = child;
-
-    let stdoutBuffer = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString("utf8");
-      let nl = stdoutBuffer.indexOf("\n");
-      while (nl !== -1) {
-        const line = stdoutBuffer.slice(0, nl).trim();
-        stdoutBuffer = stdoutBuffer.slice(nl + 1);
-        this.handleLine(line);
-        nl = stdoutBuffer.indexOf("\n");
-      }
-    });
-
-    let stderr = "";
-    let stderrBuffer = "";
-    child.stderr.on("data", (chunk: Buffer) => {
-      const s = chunk.toString("utf8");
-      stderr += s;
-      stderrBuffer += s;
-      // Emit each complete line as a diagnostic event so the host can log it
-      let nl = stderrBuffer.indexOf("\n");
-      while (nl !== -1) {
-        const line = stderrBuffer.slice(0, nl).trim();
-        stderrBuffer = stderrBuffer.slice(nl + 1);
-        if (line) this.emit("diagnostic", line);
-        nl = stderrBuffer.indexOf("\n");
-      }
-    });
-
-    child.on("error", (err) => {
-      this.emit("error", new Error(`flag-monitor spawn failed: ${err.message}`));
-      this.child = null;
-    });
-
-    child.on("close", (code, signal) => {
-      const wasIntentional = this.child === null;
-      this.child = null;
-      this.clearHoldTimer();
-      this.heldSince = null;
-      this.startEmitted = false;
-      if (!wasIntentional && code !== 0) {
-        this.emit(
-          "error",
-          new Error(
-            `flag-monitor exited unexpectedly (code=${code}, signal=${signal}). stderr: ${stderr.trim().slice(0, 500)}`,
-          ),
-        );
-      }
-    });
-  }
-
-  stop(): void {
-    if (!this.child) return;
-    const c = this.child;
-    this.child = null;
-    this.clearHoldTimer();
-    this.heldSince = null;
-    this.startEmitted = false;
-    c.kill("SIGTERM");
-  }
-
-  private handleLine(line: string): void {
-    if (line === "READY") {
-      this.emit("ready");
-      return;
-    }
-    if (line === "ERROR_NO_TRUST") {
+    if (this.running) return;
+    if (!this.native.isTrusted()) {
+      // Trigger the macOS prompt (shows the standard "open Settings" dialog).
+      this.native.requestTrust();
       this.emit("trustRequired");
       return;
     }
-    if (line === "DOWN") {
-      if (this.heldSince !== null) return; // already holding
+    const installed = this.native.start((state) => this.handleState(state));
+    if (!installed) {
+      this.emit("trustRequired");
+      return;
+    }
+    this.running = true;
+    this.emit("ready");
+  }
+
+  stop(): void {
+    if (!this.running) return;
+    this.native.stop();
+    this.clearHoldTimer();
+    this.heldSince = null;
+    this.startEmitted = false;
+    this.running = false;
+  }
+
+  isTrusted(): boolean {
+    return this.native.isTrusted();
+  }
+
+  private handleState(state: "DOWN" | "UP"): void {
+    if (state === "DOWN") {
+      if (this.heldSince !== null) return;
       this.heldSince = Date.now();
       this.startEmitted = false;
       this.holdTimer = setTimeout(() => {
         this.startEmitted = true;
         this.emit("start");
       }, this.minHoldMs);
-    } else if (line === "UP") {
+    } else if (state === "UP") {
       if (this.heldSince === null) return;
       this.heldSince = null;
       this.clearHoldTimer();
