@@ -34,6 +34,14 @@ All three should pass.
 npm run smoke -- --wav test/fixtures/audio/en-short-clean.wav
 ```
 
+## Run the Electron dev app
+
+```bash
+npm run dev
+```
+
+Launches a menubar tray icon. Press `Option+Space` over any text field to start dictation; press again to stop. See `docs/electron-smoke-checklist.md` for the full manual test plan.
+
 ## Project layout
 
 See `docs/superpowers/specs/2026-05-21-open-flow-mvp-design.md` for the full design.
