@@ -7,6 +7,7 @@ const APP_ROOT = join(dirname(__filename), "..", "..");
 
 export interface MenubarCallbacks {
   onToggleEnabled: () => void;
+  onOpenPreferences: () => void;
   onQuit: () => void;
 }
 
@@ -47,6 +48,7 @@ export class MenubarApp {
           this.refreshMenu();
         },
       },
+      { label: "Preferences…", click: () => this.callbacks.onOpenPreferences() },
       { type: "separator" },
       { label: "Quit open-flow", click: () => this.callbacks.onQuit() },
     ]);
