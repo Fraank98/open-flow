@@ -158,6 +158,15 @@ async function main(): Promise<void> {
   ptt.on("error", (err: Error) => {
     void logger.error("PTT runtime error", { message: err.message });
   });
+  ptt.on("diagnostic", (line: string) => {
+    void logger.info("PTT diagnostic", { line });
+  });
+  ptt.on("ready", () => {
+    void logger.info("PTT helper ready (Option monitor armed)");
+  });
+  ptt.on("trustRequired", () => {
+    void logger.error("PTT helper reports no Accessibility trust");
+  });
   const prefsWindow = new PreferencesWindow({ modelManager, preferencesStore });
   const menubar = new MenubarApp({
     onToggleEnabled: () => {

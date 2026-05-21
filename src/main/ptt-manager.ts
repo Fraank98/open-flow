@@ -54,8 +54,19 @@ export class PTTManager extends EventEmitter {
     });
 
     let stderr = "";
+    let stderrBuffer = "";
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      const s = chunk.toString("utf8");
+      stderr += s;
+      stderrBuffer += s;
+      // Emit each complete line as a diagnostic event so the host can log it
+      let nl = stderrBuffer.indexOf("\n");
+      while (nl !== -1) {
+        const line = stderrBuffer.slice(0, nl).trim();
+        stderrBuffer = stderrBuffer.slice(nl + 1);
+        if (line) this.emit("diagnostic", line);
+        nl = stderrBuffer.indexOf("\n");
+      }
     });
 
     child.on("error", (err) => {
@@ -91,6 +102,14 @@ export class PTTManager extends EventEmitter {
   }
 
   private handleLine(line: string): void {
+    if (line === "READY") {
+      this.emit("ready");
+      return;
+    }
+    if (line === "ERROR_NO_TRUST") {
+      this.emit("trustRequired");
+      return;
+    }
     if (line === "DOWN") {
       if (this.heldSince !== null) return; // already holding
       this.heldSince = Date.now();
