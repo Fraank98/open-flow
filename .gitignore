@@ -15,3 +15,6 @@ test/fixtures/models/
 
 # Vitest
 coverage/
+
+# electron-builder output
+release/
