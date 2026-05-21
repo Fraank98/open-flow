@@ -13,7 +13,9 @@ function makeDeps(overrides: Partial<InjectorDeps> = {}): InjectorDeps {
 }
 
 describe("TextInjector", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("writes the text to clipboard before invoking paste", async () => {
     const deps = makeDeps();
