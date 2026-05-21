@@ -54,19 +54,35 @@ export function createLogger(opts: LoggerOptions): Logger {
     await rename(file, `${file}.1`);
   }
 
+  const queues = new Map<string, Promise<unknown>>();
+
   async function writeLine(file: string, line: string): Promise<void> {
-    await init();
-    await rotateIfNeeded(file);
-    try {
-      await appendFile(file, line + "\n", "utf8");
-    } catch {
-      await writeFile(file, line + "\n", "utf8");
-    }
+    const previous = queues.get(file) ?? Promise.resolve();
+    const job = previous
+      .catch(() => undefined) // don't let prior errors poison the chain
+      .then(async () => {
+        await init();
+        await rotateIfNeeded(file);
+        try {
+          await appendFile(file, line + "\n", "utf8");
+        } catch {
+          await writeFile(file, line + "\n", "utf8");
+        }
+      });
+    queues.set(file, job);
+    await job;
   }
 
   function format(level: string, msg: string, meta?: Record<string, unknown>): string {
     const ts = new Date().toISOString();
-    const metaStr = meta ? " " + JSON.stringify(meta) : "";
+    let metaStr = "";
+    if (meta) {
+      try {
+        metaStr = " " + JSON.stringify(meta);
+      } catch {
+        metaStr = " [unserializable meta]";
+      }
+    }
     return `${ts} ${level} ${msg}${metaStr}`;
   }
 

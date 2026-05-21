@@ -56,4 +56,38 @@ describe("Logger", () => {
     expect(main.size).toBeLessThanOrEqual(200 + 200); // some slack
     expect(rotated.size).toBeGreaterThan(0);
   });
+
+  it("serializes concurrent writes without losing entries", async () => {
+    // Use a maxBytes large enough that 20 small messages fit without rotation,
+    // but still exercise the per-file write queue under concurrent dispatch.
+    const logger = createLogger({ dir, debug: false, maxBytes: 100, maxRotations: 10 });
+    // Fire 20 concurrent writes; with serialization all entries must be preserved.
+    const writes = Array.from({ length: 20 }, (_, i) =>
+      logger.error(`msg-${i.toString().padStart(2, "0")}`),
+    );
+    await Promise.all(writes);
+    // Read all log files (current + rotated) and count total lines.
+    let total = 0;
+    for (let i = 0; i <= 10; i++) {
+      const name = i === 0 ? "error.log" : `error.log.${i}`;
+      try {
+        const c = await readFile(join(dir, name), "utf8");
+        total += c.split("\n").filter((l) => l.length > 0).length;
+      } catch {
+        // file doesn't exist
+      }
+    }
+    // With proper serialization, we expect ALL 20 to be preserved across rotated files
+    expect(total).toBeGreaterThanOrEqual(20);
+  });
+
+  it("does not throw on cyclic meta", async () => {
+    const logger = createLogger({ dir, debug: false, maxBytes: 1024 * 1024 });
+    const cyclic: Record<string, unknown> = { name: "boom" };
+    cyclic.self = cyclic; // create cycle
+    await expect(logger.error("error with cycle", cyclic)).resolves.toBeUndefined();
+    const content = await readFile(join(dir, "error.log"), "utf8");
+    expect(content).toContain("error with cycle");
+    expect(content).toContain("unserializable");
+  });
 });
