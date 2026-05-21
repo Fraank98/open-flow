@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -34,6 +34,7 @@ const BIN_DIR = app.isPackaged
   : join(APP_ROOT, "resources", "bin");
 const WHISPER_BIN = join(BIN_DIR, "whisper-cli");
 const LLAMA_BIN = join(BIN_DIR, "llama-cli");
+const FLAG_MONITOR_BIN = join(BIN_DIR, "flag-monitor");
 
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
@@ -153,7 +154,10 @@ async function main(): Promise<void> {
     await logger.error("recorder error", { message });
   });
 
-  const ptt = new PTTManager();
+  const ptt = new PTTManager({ binaryPath: FLAG_MONITOR_BIN });
+  ptt.on("error", (err: Error) => {
+    void logger.error("PTT runtime error", { message: err.message });
+  });
   const prefsWindow = new PreferencesWindow({ modelManager, preferencesStore });
   const menubar = new MenubarApp({
     onToggleEnabled: () => {
@@ -192,11 +196,30 @@ async function main(): Promise<void> {
 
   try {
     ptt.start();
-    await logger.info("PTT started (hold Right or Left Option to dictate)");
+    await logger.info("PTT started (hold either Option key to dictate)");
   } catch (err) {
-    await logger.error("PTT start failed", {
-      message: err instanceof Error ? err.message : String(err),
+    const message = err instanceof Error ? err.message : String(err);
+    await logger.error("PTT start failed", { message });
+    const choice = dialog.showMessageBoxSync({
+      type: "warning",
+      title: "open-flow can't capture the hotkey",
+      message: "Accessibility permission is required",
+      detail:
+        "Hold-to-dictate detects when you press Option globally via macOS Accessibility.\n\n" +
+        "Open System Settings → Privacy & Security → Accessibility and enable open-flow, then quit and relaunch.\n\n" +
+        `Underlying error: ${message}`,
+      buttons: ["Open System Settings", "Quit", "Continue without hotkey"],
+      defaultId: 0,
+      cancelId: 2,
     });
+    if (choice === 0) {
+      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+      app.quit();
+      return;
+    } else if (choice === 1) {
+      app.quit();
+      return;
+    }
   }
 
   menubar.create();

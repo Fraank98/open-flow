@@ -26,6 +26,7 @@ need() {
 
 need cmake cmake
 need git git
+need swiftc xcode-select
 
 build_whisper() {
   if [[ -x "$BIN_DIR/whisper-cli" ]]; then
@@ -64,11 +65,28 @@ build_llama() {
   echo "[ok] llama-cli → $BIN_DIR/llama-cli"
 }
 
+build_flag_monitor() {
+  if [[ -x "$BIN_DIR/flag-monitor" ]]; then
+    echo "[skip] flag-monitor already present at $BIN_DIR/flag-monitor"
+    return
+  fi
+  local src="$ROOT/resources/native-src/flag-monitor.swift"
+  if [[ ! -f "$src" ]]; then
+    echo "[error] missing $src"
+    exit 1
+  fi
+  echo "[build] flag-monitor (Swift NSEvent helper)"
+  swiftc -O -o "$BIN_DIR/flag-monitor" "$src"
+  chmod +x "$BIN_DIR/flag-monitor"
+  echo "[ok] flag-monitor → $BIN_DIR/flag-monitor"
+}
+
 build_whisper
 build_llama
+build_flag_monitor
 
 echo ""
 echo "Done. Binaries:"
-ls -lh "$BIN_DIR"/whisper-cli "$BIN_DIR"/llama-cli
+ls -lh "$BIN_DIR"/whisper-cli "$BIN_DIR"/llama-cli "$BIN_DIR"/flag-monitor
 echo ""
 echo "Tip: rm -rf $BUILD_DIR to reclaim disk after a successful build."

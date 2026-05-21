@@ -1,97 +1,121 @@
 import { EventEmitter } from "node:events";
-import { uIOhook } from "uiohook-napi";
-
-// macOS kVK_RightOption raw keycode (CGKeyCode value)
-const MACOS_RIGHT_OPTION_RAWCODE = 61;
-const MACOS_LEFT_OPTION_RAWCODE = 58;
+import { ChildProcess, spawn } from "node:child_process";
 
 export interface PTTManagerOptions {
-  /**
-   * Which keys (by macOS rawcode) trigger PTT. Default: both Option keys.
-   * Holding either Option = recording.
-   */
-  keyRawcodes?: number[];
+  /** Path to the compiled flag-monitor Swift binary. */
+  binaryPath: string;
   /** Minimum hold duration to count as PTT vs accidental tap (ms). */
   minHoldMs?: number;
 }
 
 /**
- * Push-to-talk hotkey manager using uiohook-napi to capture global keydown/keyup
- * events for any key — including modifier keys alone, which Electron's
- * globalShortcut cannot bind to.
+ * Push-to-talk manager using a tiny Swift helper that wraps
+ * NSEvent.addGlobalMonitorForEvents(.flagsChanged). The helper requires only
+ * macOS Accessibility permission (not Input Monitoring) — same model as
+ * Wispr Flow and similar dictation apps.
  *
- * Emits:
- *   - 'start'  when the PTT key is pressed (and held past minHoldMs)
- *   - 'stop'   when the PTT key is released after a successful 'start'
- *   - 'cancel' if the user releases before minHoldMs (treated as accidental tap)
- *
- * Requires macOS Accessibility AND Input Monitoring permissions. uiohook-napi
- * prompts on first use.
+ * The helper writes "DOWN\n" / "UP\n" to stdout when the Option modifier key
+ * is held / released globally. This class spawns it, parses the stream, and
+ * emits 'start', 'stop', and 'cancel' events with a debounce against
+ * accidental taps.
  */
 export class PTTManager extends EventEmitter {
-  private readonly keyRawcodes: Set<number>;
+  private readonly binaryPath: string;
   private readonly minHoldMs: number;
-  private started = false;
+  private child: ChildProcess | null = null;
   private heldSince: number | null = null;
   private startEmitted = false;
   private holdTimer: NodeJS.Timeout | null = null;
 
-  constructor(opts: PTTManagerOptions = {}) {
+  constructor(opts: PTTManagerOptions) {
     super();
-    this.keyRawcodes = new Set(
-      opts.keyRawcodes ?? [MACOS_RIGHT_OPTION_RAWCODE, MACOS_LEFT_OPTION_RAWCODE],
-    );
+    this.binaryPath = opts.binaryPath;
     this.minHoldMs = opts.minHoldMs ?? 150;
   }
 
   start(): void {
-    if (this.started) return;
+    if (this.child) return;
 
-    uIOhook.on("keydown", (e) => {
-      const rawcode = (e as unknown as { rawcode: number }).rawcode;
-      if (!this.keyRawcodes.has(rawcode)) return;
-      // Repeat events fire continuously while the key is held; only act on
-      // the first keydown (heldSince null means we're not already holding).
-      if (this.heldSince !== null) return;
+    const child = spawn(this.binaryPath, [], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    this.child = child;
+
+    let stdoutBuffer = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString("utf8");
+      let nl = stdoutBuffer.indexOf("\n");
+      while (nl !== -1) {
+        const line = stdoutBuffer.slice(0, nl).trim();
+        stdoutBuffer = stdoutBuffer.slice(nl + 1);
+        this.handleLine(line);
+        nl = stdoutBuffer.indexOf("\n");
+      }
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    child.on("error", (err) => {
+      this.emit("error", new Error(`flag-monitor spawn failed: ${err.message}`));
+      this.child = null;
+    });
+
+    child.on("close", (code, signal) => {
+      const wasIntentional = this.child === null;
+      this.child = null;
+      this.clearHoldTimer();
+      this.heldSince = null;
+      this.startEmitted = false;
+      if (!wasIntentional && code !== 0) {
+        this.emit(
+          "error",
+          new Error(
+            `flag-monitor exited unexpectedly (code=${code}, signal=${signal}). stderr: ${stderr.trim().slice(0, 500)}`,
+          ),
+        );
+      }
+    });
+  }
+
+  stop(): void {
+    if (!this.child) return;
+    const c = this.child;
+    this.child = null;
+    this.clearHoldTimer();
+    this.heldSince = null;
+    this.startEmitted = false;
+    c.kill("SIGTERM");
+  }
+
+  private handleLine(line: string): void {
+    if (line === "DOWN") {
+      if (this.heldSince !== null) return; // already holding
       this.heldSince = Date.now();
       this.startEmitted = false;
       this.holdTimer = setTimeout(() => {
         this.startEmitted = true;
         this.emit("start");
       }, this.minHoldMs);
-    });
-
-    uIOhook.on("keyup", (e) => {
-      const rawcode = (e as unknown as { rawcode: number }).rawcode;
-      if (!this.keyRawcodes.has(rawcode)) return;
+    } else if (line === "UP") {
       if (this.heldSince === null) return;
       this.heldSince = null;
-      if (this.holdTimer) {
-        clearTimeout(this.holdTimer);
-        this.holdTimer = null;
-      }
+      this.clearHoldTimer();
       if (this.startEmitted) {
         this.emit("stop");
         this.startEmitted = false;
       } else {
         this.emit("cancel");
       }
-    });
-
-    uIOhook.start();
-    this.started = true;
+    }
   }
 
-  stop(): void {
-    if (!this.started) return;
+  private clearHoldTimer(): void {
     if (this.holdTimer) {
       clearTimeout(this.holdTimer);
       this.holdTimer = null;
     }
-    uIOhook.stop();
-    this.removeAllListeners();
-    this.started = false;
-    this.heldSince = null;
-    this.startEmitted = false;
   }
 }
