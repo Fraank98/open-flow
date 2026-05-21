@@ -11,8 +11,13 @@ files:
   - src/renderer/**/*
   - resources/icons/**/*
   - package.json
-  - "!node_modules/**/*"
+  # electron-builder auto-includes production deps from node_modules
+  # (uiohook-napi native binary needs to ship). Don't exclude node_modules.
   - "!**/.DS_Store"
+
+# Native .node files (uiohook-napi) must live outside the asar so dlopen works.
+asarUnpack:
+  - "node_modules/uiohook-napi/**/*"
 
 extraResources:
   - from: resources/bin
