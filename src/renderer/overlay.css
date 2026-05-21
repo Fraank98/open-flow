@@ -1,0 +1,53 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  background: transparent;
+  height: 100%;
+  font-family: -apple-system, system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+#root {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  margin: 8px;
+  background: rgba(30, 30, 32, 0.92);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 14px;
+  height: 56px;
+  transition: opacity 200ms ease;
+}
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #888;
+}
+.label { flex: 1; }
+button#cancel {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 12px;
+  cursor: pointer;
+}
+button#cancel:hover { background: rgba(255, 255, 255, 0.22); }
+
+.state-idle { opacity: 0; pointer-events: none; }
+.state-recording .dot { background: #ff3b30; animation: pulse 1s infinite; }
+.state-transcribing .dot { background: #ffcc00; }
+.state-cleaning .dot { background: #34c759; }
+.state-injecting .dot { background: #007aff; }
+.state-error .dot { background: #ff3b30; }
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.6; }
+}

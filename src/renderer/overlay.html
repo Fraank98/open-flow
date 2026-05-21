@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="./overlay.css" />
+    <title>open-flow</title>
+  </head>
+  <body>
+    <div id="root" class="state-idle">
+      <div class="dot"></div>
+      <div class="label" id="label">Idle</div>
+      <button id="cancel" type="button">✕</button>
+    </div>
+    <script>
+      const labelEl = document.getElementById("label");
+      const rootEl = document.getElementById("root");
+      const cancelBtn = document.getElementById("cancel");
+
+      const TEXT = {
+        idle: "",
+        recording: "Recording…",
+        transcribing: "Transcribing…",
+        cleaning: "Cleaning…",
+        injecting: "Pasting…",
+        error: "Error",
+      };
+
+      window.openFlowOverlay.onState((state) => {
+        labelEl.textContent = TEXT[state] ?? state;
+        rootEl.className = `state-${state}`;
+      });
+
+      cancelBtn.addEventListener("click", () => {
+        window.openFlowOverlay.cancel();
+      });
+    </script>
+  </body>
+</html>
