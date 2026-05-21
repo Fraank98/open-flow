@@ -21,6 +21,14 @@ describe("sanitizeLlmOutput", () => {
     }
   });
 
+  it("does not strip the word 'sure' when it's legitimate user content", () => {
+    // Bare "Sure," at the start of a real transcript should be preserved
+    expect(sanitizeLlmOutput("Sure, I can help with that.", "sure i can help with that").text)
+      .toBe("Sure, I can help with that.");
+    expect(sanitizeLlmOutput("Sure! That works.", "sure that works").text)
+      .toBe("Sure! That works.");
+  });
+
   it("trims surrounding quotes when LLM wraps output", () => {
     expect(sanitizeLlmOutput('"Hello."', "hello").text).toBe("Hello.");
     expect(sanitizeLlmOutput("'Hello.'", "hello").text).toBe("Hello.");
