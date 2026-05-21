@@ -1,0 +1,31 @@
+{
+  "name": "open-flow",
+  "version": "0.0.1",
+  "description": "Local-first dictation app for macOS — Whisper + LLM cleanup",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "fetch-binaries": "bash scripts/fetch-binaries.sh",
+    "fetch-test-models": "bash scripts/fetch-test-models.sh",
+    "lint": "eslint --no-error-on-unmatched-pattern 'src/**/*.ts' 'test/**/*.ts' 'tools/**/*.ts'",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "smoke": "tsx tools/pipeline-smoke.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "electron": "^32.0.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

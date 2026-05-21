@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.local
+
+# Native binaries (built locally via scripts/fetch-binaries.sh)
+resources/bin/whisper-cli
+resources/bin/llama-cli
+resources/bin/build-tmp/
+
+# Fixture models (downloaded on demand)
+test/fixtures/models/
+
+# Vitest
+coverage/

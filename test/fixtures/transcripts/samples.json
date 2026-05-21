@@ -1,0 +1,16 @@
+[
+  {
+    "id": "it-disfluencies-1",
+    "raw": "allora ehm ciao marco grazie per la mail di ieri uh diciamo che potremmo vederci giovedì",
+    "language": "it",
+    "expectedSubstrings": ["Marco", "giovedì"],
+    "expectedAbsent": ["allora", "ehm", "uh"]
+  },
+  {
+    "id": "en-disfluencies-1",
+    "raw": "um so like i was thinking we could you know meet at three pm tomorrow",
+    "language": "en",
+    "expectedSubstrings": ["three", "tomorrow"],
+    "expectedAbsent": ["um", "like", "you know"]
+  }
+]
