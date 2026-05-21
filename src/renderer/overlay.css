@@ -1,7 +1,9 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
-  background: transparent;
+  background: transparent !important;
   height: 100%;
+  width: 100%;
+  overflow: hidden;
   font-family: -apple-system, system-ui, sans-serif;
   user-select: none;
   -webkit-user-select: none;

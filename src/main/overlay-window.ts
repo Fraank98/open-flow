@@ -23,8 +23,12 @@ export class OverlayWindow {
       resizable: false,
       hasShadow: false,
       skipTaskbar: true,
-      focusable: false,
+      // focusable: true so mouse clicks on ✕ register, but acceptFirstMouse
+      // lets the user click without first activating the app.
+      focusable: true,
+      acceptFirstMouse: true,
       show: false,
+      backgroundColor: "#00000000",
       webPreferences: {
         preload: join(APP_ROOT, "dist", "preload", "overlay-preload.js"),
         contextIsolation: true,
@@ -32,6 +36,9 @@ export class OverlayWindow {
       },
     });
     this.win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // Float above other windows including fullscreen apps, but don't steal
+    // focus when shown via showInactive().
+    this.win.setAlwaysOnTop(true, "floating");
     await this.win.loadFile(join(APP_ROOT, "src", "renderer", "overlay.html"));
   }
 

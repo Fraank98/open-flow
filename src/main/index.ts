@@ -152,6 +152,12 @@ async function main(): Promise<void> {
   ipcMain.on("audio:error", async (_e, message: string) => {
     await logger.error("recorder error", { message });
   });
+  ipcMain.on("pipeline:cancel", async () => {
+    await logger.info("pipeline:cancel from UI");
+    recorderWin.webContents.send("audio:stop");
+    orchestrator.reset();
+    coordinator.cancel();
+  });
 
   const ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged });
   ptt.on("ready", () => {
