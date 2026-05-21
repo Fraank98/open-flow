@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="./setup.css" />
+    <title>open-flow setup</title>
+  </head>
+  <body>
+    <main id="root">
+      <header><h1>open-flow</h1></header>
+
+      <section id="step-welcome" class="step active">
+        <h2>Welcome</h2>
+        <p>Local-first dictation for macOS. Press a hotkey, talk, get the cleaned text pasted into any text field.</p>
+        <p>This setup takes ~3 minutes: grant two permissions, pick a quality tier, wait for the AI models to download.</p>
+        <button data-next="permissions" class="primary">Get started</button>
+      </section>
+
+      <section id="step-permissions" class="step">
+        <h2>Permissions</h2>
+        <div class="perm" id="perm-mic">
+          <strong>Microphone</strong>
+          <span class="status" id="mic-status">checking…</span>
+          <button id="mic-request">Request access</button>
+        </div>
+        <div class="perm" id="perm-acc">
+          <strong>Accessibility</strong>
+          <span class="status" id="acc-status">checking…</span>
+          <button id="acc-open">Open System Settings</button>
+          <button id="acc-refresh">I granted it — re-check</button>
+        </div>
+        <p class="muted">Microphone is for recording. Accessibility lets the app press <kbd>⌘V</kbd> to paste into the focused field.</p>
+        <button data-next="tier" id="perm-continue" class="primary" disabled>Continue</button>
+      </section>
+
+      <section id="step-tier" class="step">
+        <h2>Choose quality</h2>
+        <p>You can change this later in Preferences.</p>
+        <div id="tier-list"></div>
+        <button data-next="download" id="tier-continue" class="primary" disabled>Continue</button>
+      </section>
+
+      <section id="step-download" class="step">
+        <h2>Downloading models</h2>
+        <div class="progress-container">
+          <div class="progress-label" id="dl-stage">Preparing…</div>
+          <progress id="dl-progress" max="100" value="0"></progress>
+          <div class="progress-bytes" id="dl-bytes"></div>
+        </div>
+        <div id="dl-error" class="error hidden"></div>
+      </section>
+
+      <section id="step-done" class="step">
+        <h2>You're set</h2>
+        <p>Press <kbd>Option+Space</kbd> over any text field to start dictating. Press it again to stop.</p>
+        <p class="muted">A tray icon appears in your menubar. Click it to disable the hotkey or quit.</p>
+        <button id="done-finish" class="primary">Finish</button>
+      </section>
+    </main>
+    <script src="./setup.js"></script>
+  </body>
+</html>

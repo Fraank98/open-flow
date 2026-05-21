@@ -1,0 +1,47 @@
+appId: com.openflow.app
+productName: open-flow
+copyright: Copyright © 2026
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - dist/**/*
+  - src/renderer/**/*
+  - resources/icons/**/*
+  - package.json
+  - "!node_modules/**/*"
+  - "!**/.DS_Store"
+
+extraResources:
+  - from: resources/bin
+    to: bin
+    filter:
+      - "whisper-cli"
+      - "llama-cli"
+
+asar: true
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  category: public.app-category.productivity
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+  icon: resources/icons/app-icon.png
+
+dmg:
+  title: "open-flow ${version}"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+publish: null

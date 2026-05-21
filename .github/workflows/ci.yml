@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache native binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: resources/bin
+          key: native-bins-v1-${{ runner.os }}-${{ hashFiles('scripts/fetch-binaries.sh') }}
+
+      - name: Build native binaries
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
+        run: |
+          brew install cmake
+          npm run fetch-binaries
+
+      - name: Cache fixture models
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: test/fixtures/models
+          key: fixture-models-v1
+
+      - name: Download fixture models
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        run: npm run fetch-test-models
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

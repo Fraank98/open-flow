@@ -13,41 +13,92 @@ import { createLogger } from "./logger.js";
 import { WhisperRunner } from "./whisper-runner.js";
 import { LLMCleaner } from "./llm-cleaner.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
+import { PreferencesStore } from "./preferences-store.js";
+import { ModelManager } from "./model-manager.js";
+import { getModelById } from "./model-catalog.js";
+import { getModelsDir, modelFilePath } from "./utils/model-paths.js";
+import { SetupWizard } from "./setup-wizard.js";
+import { PreferencesWindow } from "./preferences-window.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const APP_ROOT = join(__dirname, "..", "..");
 
-const HOTKEY_ACCELERATOR = "Alt+Space";
 const SAMPLE_RATE = 16_000;
-const LANGUAGE = "auto";
 
-const WHISPER_BIN = join(APP_ROOT, "resources", "bin", "whisper-cli");
-const LLAMA_BIN = join(APP_ROOT, "resources", "bin", "llama-cli");
-const WHISPER_MODEL = join(APP_ROOT, "test", "fixtures", "models", "ggml-tiny.bin");
-const LLM_MODEL = join(APP_ROOT, "test", "fixtures", "models", "qwen2.5-0.5b-instruct-q4_k_m.gguf");
+// In packaged builds, native binaries live in Contents/Resources/bin/ (via
+// electron-builder's extraResources). In dev, they're at resources/bin/ in the
+// repo root. `app.isPackaged` distinguishes the two.
+const BIN_DIR = app.isPackaged
+  ? join(process.resourcesPath, "bin")
+  : join(APP_ROOT, "resources", "bin");
+const WHISPER_BIN = join(BIN_DIR, "whisper-cli");
+const LLAMA_BIN = join(BIN_DIR, "llama-cli");
 
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
+const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
 
 async function main(): Promise<void> {
   await app.whenReady();
 
-  const logger = createLogger({ dir: LOG_DIR, debug: !!process.env.OPEN_FLOW_DEBUG, maxBytes: 5 * 1024 * 1024 });
-  await logger.info("app starting");
+  const preferencesStore = new PreferencesStore(PREFS_PATH);
+  const modelManager = new ModelManager();
+  let prefs = await preferencesStore.load();
 
-  // Permissions check (informational only; do not block)
+  const logger = createLogger({ dir: LOG_DIR, debug: prefs.debugLogging, maxBytes: 5 * 1024 * 1024 });
+  await logger.info("app starting", { setupComplete: prefs.setupComplete });
+
+  // First-launch: run setup wizard until setupComplete=true
+  if (!prefs.setupComplete) {
+    const wizard = new SetupWizard({ modelManager, preferencesStore });
+    const completed = await wizard.run();
+    if (!completed) {
+      await logger.warn("setup wizard closed without completion; quitting");
+      app.quit();
+      return;
+    }
+    prefs = await preferencesStore.load();
+  }
+
+  // Resolve model paths from prefs + catalog
+  const whisperDesc = getModelById("whisper", prefs.whisperModelId);
+  const llmDesc = getModelById("llm", prefs.llmModelId);
+  if (!whisperDesc || !llmDesc) {
+    await logger.error("preferences reference unknown model; resetting setup", {
+      whisperId: prefs.whisperModelId,
+      llmId: prefs.llmModelId,
+    });
+    await preferencesStore.update({ setupComplete: false });
+    app.relaunch();
+    app.quit();
+    return;
+  }
+  const whisperModelPath = modelFilePath(whisperDesc);
+  const llmModelPath = modelFilePath(llmDesc);
+
+  // Confirm files actually exist (catch the "model deleted manually" case)
+  if (!(await modelManager.isInstalled(whisperDesc)) || !(await modelManager.isInstalled(llmDesc))) {
+    await logger.error("selected model missing on disk; re-running setup", {
+      modelsDir: getModelsDir(),
+    });
+    await preferencesStore.update({ setupComplete: false });
+    app.relaunch();
+    app.quit();
+    return;
+  }
+
   const mic = await checkMicrophone();
   const acc = await checkAccessibilityViaProbe();
   await logger.info("permissions", { mic, accessibility: acc });
 
   const whisper = new WhisperRunner({
     binaryPath: WHISPER_BIN,
-    modelPath: WHISPER_MODEL,
+    modelPath: whisperModelPath,
     timeoutMs: 60_000,
   });
   const llm = new LLMCleaner({
     binaryPath: LLAMA_BIN,
-    modelPath: LLM_MODEL,
+    modelPath: llmModelPath,
     timeoutMs: 30_000,
   });
   const injector = createDefaultTextInjector();
@@ -80,7 +131,6 @@ async function main(): Promise<void> {
     }
   });
 
-  // Recorder hidden window
   const recorderWin = new BrowserWindow({
     width: 320,
     height: 80,
@@ -95,7 +145,6 @@ async function main(): Promise<void> {
 
   ipcMain.on("audio:chunk", (_e, arrayBuffer: ArrayBuffer, byteOffset: number, length: number) => {
     const view = new Float32Array(arrayBuffer, byteOffset, length);
-    // Copy because the buffer is reused by IPC
     const chunk = new Float32Array(view.length);
     chunk.set(view);
     orchestrator.appendChunk(chunk);
@@ -104,8 +153,8 @@ async function main(): Promise<void> {
     await logger.error("recorder error", { message });
   });
 
-  const hotkey = new HotkeyManager({ accelerator: HOTKEY_ACCELERATOR });
-
+  const hotkey = new HotkeyManager({ accelerator: prefs.hotkeyAccelerator });
+  const prefsWindow = new PreferencesWindow({ modelManager, preferencesStore });
   const menubar = new MenubarApp({
     onToggleEnabled: () => {
       if (menubar.isEnabled()) {
@@ -114,9 +163,11 @@ async function main(): Promise<void> {
         hotkey.unregister();
       }
     },
+    onOpenPreferences: () => {
+      void prefsWindow.open();
+    },
     onQuit: () => app.quit(),
   });
-  menubar.create();
 
   hotkey.on("start", () => {
     orchestrator.reset();
@@ -126,20 +177,22 @@ async function main(): Promise<void> {
   });
   hotkey.on("stop", async () => {
     recorderWin.webContents.send("audio:stop");
-    // Wait a moment for the last chunk to arrive
     await new Promise((r) => setTimeout(r, 250));
     const samples = orchestrator.snapshot();
-    await coordinator.finishWithAudio(samples, SAMPLE_RATE, LANGUAGE);
+    const lang = (await preferencesStore.load()).language;
+    await coordinator.finishWithAudio(samples, SAMPLE_RATE, lang);
     hotkey.reset();
     menubar.setStatus("Idle");
   });
 
   const reg = hotkey.register();
   if (!reg.ok) {
-    await logger.error("hotkey registration failed", { reason: reg.reason, accelerator: HOTKEY_ACCELERATOR });
+    await logger.error("hotkey registration failed", { reason: reg.reason, accelerator: prefs.hotkeyAccelerator });
   } else {
-    await logger.info("hotkey registered", { accelerator: HOTKEY_ACCELERATOR });
+    await logger.info("hotkey registered", { accelerator: prefs.hotkeyAccelerator });
   }
+
+  menubar.create();
 
   app.on("will-quit", () => {
     hotkey.unregister();
@@ -147,10 +200,8 @@ async function main(): Promise<void> {
     menubar.destroy();
   });
 
-  // Menubar app — stay alive even with no windows. macOS doesn't auto-quit
-  // when all windows close, so no preventDefault is needed.
   app.on("window-all-closed", () => {
-    // intentional no-op
+    // intentional no-op — menubar app stays alive
   });
 }
 

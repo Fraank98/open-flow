@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="./preferences.css" />
+    <title>open-flow preferences</title>
+  </head>
+  <body>
+    <main id="root">
+      <h1>Preferences</h1>
+
+      <section>
+        <label>Hotkey</label>
+        <input id="hotkey" type="text" />
+        <p class="muted">Examples: <code>Alt+Space</code>, <code>Cmd+Shift+D</code>, <code>F19</code>.</p>
+      </section>
+
+      <section>
+        <label>Language</label>
+        <select id="language"></select>
+      </section>
+
+      <section>
+        <label>Whisper model</label>
+        <div id="whisper-models" class="model-list"></div>
+      </section>
+
+      <section>
+        <label>LLM cleanup model</label>
+        <div id="llm-models" class="model-list"></div>
+      </section>
+
+      <section>
+        <label><input type="checkbox" id="debug" /> Debug logging</label>
+      </section>
+
+      <div class="actions">
+        <button id="save" class="primary">Save</button>
+        <span id="status" class="status"></span>
+      </div>
+
+      <script src="./preferences.js"></script>
+    </main>
+  </body>
+</html>
