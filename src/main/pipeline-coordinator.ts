@@ -1,4 +1,5 @@
 import { encodeWav } from "./utils/wav-encoder.js";
+import { applySpokenPunctuation } from "./utils/spoken-punctuation.js";
 
 export type PipelineState =
   | "idle"
@@ -110,13 +111,19 @@ export class PipelineCoordinator {
         return;
       }
 
-      let textToInject = t.text;
+      // Apply spoken punctuation commands ("comma", "virgola", "question mark",
+      // …) BEFORE the LLM cleanup so they appear as real punctuation in the
+      // text the LLM operates on.
+      const langHint = language !== "auto" ? language : t.language ?? undefined;
+      const withPunct = applySpokenPunctuation(t.text, langHint ?? "auto");
+      if (withPunct !== t.text) {
+        await this.deps.logger.info("spoken punctuation applied", { text: withPunct });
+      }
+
+      let textToInject = withPunct;
       if (useLlmCleanup) {
         this.setState("cleaning");
-        // Pass the user's preferred language as a strong hint to the LLM
-        // unless it's "auto", in which case the LLM auto-detects from text.
-        const langHint = language !== "auto" ? language : t.language ?? undefined;
-        const c = await this.deps.clean(t.text, langHint ?? undefined);
+        const c = await this.deps.clean(withPunct, langHint ?? undefined);
         await this.deps.logger.info("cleaned", {
           text: c.text,
           usedFallback: c.usedFallback,

@@ -50,7 +50,7 @@ describe("PipelineCoordinator", () => {
       "idle",
     ]);
     expect(deps.transcribe).toHaveBeenCalledOnce();
-    expect(deps.clean).toHaveBeenCalledWith("raw transcript");
+    expect(deps.clean).toHaveBeenCalledWith("raw transcript", expect.anything());
     expect(deps.inject).toHaveBeenCalledWith("Cleaned transcript.");
   });
 
