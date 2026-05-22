@@ -292,8 +292,12 @@ async function main(): Promise<void> {
   });
   ptt.on("cancel", () => {
     if (pipelineBusy) return;
+    void logger.info("PTT cancel — discarding recording");
     recorderWin.webContents.send("audio:stop");
     orchestrator.reset();
+    // Reset coordinator state to idle. Without this the overlay would stay
+    // stuck at "Recording…" because state change → idle is what hides it.
+    coordinator.cancel();
     menubar.setStatus("Idle");
   });
 
