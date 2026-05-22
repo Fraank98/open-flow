@@ -266,8 +266,19 @@ async function main(): Promise<void> {
     }
     pipelineBusy = true;
     try {
+      // Send audio:stop and wait for the renderer's explicit "end-of-stream"
+      // ack instead of a blind 250ms timer. The renderer flushes its residual
+      // sample buffer before sending EOS, so by the time we snapshot the
+      // orchestrator we have every sample the mic produced.
+      const eosT0 = Date.now();
+      const eosPromise = new Promise<void>((resolve) => {
+        ipcMain.once("audio:end-of-stream", () => resolve());
+      });
       recorderWin.webContents.send("audio:stop");
-      await new Promise((r) => setTimeout(r, 250));
+      // 500ms safety fallback in case the renderer hangs / crashes before
+      // sending the ack — better to lose a partial sample than to wedge.
+      await Promise.race([eosPromise, new Promise<void>((r) => setTimeout(r, 500))]);
+      void logger.info("audio EOS received", { ms: Date.now() - eosT0 });
       const samples = orchestrator.snapshot();
       const currentPrefs = await preferencesStore.load();
       await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {

@@ -7,8 +7,12 @@ const TARGET_SAMPLE_RATE = 16000;
 let audioContext = null;
 let mediaStream = null;
 let processorNode = null;
+// Promoted to module scope so stopRecording() can flush any residual samples
+// before signaling end-of-stream to main.
+let outBuffer = [];
 
 async function startRecording() {
+  outBuffer = [];
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -34,7 +38,6 @@ async function startRecording() {
   processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
   let accumulator = 0;
-  let outBuffer = [];
 
   processorNode.onaudioprocess = (event) => {
     const inputData = event.inputBuffer.getChannelData(0);
@@ -63,6 +66,13 @@ async function stopRecording() {
     processorNode.onaudioprocess = null;
     processorNode = null;
   }
+  // Flush any residual samples accumulated below the 1024-sample threshold,
+  // so the host gets every sample from the end of the user's utterance.
+  if (outBuffer.length > 0) {
+    const chunk = new Float32Array(outBuffer);
+    outBuffer = [];
+    window.openFlowRecorder.sendChunk(chunk);
+  }
   if (mediaStream) {
     for (const track of mediaStream.getTracks()) track.stop();
     mediaStream = null;
@@ -71,6 +81,9 @@ async function stopRecording() {
     await audioContext.close();
     audioContext = null;
   }
+  // Signal the host that all chunks have been sent. main can now snapshot
+  // the orchestrator buffer and run the pipeline.
+  window.openFlowRecorder.sendEndOfStream();
 }
 
 window.openFlowRecorder.onStart(() => { startRecording(); });

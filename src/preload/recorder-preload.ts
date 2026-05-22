@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld("openFlowRecorder", {
   reportReady: (): void => {
     ipcRenderer.send("audio:ready");
   },
+  sendEndOfStream: (): void => {
+    ipcRenderer.send("audio:end-of-stream");
+  },
 });
 
 declare global {
@@ -31,6 +34,7 @@ declare global {
       sendChunk: (samples: Float32Array) => void;
       reportError: (message: string) => void;
       reportReady: () => void;
+      sendEndOfStream: () => void;
     };
   }
 }
