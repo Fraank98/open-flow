@@ -26,6 +26,13 @@ export const WHISPER_MODELS: readonly ModelDescriptor[] = [
     sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
     url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
   },
+  {
+    id: "whisper-large-v3-turbo",
+    filename: "ggml-large-v3-turbo.bin",
+    sizeBytes: 1_624_555_275,
+    sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+  },
 ];
 
 // LLM cleanup models — Qwen 2.5 instruct in GGUF Q4_K_M format.
