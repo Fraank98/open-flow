@@ -40,6 +40,12 @@ export class WhisperServer {
       "--host", "127.0.0.1",
       "--port", String(this.port),
       "-t", String(this.opts.threads ?? 4),
+      // Disable temperature fallback: the mechanism where Whisper retries with
+      // higher temperature when confidence is low. Higher temp = more creative
+      // output = more hallucinations (sign-offs like "A presto!", "Thanks for
+      // watching", etc.). For dictation we want deterministic output even if
+      // confidence dips.
+      "-nf",
     ];
 
     this.child = spawn(this.opts.binaryPath, args, {
