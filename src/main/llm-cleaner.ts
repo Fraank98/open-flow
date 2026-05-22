@@ -33,9 +33,9 @@ interface LlamaCompletionResponse {
 export class LLMCleaner {
   constructor(private readonly opts: LLMCleanerOptions) {}
 
-  async clean(rawTranscript: string): Promise<CleanResult> {
+  async clean(rawTranscript: string, languageHint?: string): Promise<CleanResult> {
     const start = Date.now();
-    const prompt = buildCleanupPrompt(rawTranscript);
+    const prompt = buildCleanupPrompt(rawTranscript, languageHint);
     const body = {
       prompt,
       n_predict: this.opts.maxTokens ?? 512,

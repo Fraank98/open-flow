@@ -17,7 +17,7 @@ export interface TranscribeFn {
 }
 
 export interface CleanFn {
-  (raw: string): Promise<{ text: string; usedFallback: boolean; durationMs: number }>;
+  (raw: string, languageHint?: string): Promise<{ text: string; usedFallback: boolean; durationMs: number }>;
 }
 
 export interface InjectFn {
@@ -113,7 +113,10 @@ export class PipelineCoordinator {
       let textToInject = t.text;
       if (useLlmCleanup) {
         this.setState("cleaning");
-        const c = await this.deps.clean(t.text);
+        // Pass the user's preferred language as a strong hint to the LLM
+        // unless it's "auto", in which case the LLM auto-detects from text.
+        const langHint = language !== "auto" ? language : t.language ?? undefined;
+        const c = await this.deps.clean(t.text, langHint ?? undefined);
         await this.deps.logger.info("cleaned", {
           text: c.text,
           usedFallback: c.usedFallback,

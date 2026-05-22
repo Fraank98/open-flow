@@ -168,7 +168,7 @@ async function main(): Promise<void> {
     transcribe: async ({ wavBytes, language }) => {
       return whisper.transcribe({ wavBytes, language });
     },
-    clean: async (raw) => llm.clean(raw),
+    clean: async (raw, languageHint) => llm.clean(raw, languageHint),
     inject: async (text) => injector.inject(text),
     logger,
   });
