@@ -5,23 +5,36 @@
 //
 // JS API:
 //   const ptt = require('./build/Release/ptt_monitor.node');
-//   ptt.start((state) => { /* state is "DOWN" or "UP" */ });
+//   ptt.start((state) => { /* state is "DOWN" / "UP" / "CHORD" */ });
 //   ptt.stop();
 //   ptt.isTrusted() // → boolean
 //   ptt.requestTrust() // → boolean (prompts macOS)
+//
+// "CHORD" fires when a non-modifier key is pressed while Option is held —
+// signal to the host that Option is being used as part of a keyboard shortcut
+// (e.g. Option+arrow, Option+Cmd+I) and PTT recording must NOT trigger.
 
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
 #include <napi.h>
 
-static id g_monitor = nil;
+static id g_flagsMonitor = nil;
+static id g_keyMonitor = nil;
 static BOOL g_lastOption = NO;
 static Napi::ThreadSafeFunction g_tsfn;
 static bool g_tsfn_active = false;
 
+static void emitState(const std::string& state) {
+  if (!g_tsfn_active) return;
+  auto callback = [state](Napi::Env env, Napi::Function jsCallback) {
+    jsCallback.Call({Napi::String::New(env, state)});
+  };
+  g_tsfn.NonBlockingCall(callback);
+}
+
 Napi::Value Start(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (g_monitor != nil) {
+  if (g_flagsMonitor != nil) {
     return Napi::Boolean::New(env, true);
   }
   if (info.Length() < 1 || !info[0].IsFunction()) {
@@ -33,30 +46,38 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
   g_tsfn_active = true;
   g_lastOption = NO;
 
-  g_monitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
-                                                     handler:^(NSEvent* event) {
+  g_flagsMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+                                                          handler:^(NSEvent* event) {
     BOOL isOption = (event.modifierFlags & NSEventModifierFlagOption) != 0;
     if (isOption == g_lastOption) {
       return;
     }
     g_lastOption = isOption;
-    const std::string state = isOption ? "DOWN" : "UP";
-    if (g_tsfn_active) {
-      auto callback = [state](Napi::Env env, Napi::Function jsCallback) {
-        jsCallback.Call({Napi::String::New(env, state)});
-      };
-      g_tsfn.NonBlockingCall(callback);
-    }
+    emitState(isOption ? "DOWN" : "UP");
   }];
 
-  return Napi::Boolean::New(env, g_monitor != nil);
+  // Watch keyDown globally too: if a regular key fires while Option is held,
+  // emit CHORD so the host treats it as a keyboard shortcut and not as PTT.
+  g_keyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                         handler:^(NSEvent* event) {
+    if (!g_lastOption) return;
+    // Ignore key-repeat: only the first keyDown of a chord matters.
+    if (event.isARepeat) return;
+    emitState("CHORD");
+  }];
+
+  return Napi::Boolean::New(env, g_flagsMonitor != nil);
 }
 
 Napi::Value Stop(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (g_monitor != nil) {
-    [NSEvent removeMonitor:g_monitor];
-    g_monitor = nil;
+  if (g_flagsMonitor != nil) {
+    [NSEvent removeMonitor:g_flagsMonitor];
+    g_flagsMonitor = nil;
+  }
+  if (g_keyMonitor != nil) {
+    [NSEvent removeMonitor:g_keyMonitor];
+    g_keyMonitor = nil;
   }
   if (g_tsfn_active) {
     g_tsfn_active = false;

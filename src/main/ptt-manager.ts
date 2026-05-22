@@ -3,8 +3,10 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+type NativePttState = "DOWN" | "UP" | "CHORD";
+
 interface NativePttModule {
-  start: (cb: (state: "DOWN" | "UP") => void) => boolean;
+  start: (cb: (state: NativePttState) => void) => boolean;
   stop: () => void;
   isTrusted: () => boolean;
   requestTrust: () => boolean;
@@ -66,6 +68,7 @@ export class PTTManager extends EventEmitter {
   private running = false;
   private heldSince: number | null = null;
   private startEmitted = false;
+  private chordActive = false;
   private holdTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: PTTManagerOptions) {
@@ -104,21 +107,45 @@ export class PTTManager extends EventEmitter {
     return this.native.isTrusted();
   }
 
-  private handleState(state: "DOWN" | "UP"): void {
+  private handleState(state: NativePttState): void {
     this.emit("rawEvent", state);
     if (state === "DOWN") {
       if (this.heldSince !== null) return;
       this.heldSince = Date.now();
       this.startEmitted = false;
+      this.chordActive = false;
       this.emit("arm");
       this.holdTimer = setTimeout(() => {
+        // Don't fire 'start' if the user has already combined Option with
+        // another key — they're using it as a shortcut modifier, not PTT.
+        if (this.chordActive) return;
         this.startEmitted = true;
         this.emit("start");
       }, this.minHoldMs);
+    } else if (state === "CHORD") {
+      if (this.heldSince === null) return;
+      // A non-modifier key fired while Option was held → not a PTT gesture.
+      // Cancel any pending start and, if start already fired, send a cancel
+      // so the host stops the mic and discards audio.
+      this.clearHoldTimer();
+      if (this.chordActive) return;
+      this.chordActive = true;
+      if (this.startEmitted) {
+        this.emit("cancel");
+        this.startEmitted = false;
+      } else {
+        this.emit("cancel");
+      }
     } else if (state === "UP") {
       if (this.heldSince === null) return;
+      const wasChord = this.chordActive;
       this.heldSince = null;
+      this.chordActive = false;
       this.clearHoldTimer();
+      if (wasChord) {
+        // Already cancelled on the CHORD event; nothing else to emit.
+        return;
+      }
       if (this.startEmitted) {
         this.emit("stop");
         this.startEmitted = false;
