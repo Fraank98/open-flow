@@ -272,6 +272,7 @@ async function main(): Promise<void> {
       const currentPrefs = await preferencesStore.load();
       await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {
         useLlmCleanup: currentPrefs.useLlmCleanup,
+        spokenPunctuation: currentPrefs.spokenPunctuation,
       });
       menubar.setStatus("Idle");
     } finally {

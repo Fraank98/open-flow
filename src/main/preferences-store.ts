@@ -10,6 +10,7 @@ export interface Preferences {
   debugLogging: boolean;
   useLlmCleanup: boolean;
   launchAtLogin: boolean;
+  spokenPunctuation: boolean;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -21,6 +22,7 @@ export const DEFAULT_PREFS: Preferences = {
   debugLogging: false,
   useLlmCleanup: true,
   launchAtLogin: true,
+  spokenPunctuation: false,
 };
 
 export class PreferencesStore {

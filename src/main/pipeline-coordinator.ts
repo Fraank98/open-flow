@@ -80,10 +80,11 @@ export class PipelineCoordinator {
     samples: Float32Array,
     sampleRate: number,
     language: string,
-    options: { useLlmCleanup?: boolean } = {},
+    options: { useLlmCleanup?: boolean; spokenPunctuation?: boolean } = {},
   ): Promise<void> {
     if (this.state !== "recording") return;
     const useLlmCleanup = options.useLlmCleanup !== false; // default true
+    const spokenPunctuation = options.spokenPunctuation === true; // default false
 
     const totalStart = Date.now();
     try {
@@ -111,13 +112,18 @@ export class PipelineCoordinator {
         return;
       }
 
-      // Apply spoken punctuation commands ("comma", "virgola", "question mark",
-      // …) BEFORE the LLM cleanup so they appear as real punctuation in the
-      // text the LLM operates on.
+      // Optional spoken-punctuation commands ("comma", "virgola", "question
+      // mark", …). Deterministic but ambiguous with common nouns ("my
+      // period", "il punto della questione"), so it's opt-in. When enabled,
+      // it runs BEFORE the LLM so the symbols are normal punctuation in the
+      // text the LLM polishes.
       const langHint = language !== "auto" ? language : t.language ?? undefined;
-      const withPunct = applySpokenPunctuation(t.text, langHint ?? "auto");
-      if (withPunct !== t.text) {
-        await this.deps.logger.info("spoken punctuation applied", { text: withPunct });
+      let withPunct = t.text;
+      if (spokenPunctuation) {
+        withPunct = applySpokenPunctuation(t.text, langHint ?? "auto");
+        if (withPunct !== t.text) {
+          await this.deps.logger.info("spoken punctuation applied", { text: withPunct });
+        }
       }
 
       let textToInject = withPunct;

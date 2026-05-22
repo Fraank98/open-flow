@@ -32,6 +32,16 @@ const SYSTEM_INSTRUCTIONS = `You are a transcript cleaner. Take the transcript i
 - Split run-on sentences into shorter ones at natural breaks.
 - Fix obvious speech-to-text errors: homophones, missing apostrophes
   ("l app" → "l'app"; "I m" → "I'm"; "c est" → "c'est").
+- If the speaker clearly dictates the NAME of a punctuation mark as a
+  command (and not as part of normal speech), replace the spoken name
+  with the symbol. Use context to decide:
+    Command:  "Hello comma how are you" → "Hello, how are you"
+              "Ciao virgola come stai"  → "Ciao, come stai"
+              "Are you sure question mark" → "Are you sure?"
+    NOT a command (leave the word alone):
+              "My period is heavy"     → "My period is heavy"
+              "Il punto della questione" → "Il punto della questione"
+              "She placed a comma"     → "She placed a comma"
 - Keep the speaker's meaning and tone EXACTLY. Do not translate, paraphrase,
   or summarize. Do not add new content.
 - Output ONLY the cleaned text, with no commentary, prefix, or quotes.
