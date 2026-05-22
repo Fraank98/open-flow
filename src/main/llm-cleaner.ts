@@ -36,13 +36,25 @@ export class LLMCleaner {
   async clean(rawTranscript: string, languageHint?: string): Promise<CleanResult> {
     const start = Date.now();
     const prompt = buildCleanupPrompt(rawTranscript, languageHint);
+
+    // Cap n_predict based on the input length. Small models (Qwen 1.5B) will
+    // sometimes "run away" — generate hundreds of tokens of garbage when
+    // confused by partial-word Whisper errors — burning ~6s of inference
+    // that the sanitizer ultimately rejects. A cleanup pass should never
+    // produce dramatically more text than the input (~1.5× as a safety
+    // margin for added punctuation and minor expansions).
+    const approxInputTokens = Math.ceil(rawTranscript.length / 3); // conservative chars/token estimate
+    const dynamicCap = Math.max(48, Math.ceil(approxInputTokens * 1.8));
+    const requestedMax = this.opts.maxTokens ?? 512;
+    const maxTokens = Math.min(requestedMax, dynamicCap);
+
     const body = {
       prompt,
-      n_predict: this.opts.maxTokens ?? 512,
+      n_predict: maxTokens,
       temperature: this.opts.temperature ?? 0.2,
-      // Stop generation at our own transcript delimiter or common EOS markers
-      // so the LLM doesn't keep babbling past the cleaned text.
-      stop: ["<<</transcript>>>", "<|im_end|>", "<|endoftext|>", "[end of text]"],
+      // Stop at our transcript delimiter, common EOS markers, and double
+      // newline — cleanup output is at most a paragraph.
+      stop: ["<<</transcript>>>", "<|im_end|>", "<|endoftext|>", "[end of text]", "\n\n"],
       cache_prompt: true,
     };
 
