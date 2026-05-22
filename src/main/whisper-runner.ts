@@ -1,18 +1,12 @@
-import { spawn } from "node:child_process";
-import { readFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-
 export interface WhisperRunnerOptions {
-  binaryPath: string;
-  modelPath: string;
+  /** Base URL of the whisper-server, e.g. http://127.0.0.1:18081 */
+  endpoint: string;
   timeoutMs: number;
-  threads?: number;
 }
 
 export interface TranscribeArgs {
-  wavPath: string;
+  /** Raw bytes of a WAV file (16 kHz mono 16-bit PCM). */
+  wavBytes: Uint8Array;
   language: string; // "auto" or ISO code like "en", "it"
 }
 
@@ -23,76 +17,68 @@ export interface TranscribeResult {
 }
 
 export class WhisperError extends Error {
-  constructor(message: string, public readonly stderr: string) {
+  constructor(message: string, public readonly detail?: string) {
     super(message);
     this.name = "WhisperError";
   }
 }
 
+interface WhisperInferenceResponse {
+  text?: string;
+  language?: string;
+}
+
+/**
+ * Transcribes WAV audio by posting to a whisper-server /inference endpoint.
+ * The model stays warm across calls, so each transcription is just inference
+ * (~400-800ms for 5s of audio) instead of the ~1.4-2.5s cold spawn of
+ * whisper-cli.
+ */
 export class WhisperRunner {
   constructor(private readonly opts: WhisperRunnerOptions) {}
 
   async transcribe(args: TranscribeArgs): Promise<TranscribeResult> {
-    const outBase = join(tmpdir(), `open-flow-whisper-${randomUUID()}`);
     const start = Date.now();
-    const cliArgs = [
-      "-m", this.opts.modelPath,
-      "-f", args.wavPath,
-      "-l", args.language,
-      "-t", String(this.opts.threads ?? 4),
-      "--output-json",
-      "-of", outBase,
-      "--no-prints",
-    ];
 
+    const form = new FormData();
+    // Wrap in a Blob so multipart sees a proper file-type field with a filename.
+    // Slice into a real ArrayBuffer to avoid SharedArrayBuffer typing issues
+    // when `wavBytes` is a Uint8Array view onto a SharedArrayBuffer.
+    const buf = args.wavBytes.buffer.slice(
+      args.wavBytes.byteOffset,
+      args.wavBytes.byteOffset + args.wavBytes.byteLength,
+    ) as ArrayBuffer;
+    const blob = new Blob([buf], { type: "audio/wav" });
+    form.append("file", blob, "audio.wav");
+    form.append("temperature", "0.0");
+    form.append("language", args.language);
+    form.append("response_format", "json");
+
+    let res: Response;
     try {
-      await this.spawnAndWait(cliArgs);
-      const jsonRaw = await readFile(`${outBase}.json`, "utf8");
-      const parsed = JSON.parse(jsonRaw) as WhisperJsonOutput;
-      const raw = (parsed.transcription ?? [])
-        .map((seg) => seg.text ?? "")
-        .join("")
-        .trim();
-      return {
-        text: stripWhisperMarkers(raw),
-        language: parsed.result?.language ?? null,
-        durationMs: Date.now() - start,
-      };
-    } finally {
-      // Best-effort cleanup
-      await unlink(`${outBase}.json`).catch(() => undefined);
+      res = await fetch(`${this.opts.endpoint}/inference`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(this.opts.timeoutMs),
+      });
+    } catch (err) {
+      throw new WhisperError(
+        "Whisper HTTP request failed",
+        err instanceof Error ? err.message : String(err),
+      );
     }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new WhisperError(`Whisper HTTP ${res.status}`, text.slice(0, 500));
+    }
+    const data = (await res.json()) as WhisperInferenceResponse;
+    const rawText = (data.text ?? "").trim();
+    return {
+      text: stripWhisperMarkers(rawText),
+      language: data.language ?? null,
+      durationMs: Date.now() - start,
+    };
   }
-
-  private spawnAndWait(args: string[]): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.opts.binaryPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        reject(new WhisperError("Whisper timed out", stderr));
-      }, this.opts.timeoutMs);
-
-      child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        reject(new WhisperError(`Whisper spawn failed: ${err.message}`, stderr));
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code !== 0) {
-          reject(new WhisperError(`Whisper exited with code ${code}`, stderr));
-          return;
-        }
-        resolve();
-      });
-    });
-  }
-}
-
-interface WhisperJsonOutput {
-  result?: { language?: string };
-  transcription?: Array<{ text?: string }>;
 }
 
 // Whisper.cpp produces non-speech markers like "[Music]", "[Applause]",

@@ -22,7 +22,7 @@ extraResources:
   - from: resources/bin
     to: bin
     filter:
-      - "whisper-cli"
+      - "whisper-server"
       - "llama-server"
 
 asar: true

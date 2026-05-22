@@ -29,11 +29,11 @@ need git git
 need swiftc xcode-select
 
 build_whisper() {
-  if [[ -x "$BIN_DIR/whisper-cli" ]]; then
-    echo "[skip] whisper-cli already present at $BIN_DIR/whisper-cli"
+  if [[ -x "$BIN_DIR/whisper-cli" && -x "$BIN_DIR/whisper-server" ]]; then
+    echo "[skip] whisper-cli + whisper-server already present"
     return
   fi
-  echo "[build] whisper.cpp @ $WHISPER_TAG"
+  echo "[build] whisper.cpp @ $WHISPER_TAG (main + server)"
   local src="$BUILD_DIR/whisper.cpp"
   if [[ ! -d "$src" ]]; then
     git clone --depth 1 --branch "$WHISPER_TAG" "$WHISPER_REPO" "$src"
@@ -41,11 +41,13 @@ build_whisper() {
   # GGML_NATIVE=OFF disables -mcpu=native+nodotprod+noi8mm+nosve which Apple
   # clang 17 doesn't accept. Metal GPU acceleration is unaffected.
   cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
-  # whisper.cpp v1.7.1 names the CLI target "main"; later versions renamed it to "whisper-cli".
-  cmake --build "$src/build" -j --target main
+  # whisper.cpp v1.7.1: CLI target is "main", HTTP server target is "server".
+  # Later versions renamed to whisper-cli / whisper-server.
+  cmake --build "$src/build" -j --target main server
   cp "$src/build/bin/main" "$BIN_DIR/whisper-cli"
-  chmod +x "$BIN_DIR/whisper-cli"
-  echo "[ok] whisper-cli → $BIN_DIR/whisper-cli"
+  cp "$src/build/bin/server" "$BIN_DIR/whisper-server"
+  chmod +x "$BIN_DIR/whisper-cli" "$BIN_DIR/whisper-server"
+  echo "[ok] whisper-cli + whisper-server → $BIN_DIR/"
 }
 
 build_llama() {
@@ -88,6 +90,6 @@ build_flag_monitor
 
 echo ""
 echo "Done. Binaries:"
-ls -lh "$BIN_DIR"/whisper-cli "$BIN_DIR"/llama-cli "$BIN_DIR"/llama-server "$BIN_DIR"/flag-monitor
+ls -lh "$BIN_DIR"/whisper-cli "$BIN_DIR"/whisper-server "$BIN_DIR"/llama-cli "$BIN_DIR"/llama-server "$BIN_DIR"/flag-monitor
 echo ""
 echo "Tip: rm -rf $BUILD_DIR to reclaim disk after a successful build."

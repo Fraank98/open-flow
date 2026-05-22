@@ -52,6 +52,8 @@ export class LLMServer {
       "--log-disable",
     ];
 
+    const startSpawn = Date.now();
+
     this.child = spawn(this.opts.binaryPath, args, {
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -77,6 +79,12 @@ export class LLMServer {
 
     try {
       await this.waitForHealthy(this.opts.startupTimeoutMs ?? 30_000, () => exitState.exited);
+      // Warm up the Metal pipeline with a 1-token completion so the user's
+      // first real dictation benefits from a JIT-compiled Metal kernel cache.
+      // Without this, the first /completion call after model load is ~2x
+      // slower than steady-state.
+      await this.warmup().catch(() => undefined);
+      void startSpawn;
     } catch (err) {
       this.stop();
       const detail = exitState.info
@@ -86,6 +94,25 @@ export class LLMServer {
         `${err instanceof Error ? err.message : String(err)}${detail}. ` +
           `Last stderr: ${this.stderrBuffer.trim().slice(-500)}`,
       );
+    }
+  }
+
+  private async warmup(): Promise<void> {
+    try {
+      await fetch(`${this.getEndpoint()}/completion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "hi",
+          n_predict: 1,
+          temperature: 0,
+          cache_prompt: false,
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      // Warmup is best-effort. If it fails, the real first request will still
+      // work, just slightly slower.
     }
   }
 

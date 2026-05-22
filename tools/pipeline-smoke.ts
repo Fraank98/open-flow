@@ -1,8 +1,9 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { WhisperRunner } from "../src/main/whisper-runner.js";
+import { WhisperServer } from "../src/main/whisper-server.js";
 import { LLMCleaner } from "../src/main/llm-cleaner.js";
 import { LLMServer } from "../src/main/llm-server.js";
 
@@ -28,7 +29,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const whisperBin = join(ROOT, "resources", "bin", "whisper-cli");
+  const whisperServerBin = join(ROOT, "resources", "bin", "whisper-server");
   const llamaServerBin = join(ROOT, "resources", "bin", "llama-server");
   const whisperModel = values["whisper-model"] ??
     join(ROOT, "test", "fixtures", "models", "ggml-tiny.bin");
@@ -36,7 +37,7 @@ async function main(): Promise<void> {
     join(ROOT, "test", "fixtures", "models", "qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
   for (const [label, p] of [
-    ["whisper-cli", whisperBin],
+    ["whisper-server", whisperServerBin],
     ["llama-server", llamaServerBin],
     ["whisper model", whisperModel],
     ["llm model", llmModel],
@@ -48,10 +49,10 @@ async function main(): Promise<void> {
     }
   }
 
-  const whisper = new WhisperRunner({
-    binaryPath: whisperBin,
+  const whisperServer = new WhisperServer({
+    binaryPath: whisperServerBin,
     modelPath: whisperModel,
-    timeoutMs: 60_000,
+    port: 18097,
   });
   const llmServer = new LLMServer({
     binaryPath: llamaServerBin,
@@ -60,11 +61,15 @@ async function main(): Promise<void> {
     contextSize: 1024,
   });
 
-  console.error(`[0/2] Starting llama-server...`);
+  console.error(`[0/2] Starting whisper-server + llama-server...`);
   const serverT0 = Date.now();
-  await llmServer.start();
+  await Promise.all([whisperServer.start(), llmServer.start()]);
   console.error(`     ready in ${Date.now() - serverT0}ms`);
 
+  const whisper = new WhisperRunner({
+    endpoint: whisperServer.getEndpoint(),
+    timeoutMs: 60_000,
+  });
   const llm = new LLMCleaner({
     endpoint: llmServer.getEndpoint(),
     timeoutMs: 15_000,
@@ -72,7 +77,11 @@ async function main(): Promise<void> {
 
   try {
     console.error(`[1/2] Transcribing ${values.wav}...`);
-    const t = await whisper.transcribe({ wavPath: values.wav, language: values.language! });
+    const wav = await readFile(values.wav);
+    const t = await whisper.transcribe({
+      wavBytes: new Uint8Array(wav),
+      language: values.language!,
+    });
     console.error(`     done in ${t.durationMs}ms, lang=${t.language ?? "?"}`);
     console.error(`     raw: "${t.text}"`);
 
@@ -82,6 +91,7 @@ async function main(): Promise<void> {
 
     process.stdout.write(c.text + "\n");
   } finally {
+    whisperServer.stop();
     llmServer.stop();
   }
 }

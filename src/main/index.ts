@@ -11,6 +11,7 @@ import { MenubarApp } from "./menubar-app.js";
 import { createDefaultTextInjector } from "./text-injector.js";
 import { createLogger } from "./logger.js";
 import { WhisperRunner } from "./whisper-runner.js";
+import { WhisperServer } from "./whisper-server.js";
 import { LLMCleaner } from "./llm-cleaner.js";
 import { LLMServer } from "./llm-server.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
@@ -33,7 +34,7 @@ const SAMPLE_RATE = 16_000;
 const BIN_DIR = app.isPackaged
   ? join(process.resourcesPath, "bin")
   : join(APP_ROOT, "resources", "bin");
-const WHISPER_BIN = join(BIN_DIR, "whisper-cli");
+const WHISPER_SERVER_BIN = join(BIN_DIR, "whisper-server");
 const LLAMA_SERVER_BIN = join(BIN_DIR, "llama-server");
 
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
@@ -107,9 +108,29 @@ async function main(): Promise<void> {
   const acc = await checkAccessibilityViaProbe();
   await logger.info("permissions", { mic, accessibility: acc });
 
-  const whisper = new WhisperRunner({
-    binaryPath: WHISPER_BIN,
+  // Start the Whisper server. Model loads once, stays warm in RAM.
+  // Per-transcription latency drops from ~1.5-2.5s spawn+load to ~400-800ms
+  // pure inference for a typical short utterance.
+  const whisperServer = new WhisperServer({
+    binaryPath: WHISPER_SERVER_BIN,
     modelPath: whisperModelPath,
+    port: 18081,
+  });
+  try {
+    await logger.info("whisper-server starting", { model: whisperModelPath });
+    const t0 = Date.now();
+    await whisperServer.start();
+    await logger.info("whisper-server ready", {
+      loadMs: Date.now() - t0,
+      endpoint: whisperServer.getEndpoint(),
+    });
+  } catch (err) {
+    await logger.error("whisper-server failed to start", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const whisper = new WhisperRunner({
+    endpoint: whisperServer.getEndpoint(),
     timeoutMs: 60_000,
   });
 
@@ -145,14 +166,7 @@ async function main(): Promise<void> {
 
   const coordinator = new PipelineCoordinator({
     transcribe: async ({ wavBytes, language }) => {
-      const tmp = join(app.getPath("temp"), `open-flow-${Date.now()}.wav`);
-      const { writeFile, unlink } = await import("node:fs/promises");
-      await writeFile(tmp, wavBytes);
-      try {
-        return await whisper.transcribe({ wavPath: tmp, language });
-      } finally {
-        unlink(tmp).catch(() => undefined);
-      }
+      return whisper.transcribe({ wavBytes, language });
     },
     clean: async (raw) => llm.clean(raw),
     inject: async (text) => injector.inject(text),
@@ -300,6 +314,7 @@ async function main(): Promise<void> {
 
   app.on("will-quit", () => {
     ptt.stop();
+    whisperServer.stop();
     llmServer.stop();
     overlay.destroy();
     menubar.destroy();
