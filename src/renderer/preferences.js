@@ -10,6 +10,7 @@ async function init() {
   $("#debug").checked = prefs.debugLogging;
   $("#cleanup").checked = prefs.useLlmCleanup !== false;
   $("#launchAtLogin").checked = prefs.launchAtLogin !== false;
+  $("#spokenPunctuation").checked = prefs.spokenPunctuation === true;
 
   const langSel = $("#language");
   for (const lang of catalog.languages) {
@@ -88,6 +89,7 @@ async function init() {
       debugLogging: $("#debug").checked,
       useLlmCleanup: $("#cleanup").checked,
       launchAtLogin: $("#launchAtLogin").checked,
+      spokenPunctuation: $("#spokenPunctuation").checked,
     };
     await window.openFlowPrefs.save(next);
     $("#status").textContent = "Saved. Restart the app for hotkey/model changes to take effect.";
