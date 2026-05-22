@@ -1,5 +1,8 @@
 // Audio capture loop. Listens for IPC start/stop, streams 16 kHz mono Float32
-// to main. Downsamples from the hardware rate (typically 48 kHz).
+// PCM to main. AudioContext is created at the target sample rate so the
+// browser's high-quality resampler handles the 48 kHz → 16 kHz conversion
+// (a naive linear-skip downsample aliased high-frequency content into the
+// speech band and visibly degraded transcription quality).
 "use strict";
 
 const TARGET_SAMPLE_RATE = 16000;
@@ -22,45 +25,39 @@ async function startRecording() {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
+        // Light preprocessing on — Whisper handles raw audio fine, but on
+        // built-in MacBook mics noise suppression actually helps the model
+        // by removing fan / keyboard noise that otherwise gets transcribed
+        // as filler words.
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
       },
     });
   } catch (err) {
     window.openFlowRecorder.reportError("mic-permission-denied:" + (err && err.message ? err.message : String(err)));
     return;
   }
-  // Race-cancel: a stop/cancel fired while getUserMedia was pending. Release
-  // the stream we just acquired so the mic indicator can turn off.
   if (mySession !== activeSessionId) {
     for (const t of stream.getTracks()) t.stop();
     return;
   }
 
   mediaStream = stream;
-  audioContext = new AudioContext();
+  // Force the context to 16 kHz so the browser's resampler does the
+  // anti-aliased downsample for us. ScriptProcessor then delivers
+  // already-resampled mono Float32 buffers — no manual decimation needed.
+  audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
   const source = audioContext.createMediaStreamSource(mediaStream);
-  const inputRate = audioContext.sampleRate;
-  const decimation = inputRate / TARGET_SAMPLE_RATE;
 
-  // ScriptProcessor is deprecated but the simplest API for raw PCM here.
-  // AudioWorklet is the modern alternative but requires more glue. For an MVP
-  // dictation app where audio chunks are processed in main, this is acceptable.
   const bufferSize = 4096;
   processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
-  let accumulator = 0;
-
   processorNode.onaudioprocess = (event) => {
     const inputData = event.inputBuffer.getChannelData(0);
-    // Naive linear-skip downsample. Good enough for speech recognition.
+    // Copy the samples — the underlying buffer is reused by Web Audio.
     for (let i = 0; i < inputData.length; i++) {
-      accumulator++;
-      if (accumulator >= decimation) {
-        accumulator -= decimation;
-        outBuffer.push(inputData[i]);
-      }
+      outBuffer.push(inputData[i]);
     }
     if (outBuffer.length >= 1024) {
       const chunk = new Float32Array(outBuffer);
@@ -74,18 +71,12 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  // Invalidate any in-flight startRecording() awaiting getUserMedia. When
-  // that promise eventually resolves it will see the mismatched session id
-  // and stop the freshly-acquired tracks itself.
   ++activeSessionId;
-
   if (processorNode) {
     processorNode.disconnect();
     processorNode.onaudioprocess = null;
     processorNode = null;
   }
-  // Flush any residual samples accumulated below the 1024-sample threshold,
-  // so the host gets every sample from the end of the user's utterance.
   if (outBuffer.length > 0) {
     const chunk = new Float32Array(outBuffer);
     outBuffer = [];
