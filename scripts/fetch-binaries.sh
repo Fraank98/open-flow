@@ -49,20 +49,21 @@ build_whisper() {
 }
 
 build_llama() {
-  if [[ -x "$BIN_DIR/llama-cli" ]]; then
-    echo "[skip] llama-cli already present at $BIN_DIR/llama-cli"
+  if [[ -x "$BIN_DIR/llama-server" && -x "$BIN_DIR/llama-cli" ]]; then
+    echo "[skip] llama-server + llama-cli already present"
     return
   fi
-  echo "[build] llama.cpp @ $LLAMA_TAG"
+  echo "[build] llama.cpp @ $LLAMA_TAG (server + cli)"
   local src="$BUILD_DIR/llama.cpp"
   if [[ ! -d "$src" ]]; then
     git clone --depth 1 --branch "$LLAMA_TAG" "$LLAMA_REPO" "$src"
   fi
   cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
-  cmake --build "$src/build" -j --target llama-cli
+  cmake --build "$src/build" -j --target llama-cli llama-server
   cp "$src/build/bin/llama-cli" "$BIN_DIR/llama-cli"
-  chmod +x "$BIN_DIR/llama-cli"
-  echo "[ok] llama-cli → $BIN_DIR/llama-cli"
+  cp "$src/build/bin/llama-server" "$BIN_DIR/llama-server"
+  chmod +x "$BIN_DIR/llama-cli" "$BIN_DIR/llama-server"
+  echo "[ok] llama-cli + llama-server → $BIN_DIR/"
 }
 
 build_flag_monitor() {
@@ -87,6 +88,6 @@ build_flag_monitor
 
 echo ""
 echo "Done. Binaries:"
-ls -lh "$BIN_DIR"/whisper-cli "$BIN_DIR"/llama-cli "$BIN_DIR"/flag-monitor
+ls -lh "$BIN_DIR"/whisper-cli "$BIN_DIR"/llama-cli "$BIN_DIR"/llama-server "$BIN_DIR"/flag-monitor
 echo ""
 echo "Tip: rm -rf $BUILD_DIR to reclaim disk after a successful build."

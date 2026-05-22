@@ -10,6 +10,7 @@ bin/
 # Native binaries (built locally via scripts/fetch-binaries.sh)
 resources/bin/whisper-cli
 resources/bin/llama-cli
+resources/bin/llama-server
 resources/bin/flag-monitor
 resources/bin/build-tmp/
 

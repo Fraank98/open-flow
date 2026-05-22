@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { WhisperRunner } from "../src/main/whisper-runner.js";
 import { LLMCleaner } from "../src/main/llm-cleaner.js";
+import { LLMServer } from "../src/main/llm-server.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -28,7 +29,7 @@ async function main(): Promise<void> {
   }
 
   const whisperBin = join(ROOT, "resources", "bin", "whisper-cli");
-  const llamaBin = join(ROOT, "resources", "bin", "llama-cli");
+  const llamaServerBin = join(ROOT, "resources", "bin", "llama-server");
   const whisperModel = values["whisper-model"] ??
     join(ROOT, "test", "fixtures", "models", "ggml-tiny.bin");
   const llmModel = values["llm-model"] ??
@@ -36,7 +37,7 @@ async function main(): Promise<void> {
 
   for (const [label, p] of [
     ["whisper-cli", whisperBin],
-    ["llama-cli", llamaBin],
+    ["llama-server", llamaServerBin],
     ["whisper model", whisperModel],
     ["llm model", llmModel],
     ["wav", values.wav],
@@ -52,23 +53,37 @@ async function main(): Promise<void> {
     modelPath: whisperModel,
     timeoutMs: 60_000,
   });
-  const llm = new LLMCleaner({
-    binaryPath: llamaBin,
+  const llmServer = new LLMServer({
+    binaryPath: llamaServerBin,
     modelPath: llmModel,
-    timeoutMs: 30_000,
+    port: 18098,
+    contextSize: 1024,
   });
 
-  console.error(`[1/2] Transcribing ${values.wav}...`);
-  const t = await whisper.transcribe({ wavPath: values.wav, language: values.language! });
-  console.error(`     done in ${t.durationMs}ms, lang=${t.language ?? "?"}`);
-  console.error(`     raw: "${t.text}"`);
+  console.error(`[0/2] Starting llama-server...`);
+  const serverT0 = Date.now();
+  await llmServer.start();
+  console.error(`     ready in ${Date.now() - serverT0}ms`);
 
-  console.error(`[2/2] Cleaning...`);
-  const c = await llm.clean(t.text);
-  console.error(`     done in ${c.durationMs}ms, fallback=${c.usedFallback}`);
+  const llm = new LLMCleaner({
+    endpoint: llmServer.getEndpoint(),
+    timeoutMs: 15_000,
+  });
 
-  // Final cleaned output to stdout for piping
-  process.stdout.write(c.text + "\n");
+  try {
+    console.error(`[1/2] Transcribing ${values.wav}...`);
+    const t = await whisper.transcribe({ wavPath: values.wav, language: values.language! });
+    console.error(`     done in ${t.durationMs}ms, lang=${t.language ?? "?"}`);
+    console.error(`     raw: "${t.text}"`);
+
+    console.error(`[2/2] Cleaning...`);
+    const c = await llm.clean(t.text);
+    console.error(`     done in ${c.durationMs}ms, fallback=${c.usedFallback}`);
+
+    process.stdout.write(c.text + "\n");
+  } finally {
+    llmServer.stop();
+  }
 }
 
 main().catch((err) => {

@@ -12,6 +12,7 @@ import { createDefaultTextInjector } from "./text-injector.js";
 import { createLogger } from "./logger.js";
 import { WhisperRunner } from "./whisper-runner.js";
 import { LLMCleaner } from "./llm-cleaner.js";
+import { LLMServer } from "./llm-server.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
@@ -33,7 +34,7 @@ const BIN_DIR = app.isPackaged
   ? join(process.resourcesPath, "bin")
   : join(APP_ROOT, "resources", "bin");
 const WHISPER_BIN = join(BIN_DIR, "whisper-cli");
-const LLAMA_BIN = join(BIN_DIR, "llama-cli");
+const LLAMA_SERVER_BIN = join(BIN_DIR, "llama-server");
 
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
@@ -96,10 +97,33 @@ async function main(): Promise<void> {
     modelPath: whisperModelPath,
     timeoutMs: 60_000,
   });
-  const llm = new LLMCleaner({
-    binaryPath: LLAMA_BIN,
+
+  // Start the LLM server in the background. Model loads once, stays warm,
+  // per-cleanup latency drops from ~3-5s (cold spawn) to ~100-500ms.
+  const llmServer = new LLMServer({
+    binaryPath: LLAMA_SERVER_BIN,
     modelPath: llmModelPath,
-    timeoutMs: 30_000,
+    port: 18080,
+    contextSize: 2048,
+  });
+  try {
+    await logger.info("llama-server starting", { model: llmModelPath });
+    const t0 = Date.now();
+    await llmServer.start();
+    await logger.info("llama-server ready", {
+      loadMs: Date.now() - t0,
+      endpoint: llmServer.getEndpoint(),
+    });
+  } catch (err) {
+    await logger.error("llama-server failed to start", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    // Continue anyway — coordinator will surface clean errors per request.
+    // The user can disable LLM cleanup via preferences.
+  }
+  const llm = new LLMCleaner({
+    endpoint: llmServer.getEndpoint(),
+    timeoutMs: 15_000,
   });
   const injector = createDefaultTextInjector();
   const orchestrator = new AudioOrchestrator({ maxDurationMs: 60_000, sampleRate: SAMPLE_RATE });
@@ -261,6 +285,7 @@ async function main(): Promise<void> {
 
   app.on("will-quit", () => {
     ptt.stop();
+    llmServer.stop();
     overlay.destroy();
     menubar.destroy();
   });
