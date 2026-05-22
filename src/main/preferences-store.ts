@@ -9,6 +9,7 @@ export interface Preferences {
   language: string;
   debugLogging: boolean;
   useLlmCleanup: boolean;
+  launchAtLogin: boolean;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -19,6 +20,7 @@ export const DEFAULT_PREFS: Preferences = {
   language: "auto",
   debugLogging: false,
   useLlmCleanup: true,
+  launchAtLogin: true,
 };
 
 export class PreferencesStore {

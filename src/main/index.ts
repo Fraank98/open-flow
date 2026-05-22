@@ -61,6 +61,21 @@ async function main(): Promise<void> {
     prefs = await preferencesStore.load();
   }
 
+  // Apply the launch-at-login preference (no-op if already in sync). macOS
+  // tracks this via ServiceManagement; for unsigned apps the user may see a
+  // one-time approval prompt in System Settings → General → Login Items.
+  try {
+    const current = app.getLoginItemSettings().openAtLogin;
+    if (current !== prefs.launchAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: prefs.launchAtLogin });
+      await logger.info("launch-at-login updated", { openAtLogin: prefs.launchAtLogin });
+    }
+  } catch (err) {
+    await logger.warn("launch-at-login update failed", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   // Resolve model paths from prefs + catalog
   const whisperDesc = getModelById("whisper", prefs.whisperModelId);
   const llmDesc = getModelById("llm", prefs.llmModelId);

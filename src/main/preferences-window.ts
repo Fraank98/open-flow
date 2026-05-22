@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WHISPER_MODELS, LLM_MODELS } from "./model-catalog.js";
@@ -68,6 +68,16 @@ export class PreferencesWindow {
 
     ipcMain.handle("prefs:save", async (_e, next: Preferences): Promise<Preferences> => {
       await this.deps.preferencesStore.save(next);
+      // Apply launch-at-login immediately so the user sees feedback in
+      // System Settings → General → Login Items without restarting.
+      try {
+        const current = app.getLoginItemSettings().openAtLogin;
+        if (current !== next.launchAtLogin) {
+          app.setLoginItemSettings({ openAtLogin: next.launchAtLogin });
+        }
+      } catch {
+        // ignore — pref is saved, will be re-applied on next launch
+      }
       return next;
     });
 
