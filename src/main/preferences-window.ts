@@ -111,5 +111,24 @@ export class PreferencesWindow {
         }
       });
     });
+
+    ipcMain.handle("prefs:delete-model", async (_e, args: { kind: "whisper" | "llm"; id: string }) => {
+      const list = args.kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
+      const desc = list.find((m) => m.id === args.id);
+      if (!desc) throw new Error(`Unknown model: ${args.kind}/${args.id}`);
+      // Don't allow deleting the currently selected model — that would
+      // break the next app start.
+      const prefs = await this.deps.preferencesStore.load();
+      const selectedKey = args.kind === "whisper" ? prefs.whisperModelId : prefs.llmModelId;
+      if (selectedKey === args.id) {
+        throw new Error(
+          `Cannot delete the currently selected ${args.kind} model. ` +
+            `Switch to a different model first, save, then delete this one.`,
+        );
+      }
+      const path = this.deps.modelManager.getInstalledPath(desc);
+      const { unlink } = await import("node:fs/promises");
+      await unlink(path).catch(() => undefined);
+    });
   }
 }

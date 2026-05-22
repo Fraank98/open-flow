@@ -27,38 +27,87 @@ async function init() {
     for (const m of models) {
       const row = document.createElement("div");
       row.className = "model-row" + (m.id === selectedId ? " selected" : "");
-      const sizeMb = (m.sizeBytes / 1024 / 1024).toFixed(0);
-      row.innerHTML = `
-        <span class="name">${m.label}</span>
-        <span class="size">${sizeMb} MB</span>
-        <span class="badge ${m.installed ? "installed" : ""}">${m.installed ? "installed" : "not installed"}</span>
-      `;
-      if (!m.installed) {
-        const btn = document.createElement("button");
-        btn.textContent = "Download";
-        btn.addEventListener("click", async () => {
-          btn.textContent = "0%";
-          btn.disabled = true;
-          const off = window.openFlowPrefs.onDownloadProgress((p) => {
-            if (p.id === m.id && p.total > 0) {
-              btn.textContent = Math.floor((p.bytes / p.total) * 100) + "%";
+      row.dataset.id = m.id;
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "name";
+      nameEl.textContent = m.label;
+      const sizeEl = document.createElement("span");
+      sizeEl.className = "size";
+      sizeEl.textContent = `${(m.sizeBytes / 1024 / 1024).toFixed(0)} MB`;
+      const badgeEl = document.createElement("span");
+      badgeEl.className = "badge" + (m.installed ? " installed" : "");
+      badgeEl.textContent = m.installed ? "installed" : "not installed";
+      row.append(nameEl, sizeEl, badgeEl);
+
+      const actionsEl = document.createElement("span");
+      actionsEl.className = "row-actions";
+      row.appendChild(actionsEl);
+
+      function getCurrentlySelected() {
+        return $(`#${containerId} .selected`)?.dataset.id;
+      }
+
+      function setInstalled(installed) {
+        m.installed = installed;
+        badgeEl.classList.toggle("installed", installed);
+        badgeEl.textContent = installed ? "installed" : "not installed";
+        actionsEl.innerHTML = "";
+        if (installed) {
+          if (m.id !== getCurrentlySelected()) {
+            const delBtn = document.createElement("button");
+            delBtn.textContent = "Delete";
+            delBtn.className = "danger";
+            delBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              if (m.id === getCurrentlySelected()) {
+                $("#status").textContent = "Switch to another model + Save first, then delete this one.";
+                return;
+              }
+              delBtn.disabled = true;
+              delBtn.textContent = "Deleting…";
+              try {
+                await window.openFlowPrefs.deleteModel(kind, m.id);
+                setInstalled(false);
+                $("#status").textContent = `Deleted ${m.label}.`;
+              } catch (err) {
+                $("#status").textContent = "Delete failed: " + err.message;
+                delBtn.disabled = false;
+                delBtn.textContent = "Delete";
+              }
+            });
+            actionsEl.appendChild(delBtn);
+          }
+        } else {
+          const dlBtn = document.createElement("button");
+          dlBtn.textContent = "Download";
+          dlBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            dlBtn.textContent = "0%";
+            dlBtn.disabled = true;
+            const off = window.openFlowPrefs.onDownloadProgress((p) => {
+              if (p.id === m.id && p.total > 0) {
+                dlBtn.textContent = Math.floor((p.bytes / p.total) * 100) + "%";
+              }
+            });
+            try {
+              await window.openFlowPrefs.downloadModel(kind, m.id);
+              setInstalled(true);
+              $("#status").textContent = `Downloaded ${m.label}. Click the row to select it, then Save.`;
+            } catch (err) {
+              dlBtn.textContent = "Retry";
+              dlBtn.disabled = false;
+              $("#status").textContent = "Download failed: " + err.message;
+            } finally {
+              off();
             }
           });
-          try {
-            await window.openFlowPrefs.downloadModel(kind, m.id);
-            btn.remove();
-            row.querySelector(".badge").classList.add("installed");
-            row.querySelector(".badge").textContent = "installed";
-          } catch (err) {
-            btn.textContent = "Retry";
-            btn.disabled = false;
-            $("#status").textContent = "Download failed: " + err.message;
-          } finally {
-            off();
-          }
-        });
-        row.appendChild(btn);
+          actionsEl.appendChild(dlBtn);
+        }
       }
+
+      setInstalled(m.installed);
+
       row.addEventListener("click", (e) => {
         if (e.target.tagName === "BUTTON") return;
         if (!m.installed) {
@@ -67,9 +116,56 @@ async function init() {
         }
         Array.from(container.children).forEach((c) => c.classList.remove("selected"));
         row.classList.add("selected");
-        row.dataset.selected = "true";
+        // Re-render Delete buttons: the row that just became selected must
+        // hide its Delete (you can't delete the active model), and others
+        // that are installed should show Delete again.
+        for (const r of container.children) {
+          const id = r.dataset.id;
+          const inst = id === m.id ? true : models.find((x) => x.id === id)?.installed;
+          const model = models.find((x) => x.id === id);
+          if (!model) continue;
+          // Reuse setInstalled-equivalent by re-rendering the actions cell only
+          const actionsCell = r.querySelector(".row-actions");
+          if (!actionsCell) continue;
+          actionsCell.innerHTML = "";
+          if (inst && id !== m.id) {
+            const delBtn = document.createElement("button");
+            delBtn.textContent = "Delete";
+            delBtn.className = "danger";
+            delBtn.addEventListener("click", async (ev) => {
+              ev.stopPropagation();
+              if (id === getCurrentlySelected()) {
+                $("#status").textContent = "Switch to another model + Save first, then delete this one.";
+                return;
+              }
+              delBtn.disabled = true;
+              delBtn.textContent = "Deleting…";
+              try {
+                await window.openFlowPrefs.deleteModel(kind, id);
+                model.installed = false;
+                const badge = r.querySelector(".badge");
+                badge.classList.remove("installed");
+                badge.textContent = "not installed";
+                actionsCell.innerHTML = "";
+                const dl = document.createElement("button");
+                dl.textContent = "Download";
+                actionsCell.appendChild(dl);
+                $("#status").textContent = `Deleted ${model.label}.`;
+              } catch (err) {
+                $("#status").textContent = "Delete failed: " + err.message;
+                delBtn.disabled = false;
+                delBtn.textContent = "Delete";
+              }
+            });
+            actionsCell.appendChild(delBtn);
+          } else if (!inst) {
+            const dl = document.createElement("button");
+            dl.textContent = "Download";
+            actionsCell.appendChild(dl);
+          }
+        }
       });
-      row.dataset.id = m.id;
+
       container.appendChild(row);
     }
   }

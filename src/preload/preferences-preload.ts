@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("openFlowPrefs", {
   }> => ipcRenderer.invoke("prefs:list-models"),
   downloadModel: (kind: "whisper" | "llm", id: string): Promise<void> =>
     ipcRenderer.invoke("prefs:download-model", { kind, id }),
+  deleteModel: (kind: "whisper" | "llm", id: string): Promise<void> =>
+    ipcRenderer.invoke("prefs:delete-model", { kind, id }),
   onDownloadProgress: (cb: (p: { id: string; bytes: number; total: number }) => void): (() => void) => {
     const handler = (_e: unknown, payload: { id: string; bytes: number; total: number }) => cb(payload);
     ipcRenderer.on("prefs:download-progress", handler);
@@ -28,6 +30,7 @@ declare global {
         languages: Array<{ id: string; label: string }>;
       }>;
       downloadModel: (kind: "whisper" | "llm", id: string) => Promise<void>;
+      deleteModel: (kind: "whisper" | "llm", id: string) => Promise<void>;
       onDownloadProgress: (cb: (p: { id: string; bytes: number; total: number }) => void) => () => void;
     };
   }
