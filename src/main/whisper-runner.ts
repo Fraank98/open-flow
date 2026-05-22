@@ -49,12 +49,12 @@ export class WhisperRunner {
       await this.spawnAndWait(cliArgs);
       const jsonRaw = await readFile(`${outBase}.json`, "utf8");
       const parsed = JSON.parse(jsonRaw) as WhisperJsonOutput;
-      const text = (parsed.transcription ?? [])
+      const raw = (parsed.transcription ?? [])
         .map((seg) => seg.text ?? "")
         .join("")
         .trim();
       return {
-        text,
+        text: stripWhisperMarkers(raw),
         language: parsed.result?.language ?? null,
         durationMs: Date.now() - start,
       };
@@ -93,4 +93,17 @@ export class WhisperRunner {
 interface WhisperJsonOutput {
   result?: { language?: string };
   transcription?: Array<{ text?: string }>;
+}
+
+// Whisper.cpp produces non-speech markers like "[Music]", "[Applause]",
+// "[Multiple voices]" or simply nonsense placeholders ("[Oggigio]") when it
+// hears silence, low SNR, or speech it can't confidently transcribe. Strip
+// any [...] or (...) bracketed token that doesn't contain a colon (which
+// would suggest legitimate user content like "[link: ...]").
+export function stripWhisperMarkers(text: string): string {
+  return text
+    .replace(/\s*\[[^\]:]*\]\s*/g, " ")
+    .replace(/\s*\([^):]*\)\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
