@@ -181,30 +181,52 @@ async function main(): Promise<void> {
     onQuit: () => app.quit(),
   });
 
-  // 'arm' fires immediately on Option DOWN — start mic + reset orchestrator
-  // NOW so we don't lose the first 150ms of speech to the debounce. Don't
-  // change the coordinator state yet (that happens on confirmed 'start').
+  // Diagnostic: log every raw NSEvent we receive so duplicate-fire bugs
+  // can be diagnosed from the log.
+  ptt.on("rawEvent", (state: string) => {
+    void logger.info("PTT rawEvent", { state });
+  });
+
+  // Global busy flag: prevent a second 'stop' from firing while a pipeline
+  // is still running. The coordinator has its own state guard but stop
+  // events are debounced through async setTimeout(250) so two stops can
+  // both pass the guard if they happen in the same tick.
+  let pipelineBusy = false;
+
   ptt.on("arm", () => {
+    if (pipelineBusy) {
+      void logger.warn("arm ignored: pipeline busy");
+      return;
+    }
     orchestrator.reset();
     recorderWin.webContents.send("audio:start");
   });
   ptt.on("start", () => {
+    if (pipelineBusy) return;
     coordinator.startRecording();
     menubar.setStatus("Recording…");
   });
   ptt.on("stop", async () => {
-    recorderWin.webContents.send("audio:stop");
-    await new Promise((r) => setTimeout(r, 250));
-    const samples = orchestrator.snapshot();
-    const currentPrefs = await preferencesStore.load();
-    await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {
-      useLlmCleanup: currentPrefs.useLlmCleanup,
-    });
-    menubar.setStatus("Idle");
+    if (pipelineBusy) {
+      void logger.warn("stop ignored: pipeline busy");
+      return;
+    }
+    pipelineBusy = true;
+    try {
+      recorderWin.webContents.send("audio:stop");
+      await new Promise((r) => setTimeout(r, 250));
+      const samples = orchestrator.snapshot();
+      const currentPrefs = await preferencesStore.load();
+      await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {
+        useLlmCleanup: currentPrefs.useLlmCleanup,
+      });
+      menubar.setStatus("Idle");
+    } finally {
+      pipelineBusy = false;
+    }
   });
   ptt.on("cancel", () => {
-    // User tapped Option briefly (< debounce) — stop the mic we eagerly
-    // started on 'arm', discard the audio, and stay idle.
+    if (pipelineBusy) return;
     recorderWin.webContents.send("audio:stop");
     orchestrator.reset();
     menubar.setStatus("Idle");
