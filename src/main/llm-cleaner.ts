@@ -56,6 +56,13 @@ export class LLMCleaner {
       // newline — cleanup output is at most a paragraph.
       stop: ["<<</transcript>>>", "<|im_end|>", "<|endoftext|>", "[end of text]", "\n\n"],
       cache_prompt: true,
+      // Small instruct models (Qwen 1.5B) routinely lock into repetition
+      // loops on near-identity tasks like transcript cleanup, regenerating
+      // the cleaned sentence over and over until n_predict caps them.
+      // repeat_penalty + repeat_last_n discourage emitting the same token
+      // pattern seen in the recent window.
+      repeat_penalty: 1.3,
+      repeat_last_n: 128,
     };
 
     let res: Response;

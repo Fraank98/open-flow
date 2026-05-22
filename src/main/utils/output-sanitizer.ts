@@ -44,8 +44,26 @@ export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): San
   }
 
   // Length sanity: only enforce ratio when output is non-trivially long
-  if (text.length > SHORT_OUTPUT_THRESHOLD && text.length > rawTranscript.length * 3) {
+  if (text.length > SHORT_OUTPUT_THRESHOLD && text.length > rawTranscript.length * 2.5) {
     return { text: rawTranscript, usedFallback: true };
+  }
+
+  // Repetition guard: small LLMs sometimes lock into a loop and emit the
+  // cleaned sentence two or more times. Detect by looking for any
+  // substring of ≥20 chars from the start of the output that appears
+  // again later in the same string.
+  if (text.length >= 40) {
+    const probeLen = Math.min(40, Math.floor(text.length / 2));
+    const probe = text.slice(0, probeLen);
+    const secondIdx = text.indexOf(probe, probeLen);
+    if (secondIdx !== -1) {
+      // Use the first occurrence only — it's a complete copy of what the
+      // model meant to output before it started repeating.
+      const single = text.slice(0, secondIdx).trim();
+      if (single.length > 0) {
+        return { text: single, usedFallback: false };
+      }
+    }
   }
 
   return { text, usedFallback: false };
