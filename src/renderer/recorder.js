@@ -7,14 +7,19 @@ const TARGET_SAMPLE_RATE = 16000;
 let audioContext = null;
 let mediaStream = null;
 let processorNode = null;
-// Promoted to module scope so stopRecording() can flush any residual samples
-// before signaling end-of-stream to main.
 let outBuffer = [];
+// Session id is bumped on every stopRecording() and on every startRecording()
+// entry. If an in-flight getUserMedia() promise resolves and discovers its
+// session was superseded, it must release the freshly-created MediaStream
+// immediately — otherwise the macOS mic indicator stays on indefinitely.
+let activeSessionId = 0;
 
 async function startRecording() {
+  const mySession = ++activeSessionId;
   outBuffer = [];
+  let stream;
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         echoCancellation: false,
@@ -26,6 +31,14 @@ async function startRecording() {
     window.openFlowRecorder.reportError("mic-permission-denied:" + (err && err.message ? err.message : String(err)));
     return;
   }
+  // Race-cancel: a stop/cancel fired while getUserMedia was pending. Release
+  // the stream we just acquired so the mic indicator can turn off.
+  if (mySession !== activeSessionId) {
+    for (const t of stream.getTracks()) t.stop();
+    return;
+  }
+
+  mediaStream = stream;
   audioContext = new AudioContext();
   const source = audioContext.createMediaStreamSource(mediaStream);
   const inputRate = audioContext.sampleRate;
@@ -61,6 +74,11 @@ async function startRecording() {
 }
 
 async function stopRecording() {
+  // Invalidate any in-flight startRecording() awaiting getUserMedia. When
+  // that promise eventually resolves it will see the mismatched session id
+  // and stop the freshly-acquired tracks itself.
+  ++activeSessionId;
+
   if (processorNode) {
     processorNode.disconnect();
     processorNode.onaudioprocess = null;
@@ -81,8 +99,6 @@ async function stopRecording() {
     await audioContext.close();
     audioContext = null;
   }
-  // Signal the host that all chunks have been sent. main can now snapshot
-  // the orchestrator buffer and run the pipeline.
   window.openFlowRecorder.sendEndOfStream();
 }
 
