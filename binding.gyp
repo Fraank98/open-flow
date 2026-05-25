@@ -25,6 +25,38 @@
           }
         }]
       ]
+    },
+    {
+      "target_name": "whisper_stream",
+      "sources": ["native/whisper-stream/whisper_stream.mm"],
+      "include_dirs": [
+        "<!@(node -p \"require('node-addon-api').include\")",
+        "resources/bin/build-tmp/whisper.cpp/include",
+        "resources/bin/build-tmp/whisper.cpp/ggml/include"
+      ],
+      "dependencies": ["<!(node -p \"require('node-addon-api').gyp\")"],
+      "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
+      "cflags!": ["-fno-exceptions"],
+      "cflags_cc!": ["-fno-exceptions"],
+      "conditions": [
+        ["OS=='mac'", {
+          "xcode_settings": {
+            "MACOSX_DEPLOYMENT_TARGET": "11.0",
+            "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
+            "CLANG_CXX_LIBRARY": "libc++",
+            "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+            "OTHER_LDFLAGS": [
+              "-Wl,-rpath,@loader_path",
+              "-Wl,-rpath,@loader_path/../../resources/bin/build-tmp/whisper.cpp/build/src",
+              "-Wl,-rpath,@loader_path/../../resources/bin/build-tmp/whisper.cpp/build/ggml/src"
+            ]
+          },
+          "libraries": [
+            "<(module_root_dir)/resources/bin/build-tmp/whisper.cpp/build/src/libwhisper.dylib",
+            "<(module_root_dir)/resources/bin/build-tmp/whisper.cpp/build/ggml/src/libggml.dylib"
+          ]
+        }]
+      ]
     }
   ]
 }
