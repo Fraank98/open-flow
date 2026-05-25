@@ -10,8 +10,12 @@ export class OverlayWindow {
 
   async create(): Promise<void> {
     const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-    const w = 360;
-    const h = 80;
+    // Window is larger than the visible pill so the box-shadow (which
+    // extends ~24px out from each edge) has room to render without being
+    // clipped by the window boundary. The pill itself is centered inside
+    // via CSS flexbox + padding.
+    const w = 420;
+    const h = 124;
     this.win = new BrowserWindow({
       width: w,
       height: h,

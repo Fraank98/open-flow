@@ -8,19 +8,27 @@ html, body {
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
+  /* Center the pill horizontally and stick it near the bottom of the
+     window so the downward box-shadow has room to render. The window
+     is sized larger than the pill (~30px headroom on every side) so
+     the shadow never gets clipped. */
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 28px 30px 36px 30px;
 }
 #root {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px 18px;
-  margin: 8px;
   background: rgba(30, 30, 32, 0.92);
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   color: #fff;
   font-size: 14px;
   height: 56px;
+  width: 360px;
   transition: opacity 200ms ease;
 }
 .dot {
