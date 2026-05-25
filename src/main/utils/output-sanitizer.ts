@@ -24,6 +24,20 @@ const NOISY_SUFFIX_PATTERNS: RegExp[] = [
 
 const SHORT_OUTPUT_THRESHOLD = 50; // chars
 
+// Compute the fraction of words in `output` that don't appear anywhere in
+// `input`. Words are runs of Unicode letters; case is normalized. Returns
+// 0 when output is empty.
+function outputWordDrift(input: string, output: string): number {
+  const inWords = new Set((input.toLowerCase().match(/\p{L}+/gu) ?? []));
+  const outWords = (output.toLowerCase().match(/\p{L}+/gu) ?? []);
+  if (outWords.length === 0) return 0;
+  let invented = 0;
+  for (const w of outWords) {
+    if (!inWords.has(w)) invented++;
+  }
+  return invented / outWords.length;
+}
+
 export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): SanitizedOutput {
   let text = rawOutput.trim();
 
@@ -62,6 +76,17 @@ export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): San
   // Length sanity: only enforce ratio when output is non-trivially long
   if (text.length > SHORT_OUTPUT_THRESHOLD && text.length > rawTranscript.length * 2.5) {
     return { text: rawTranscript, usedFallback: true };
+  }
+
+  // Drift detector: small models sometimes paraphrase / invent vocabulary
+  // even when explicitly told not to. Compare the set of words used in the
+  // input vs in the output. If more than ~40% of the output's words don't
+  // appear in the input, the model invented content — discard and use raw.
+  if (rawTranscript.length > SHORT_OUTPUT_THRESHOLD) {
+    const drift = outputWordDrift(rawTranscript, text);
+    if (drift > 0.4) {
+      return { text: rawTranscript, usedFallback: true };
+    }
   }
 
   // Repetition guard: small LLMs sometimes lock into a loop and emit the

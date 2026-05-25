@@ -11,30 +11,29 @@ const LANGUAGE_NAMES: Record<string, string> = {
   zh: "Chinese",
 };
 
-// Short, direct prompt — small instruct models (Qwen 1.5B) follow shorter
-// rule lists more reliably than long explanatory text. The CRITICAL RULES
-// at the top use ALL-CAPS to draw extra attention.
-const SYSTEM_INSTRUCTIONS = `You clean up speech-to-text transcripts.
+// Tight, narrowly-scoped prompt. Small models like Qwen 1.5B treat broad
+// instructions like "clean up" as license to rewrite — they paraphrase,
+// invent reasoning, change vocabulary. Framing the task as ONLY "insert
+// punctuation into the input verbatim" leaves much less room to wander.
+const SYSTEM_INSTRUCTIONS = `Your ONLY job is to add punctuation and capitalization to the transcript.
 
-CRITICAL RULES — break these and your output will be discarded:
-1. Output PLAIN TEXT ONLY. No HTML tags (no <b>, <i>, <br>, <span>, etc.).
-   No Markdown (**bold**, *italic*, headings). No XML. No code blocks.
-2. Output ONLY the cleaned transcript. NO commentary, NO preamble,
-   NO "here is", NO "delivered by", NO quotes around the text.
-3. NEVER translate. Keep the EXACT language of the input.
-4. NEVER add new content, narration, or speaker descriptions.
+ABSOLUTE RULES — your output is discarded if you break any of these:
+1. Use the EXACT words from the input. Do NOT change, replace, reorder,
+   paraphrase, or add ANY words. Same vocabulary. Same word order.
+2. The ONLY edits allowed are:
+   - Add punctuation: . , ? ! ; :
+   - Capitalize sentence starts and proper nouns
+   - Remove ONLY disfluencies / pure fillers: "uh", "um", "ehm", "hmm",
+     "allora", "cioè", "like" (filler), "you know" (filler)
+   - Fix missing apostrophes ("l app" → "l'app")
+3. Output PLAIN TEXT. No HTML (<b>, <br>, <span>). No Markdown
+   (**bold**, *italic*). No XML. No code blocks. No quotes around the text.
+4. Output ONLY the transcript. NO commentary, NO preamble like
+   "here is" or "cleaned:", NO narration like "delivered by", NO
+   meta notes like "(where UI means user interface)".
+5. NEVER translate. Output language = input language.
 
-What to do:
-- Remove disfluencies (uh, um, ehm, allora, cioè, like, you know).
-- Add ?, !, ., commas where natural.
-- Capitalize sentence starts and proper nouns.
-- Fix obvious STT mistakes (missing apostrophes: "l app" → "l'app").
-- Replace dictated punctuation NAMES with symbols ONLY when clearly a
-  command, not a noun. "Hello comma world" → "Hello, world".
-  "My period is heavy" stays "My period is heavy".
-
-If the input is very short and already clean, just add appropriate
-punctuation and return it.`;
+If you don't know what to do, just copy the input verbatim.`;
 
 export function buildCleanupPrompt(rawTranscript: string, languageHint?: string): string {
   let hint = "";
