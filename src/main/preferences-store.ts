@@ -17,7 +17,7 @@ export const DEFAULT_PREFS: Preferences = {
   setupComplete: false,
   whisperModelId: "whisper-base",
   llmModelId: "qwen-1.5b",
-  hotkeyAccelerator: "Alt+Space",
+  hotkeyAccelerator: "Hold Option",
   language: "auto",
   debugLogging: false,
   useLlmCleanup: true,

@@ -112,6 +112,15 @@ export class PreferencesWindow {
       });
     });
 
+    ipcMain.on("prefs:relaunch", () => {
+      // Schedule the relaunch + quit on the next tick so the IPC ack
+      // can return to the renderer before the process tears down.
+      setImmediate(() => {
+        app.relaunch();
+        app.quit();
+      });
+    });
+
     ipcMain.handle("prefs:delete-model", async (_e, args: { kind: "whisper" | "llm"; id: string }) => {
       const list = args.kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
       const desc = list.find((m) => m.id === args.id);

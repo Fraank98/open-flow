@@ -2,11 +2,22 @@
 
 const $ = (sel) => document.querySelector(sel);
 
+// Fields that the running main-process can't pick up without a relaunch:
+// the hotkey accelerator is registered once at startup, and Whisper / LLM
+// models are loaded into their respective servers at boot. Changes to any
+// of these flip the Save button into "Save & Restart".
+// hotkeyAccelerator is not user-configurable yet (PTT is hardcoded to
+// Option in the native addon), so it never triggers a restart.
+const RESTART_REQUIRED_FIELDS = ["whisperModelId", "llmModelId"];
+
 async function init() {
   const prefs = await window.openFlowPrefs.load();
+  const initialPrefs = { ...prefs };
   const catalog = await window.openFlowPrefs.listModels();
 
-  $("#hotkey").value = prefs.hotkeyAccelerator;
+  // Hotkey input is read-only (display only). The PTTManager uses the
+  // native addon's Option monitor, not Electron's globalShortcut.
+  $("#hotkey").value = "Hold Option";
   $("#debug").checked = prefs.debugLogging;
   $("#cleanup").checked = prefs.useLlmCleanup !== false;
   $("#launchAtLogin").checked = prefs.launchAtLogin !== false;
@@ -173,12 +184,14 @@ async function init() {
   renderModels("whisper-models", catalog.whisper, prefs.whisperModelId, "whisper");
   renderModels("llm-models", catalog.llm, prefs.llmModelId, "llm");
 
-  $("#save").addEventListener("click", async () => {
+  function buildNextPrefs() {
     const selectedWhisper = $("#whisper-models .selected")?.dataset.id ?? prefs.whisperModelId;
     const selectedLlm = $("#llm-models .selected")?.dataset.id ?? prefs.llmModelId;
-    const next = {
+    return {
       ...prefs,
-      hotkeyAccelerator: $("#hotkey").value.trim() || prefs.hotkeyAccelerator,
+      // hotkeyAccelerator is fixed in this build; preserve whatever was
+      // already saved instead of writing the read-only display string.
+      hotkeyAccelerator: prefs.hotkeyAccelerator,
       language: langSel.value,
       whisperModelId: selectedWhisper,
       llmModelId: selectedLlm,
@@ -187,8 +200,44 @@ async function init() {
       launchAtLogin: $("#launchAtLogin").checked,
       spokenPunctuation: $("#spokenPunctuation").checked,
     };
+  }
+
+  function needsRestart() {
+    const next = buildNextPrefs();
+    return RESTART_REQUIRED_FIELDS.some((k) => next[k] !== initialPrefs[k]);
+  }
+
+  function refreshSaveButton() {
+    $("#save").textContent = needsRestart() ? "Save & Restart" : "Save";
+  }
+
+  // Update the button label live as the user changes inputs.
+  // hotkey input is read-only so we skip it.
+  for (const el of [
+    $("#language"),
+    $("#debug"),
+    $("#cleanup"),
+    $("#launchAtLogin"),
+    $("#spokenPunctuation"),
+  ]) {
+    el.addEventListener("input", refreshSaveButton);
+    el.addEventListener("change", refreshSaveButton);
+  }
+  // Selection changes on model rows propagate via click handler; also
+  // refresh on a generic document click as a cheap catch-all.
+  document.addEventListener("click", refreshSaveButton);
+  refreshSaveButton();
+
+  $("#save").addEventListener("click", async () => {
+    const next = buildNextPrefs();
+    const shouldRestart = needsRestart();
     await window.openFlowPrefs.save(next);
-    $("#status").textContent = "Saved. Restart the app for hotkey/model changes to take effect.";
+    if (shouldRestart) {
+      $("#status").textContent = "Saved. Restarting…";
+      window.openFlowPrefs.relaunch();
+    } else {
+      $("#status").textContent = "Saved.";
+    }
   });
 }
 
