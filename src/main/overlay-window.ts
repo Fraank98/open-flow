@@ -20,7 +20,10 @@ export class OverlayWindow {
       width: w,
       height: h,
       x: Math.floor((width - w) / 2),
-      y: height - h - 24,
+      // Closer to the bottom of the work area (was 24, now 12). Combined
+      // with the CSS bottom: 15px inside the window, the pill sits ~27px
+      // above the dock — roughly half the previous gap.
+      y: height - h - 12,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
