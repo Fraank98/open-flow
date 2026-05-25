@@ -12,6 +12,7 @@ import { createDefaultTextInjector } from "./text-injector.js";
 import { createLogger } from "./logger.js";
 import { WhisperRunner } from "./whisper-runner.js";
 import { WhisperServer } from "./whisper-server.js";
+import { StreamingWhisperRunner, PartialTranscript } from "./streaming-whisper-runner.js";
 import { LLMCleaner } from "./llm-cleaner.js";
 import { LLMServer } from "./llm-server.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
@@ -108,26 +109,46 @@ async function main(): Promise<void> {
   const acc = await checkAccessibilityViaProbe();
   await logger.info("permissions", { mic, accessibility: acc });
 
-  // Start the Whisper server. Model loads once, stays warm in RAM.
-  // Per-transcription latency drops from ~1.5-2.5s spawn+load to ~400-800ms
-  // pure inference for a typical short utterance.
+  // Streaming Whisper via the in-process native addon. Model loads once
+  // into a whisper_context that stays in RAM; each utterance is a
+  // start → feedSamples* → processChunk* → finalize cycle.
+  let streamingWhisper: StreamingWhisperRunner | null = null;
+  try {
+    await logger.info("streaming whisper loading model", { model: whisperModelPath });
+    const t0 = Date.now();
+    streamingWhisper = new StreamingWhisperRunner({
+      appRoot: APP_ROOT,
+      isPackaged: app.isPackaged,
+      modelPath: whisperModelPath,
+      chunkIntervalMs: 1500,
+    });
+    streamingWhisper.on("partial", (p: PartialTranscript) => {
+      void logger.info("partial transcript", { newSuffix: p.newSuffix });
+    });
+    await logger.info("streaming whisper ready", { loadMs: Date.now() - t0 });
+  } catch (err) {
+    await logger.error("streaming whisper init failed; falling back to batch path", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Fallback batch path (whisper-server). Only used if streaming init failed.
   const whisperServer = new WhisperServer({
     binaryPath: WHISPER_SERVER_BIN,
     modelPath: whisperModelPath,
     port: 18081,
   });
-  try {
-    await logger.info("whisper-server starting", { model: whisperModelPath });
-    const t0 = Date.now();
-    await whisperServer.start();
-    await logger.info("whisper-server ready", {
-      loadMs: Date.now() - t0,
-      endpoint: whisperServer.getEndpoint(),
-    });
-  } catch (err) {
-    await logger.error("whisper-server failed to start", {
-      message: err instanceof Error ? err.message : String(err),
-    });
+  if (!streamingWhisper) {
+    try {
+      await whisperServer.start();
+      await logger.info("whisper-server ready (fallback)", {
+        endpoint: whisperServer.getEndpoint(),
+      });
+    } catch (err) {
+      await logger.error("whisper-server failed to start", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
   const whisper = new WhisperRunner({
     endpoint: whisperServer.getEndpoint(),
@@ -166,6 +187,14 @@ async function main(): Promise<void> {
 
   const coordinator = new PipelineCoordinator({
     transcribe: async ({ wavBytes, language }) => {
+      if (streamingWhisper) {
+        // The streaming runner has been receiving samples in parallel
+        // with the recorder; finalize runs one last inference and returns
+        // the full transcript.
+        const t0 = Date.now();
+        const text = await streamingWhisper.finalize(language);
+        return { text, language: null, durationMs: Date.now() - t0 };
+      }
       return whisper.transcribe({ wavBytes, language });
     },
     clean: async (raw, languageHint) => llm.clean(raw, languageHint),
@@ -201,6 +230,7 @@ async function main(): Promise<void> {
     const chunk = new Float32Array(view.length);
     chunk.set(view);
     orchestrator.appendChunk(chunk);
+    if (streamingWhisper) streamingWhisper.feedSamples(chunk);
   });
   ipcMain.on("audio:error", async (_e, message: string) => {
     await logger.error("recorder error", { message });
@@ -252,6 +282,12 @@ async function main(): Promise<void> {
       return;
     }
     orchestrator.reset();
+    if (streamingWhisper) {
+      // Read language synchronously from the last-known prefs — the chunk
+      // loop needs a language hint right away. We re-read prefs again at
+      // finalize time so a Save during recording still takes effect there.
+      streamingWhisper.start(prefs.language);
+    }
     recorderWin.webContents.send("audio:start");
   });
   ptt.on("start", () => {
@@ -295,6 +331,7 @@ async function main(): Promise<void> {
     void logger.info("PTT cancel — discarding recording");
     recorderWin.webContents.send("audio:stop");
     orchestrator.reset();
+    if (streamingWhisper) streamingWhisper.cancel();
     // Reset coordinator state to idle. Without this the overlay would stay
     // stuck at "Recording…" because state change → idle is what hides it.
     coordinator.cancel();
@@ -330,6 +367,7 @@ async function main(): Promise<void> {
 
   app.on("will-quit", () => {
     ptt.stop();
+    if (streamingWhisper) streamingWhisper.release();
     whisperServer.stop();
     llmServer.stop();
     overlay.destroy();
