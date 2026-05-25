@@ -52,9 +52,10 @@ export class LLMCleaner {
       prompt,
       n_predict: maxTokens,
       temperature: this.opts.temperature ?? 0.2,
-      // Stop at our transcript delimiter, common EOS markers, and double
-      // newline — cleanup output is at most a paragraph.
-      stop: ["<<</transcript>>>", "<|im_end|>", "<|endoftext|>", "[end of text]", "\n\n"],
+      // Stop at our transcript delimiter, common EOS markers, a bare
+      // "<<<" (catches malformed closing tags the model invents like
+      // "<<</clean_transcript>>"), and double newline.
+      stop: ["<<<", "<|im_end|>", "<|endoftext|>", "[end of text]", "\n\n"],
       cache_prompt: true,
       // Small instruct models (Qwen 1.5B) routinely lock into repetition
       // loops on near-identity tasks like transcript cleanup, regenerating

@@ -12,10 +12,12 @@ const NOISY_PREFIX_PATTERNS: RegExp[] = [
 
 // llama.cpp emits a literal "[end of text]" token at the end of generation
 // when it hits the EOS token. Also catches related sentinels and trailing
-// transcript-delimiter leakage from the prompt template.
+// transcript-delimiter leakage from the prompt template — including
+// variants the model invents like "<<</clean_transcript>>".
 const NOISY_SUFFIX_PATTERNS: RegExp[] = [
   /\s*\[end of text\]\s*$/i,
-  /\s*<<<\/?transcript>?>?>?\s*$/i,
+  /\s*<<<\/?[a-z_]*transcript[a-z_]*>?>?>?\s*$/i,
+  /\s*<<<[^>]*$/i,
   /\s*<\|im_end\|>\s*$/i,
   /\s*<\|endoftext\|>\s*$/i,
 ];

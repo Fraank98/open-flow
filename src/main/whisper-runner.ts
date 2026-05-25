@@ -86,10 +86,33 @@ export class WhisperRunner {
 // hears silence, low SNR, or speech it can't confidently transcribe. Strip
 // any [...] or (...) bracketed token that doesn't contain a colon (which
 // would suggest legitimate user content like "[link: ...]").
+//
+// When the entire (post-strip) transcript is a known hallucination phrase
+// — the patterns Whisper falls back to on silence or undecodable audio —
+// return empty string so the pipeline coordinator skips the cleanup and
+// paste steps entirely.
+const COMMON_WHISPER_HALLUCINATIONS: RegExp[] = [
+  /^grazie[.!?]*$/i,
+  /^grazie a tutti[.!?]*$/i,
+  /^grazie per (l'attenzione|aver guardato)[.!?]*$/i,
+  /^sottotitoli (e revisione )?a cura di.*$/i,
+  /^sottotitoli e\/o sottotitolaggio.*$/i,
+  /^thank you( for watching)?[.!?]*$/i,
+  /^thanks for watching[.!?]*$/i,
+  /^a presto[.!?]*$/i,
+  /^arrivederci[.!?]*$/i,
+  /^ciao[.!?]*$/i,
+  /^\.{2,}$/,
+];
+
 export function stripWhisperMarkers(text: string): string {
-  return text
+  const stripped = text
     .replace(/\s*\[[^\]:]*\]\s*/g, " ")
     .replace(/\s*\([^):]*\)\s*/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
+  if (COMMON_WHISPER_HALLUCINATIONS.some((re) => re.test(stripped))) {
+    return "";
+  }
+  return stripped;
 }
