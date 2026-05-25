@@ -13,6 +13,7 @@ resources/bin/whisper-server
 resources/bin/llama-cli
 resources/bin/llama-server
 resources/bin/flag-monitor
+resources/bin/lib/
 resources/bin/build-tmp/
 
 # Fixture models (downloaded on demand)

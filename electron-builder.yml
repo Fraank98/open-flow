@@ -10,7 +10,7 @@ files:
   - dist/**/*
   - src/renderer/**/*
   - resources/icons/**/*
-  - build/Release/ptt_monitor.node
+  - build/Release/*.node
   - package.json
   - "!**/.DS_Store"
 
@@ -24,6 +24,13 @@ extraResources:
     filter:
       - "whisper-server"
       - "llama-server"
+  # Streaming Whisper native addon ships these dylibs alongside the .node.
+  # Placed at Contents/Resources/lib/ so the .node's @rpath finds them.
+  - from: resources/bin/lib
+    to: lib
+    filter:
+      - "libwhisper*.dylib"
+      - "libggml.dylib"
 
 asar: true
 

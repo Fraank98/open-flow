@@ -47,13 +47,13 @@
             "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
             "OTHER_LDFLAGS": [
               "-Wl,-rpath,@loader_path",
-              "-Wl,-rpath,@loader_path/../../resources/bin/build-tmp/whisper.cpp/build/src",
-              "-Wl,-rpath,@loader_path/../../resources/bin/build-tmp/whisper.cpp/build/ggml/src"
+              "-Wl,-rpath,@loader_path/../../resources/bin/lib",
+              "-Wl,-rpath,@loader_path/../../../lib"
             ]
           },
           "libraries": [
-            "<(module_root_dir)/resources/bin/build-tmp/whisper.cpp/build/src/libwhisper.dylib",
-            "<(module_root_dir)/resources/bin/build-tmp/whisper.cpp/build/ggml/src/libggml.dylib"
+            "<(module_root_dir)/resources/bin/lib/libwhisper.dylib",
+            "<(module_root_dir)/resources/bin/lib/libggml.dylib"
           ]
         }]
       ]

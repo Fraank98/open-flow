@@ -68,6 +68,25 @@ build_llama() {
   echo "[ok] llama-cli + llama-server → $BIN_DIR/"
 }
 
+copy_whisper_libs() {
+  # Copy libwhisper + libggml dylibs to a stable location that ships with
+  # the app (resources/bin/lib/). The native whisper_stream addon's rpath
+  # points here.
+  local lib_dst="$BIN_DIR/lib"
+  mkdir -p "$lib_dst"
+  local whisper_src="$BUILD_DIR/whisper.cpp/build/src"
+  local ggml_src="$BUILD_DIR/whisper.cpp/build/ggml/src"
+  if [[ -f "$whisper_src/libwhisper.1.7.1.dylib" ]]; then
+    cp -p "$whisper_src/libwhisper.1.7.1.dylib" "$lib_dst/"
+    (cd "$lib_dst" && ln -sf libwhisper.1.7.1.dylib libwhisper.1.dylib && ln -sf libwhisper.1.dylib libwhisper.dylib)
+    echo "[ok] copied libwhisper → $lib_dst"
+  fi
+  if [[ -f "$ggml_src/libggml.dylib" ]]; then
+    cp -p "$ggml_src/libggml.dylib" "$lib_dst/"
+    echo "[ok] copied libggml → $lib_dst"
+  fi
+}
+
 build_flag_monitor() {
   if [[ -x "$BIN_DIR/flag-monitor" ]]; then
     echo "[skip] flag-monitor already present at $BIN_DIR/flag-monitor"
@@ -86,6 +105,7 @@ build_flag_monitor() {
 
 build_whisper
 build_llama
+copy_whisper_libs
 build_flag_monitor
 
 echo ""
