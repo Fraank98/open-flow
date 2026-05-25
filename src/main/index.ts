@@ -124,6 +124,7 @@ async function main(): Promise<void> {
     });
     streamingWhisper.on("partial", (p: PartialTranscript) => {
       void logger.info("partial transcript", { newSuffix: p.newSuffix });
+      // Forwarded to the overlay further down once it exists.
     });
     await logger.info("streaming whisper ready", { loadMs: Date.now() - t0 });
   } catch (err) {
@@ -212,6 +213,13 @@ async function main(): Promise<void> {
       overlay.show();
     }
   });
+  // Forward streaming whisper partial transcripts to the overlay for the
+  // live preview underneath the "Recording…" label.
+  if (streamingWhisper) {
+    streamingWhisper.on("partial", (p: PartialTranscript) => {
+      overlay.sendPartial(p.full);
+    });
+  }
 
   const recorderWin = new BrowserWindow({
     width: 320,

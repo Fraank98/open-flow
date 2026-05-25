@@ -69,6 +69,12 @@ export class OverlayWindow {
     }
   }
 
+  sendPartial(text: string): void {
+    if (this.win && !this.win.isDestroyed()) {
+      this.win.webContents.send("pipeline:partial-transcript", text);
+    }
+  }
+
   destroy(): void {
     if (this.win && !this.win.isDestroyed()) {
       this.win.destroy();

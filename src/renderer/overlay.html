@@ -8,11 +8,15 @@
   <body>
     <div id="root" class="state-idle">
       <div class="dot"></div>
-      <div class="label" id="label">Idle</div>
+      <div class="content">
+        <div class="label" id="label">Idle</div>
+        <div class="partial" id="partial"></div>
+      </div>
       <button id="cancel" type="button">✕</button>
     </div>
     <script>
       const labelEl = document.getElementById("label");
+      const partialEl = document.getElementById("partial");
       const rootEl = document.getElementById("root");
       const cancelBtn = document.getElementById("cancel");
 
@@ -28,6 +32,15 @@
       window.openFlowOverlay.onState((state) => {
         labelEl.textContent = TEXT[state] ?? state;
         rootEl.className = `state-${state}`;
+        if (state === "idle" || state === "recording") {
+          // Idle clears the preview; entering a new recording starts fresh.
+          if (state === "idle") partialEl.textContent = "";
+        }
+      });
+
+      window.openFlowOverlay.onPartial((text) => {
+        // Show the latest streaming-whisper transcript as it accumulates.
+        partialEl.textContent = text;
       });
 
       cancelBtn.addEventListener("click", () => {

@@ -34,8 +34,21 @@ html, body {
   height: 12px;
   border-radius: 50%;
   background: #888;
+  flex-shrink: 0;
 }
-.label { flex: 1; }
+.content { flex: 1; min-width: 0; overflow: hidden; }
+.label { font-size: 14px; }
+.partial {
+  font-size: 11px;
+  opacity: 0.65;
+  margin-top: 2px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  /* Show only when recording (live preview is meaningful then) */
+  display: none;
+}
+.state-recording .partial { display: block; }
 button#cancel {
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
