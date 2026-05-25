@@ -20,10 +20,12 @@ export class OverlayWindow {
       width: w,
       height: h,
       x: Math.floor((width - w) / 2),
-      // Stick to the very bottom of the work area. Combined with the CSS
-      // bottom: 6px inside the window, the pill sits ~6px above the dock
-      // (or the screen edge when the dock auto-hides).
-      y: height - h,
+      // Extend the window 24px below the work-area bottom so the pill's
+      // drop shadow can render below the pill without being clipped at
+      // the window boundary. Combined with CSS bottom: 30px inside the
+      // window, the pill itself still sits ~6px above the dock / screen
+      // edge — same visual position as before, full shadow visible.
+      y: height - h + 24,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
