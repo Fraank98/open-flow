@@ -80,11 +80,13 @@ export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): San
 
   // Drift detector: small models sometimes paraphrase / invent vocabulary
   // even when explicitly told not to. Compare the set of words used in the
-  // input vs in the output. If more than ~40% of the output's words don't
+  // input vs in the output. If more than ~35% of the output's words don't
   // appear in the input, the model invented content — discard and use raw.
-  if (rawTranscript.length > SHORT_OUTPUT_THRESHOLD) {
+  // Run on every non-empty input; the previous length gate was letting
+  // heavy paraphrasing through on short Italian sentences.
+  if (rawTranscript.trim().length > 0) {
     const drift = outputWordDrift(rawTranscript, text);
-    if (drift > 0.4) {
+    if (drift > 0.35) {
       return { text: rawTranscript, usedFallback: true };
     }
   }
