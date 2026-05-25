@@ -1,6 +1,20 @@
 import { encodeWav } from "./utils/wav-encoder.js";
 import { applySpokenPunctuation } from "./utils/spoken-punctuation.js";
 
+// Capitalize the first letter and add a sentence-terminating period if the
+// text doesn't already end with a punctuation mark. Used as a cheap
+// substitute for the LLM cleanup on inputs too short to be worth (or safe
+// to) send to a small instruct model.
+function lightTouchUp(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  const head = trimmed[0]!.toUpperCase();
+  const rest = trimmed.slice(1);
+  const lastChar = trimmed[trimmed.length - 1] ?? "";
+  const endsWithPunct = /[.!?…]/.test(lastChar);
+  return head + rest + (endsWithPunct ? "" : ".");
+}
+
 export type PipelineState =
   | "idle"
   | "recording"
@@ -127,7 +141,18 @@ export class PipelineCoordinator {
       }
 
       let textToInject = withPunct;
-      if (useLlmCleanup) {
+      // Skip the LLM for single-word / very short inputs. Small models like
+      // Qwen 1.5B routinely degenerate on near-empty prompts, inventing
+      // narration / HTML tags / fake punctuation. For these inputs the raw
+      // Whisper output is already good enough — just capitalize and add a
+      // trailing period.
+      const isSingleShortWord = withPunct.length < 12 && !withPunct.trim().includes(" ");
+      if (useLlmCleanup && isSingleShortWord) {
+        await this.deps.logger.info("skipping LLM for short single-word input", {
+          length: withPunct.length,
+        });
+        textToInject = lightTouchUp(withPunct);
+      } else if (useLlmCleanup) {
         this.setState("cleaning");
         const c = await this.deps.clean(withPunct, langHint ?? undefined);
         await this.deps.logger.info("cleaned", {

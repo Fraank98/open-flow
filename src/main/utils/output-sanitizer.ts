@@ -27,6 +27,20 @@ const SHORT_OUTPUT_THRESHOLD = 50; // chars
 export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): SanitizedOutput {
   let text = rawOutput.trim();
 
+  // HTML / Markdown leak from degenerated small-model output. Strip any
+  // tag-shaped sequence completely. If the LLM output contains ANY tag we
+  // also treat it as a strong signal of degeneration — even after stripping
+  // the result is likely garbage — and prefer the raw transcript via the
+  // length-ratio check downstream.
+  const htmlTagRe = /<\/?[a-z][a-z0-9]*(?:\s[^>]*)?>/gi;
+  if (htmlTagRe.test(text)) {
+    text = text.replace(htmlTagRe, " ").replace(/\s{2,}/g, " ").trim();
+    // If after stripping we lost most of the content, fall back to raw.
+    if (text.length < rawTranscript.length * 0.5) {
+      return { text: rawTranscript, usedFallback: true };
+    }
+  }
+
   for (const pattern of NOISY_PREFIX_PATTERNS) {
     text = text.replace(pattern, "");
   }
