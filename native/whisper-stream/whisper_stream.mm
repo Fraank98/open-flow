@@ -225,6 +225,31 @@ Napi::Value Finalize(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+// Run a short pass on silence to keep the Metal pipeline / GPU clocks warm so
+// the first real chunk after an idle period doesn't pay the cold-start ramp
+// (~10x slower). Serialized by the host with processChunk/finalize via the
+// in-flight guard — never runs concurrently on g_ctx.
+Napi::Value Keepalive(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsFunction()) {
+    Napi::TypeError::New(env, "Expected (cb: (err, text, info) => void)").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  Napi::Function cb = info[0].As<Napi::Function>();
+  if (!g_ctx) {
+    cb.Call({env.Null(), Napi::String::New(env, "")});
+    return env.Undefined();
+  }
+  // whisper_full no-ops on <~1.0s of audio (returns in ~1ms without running
+  // the encoder), which would NOT warm the GPU. 1.5s is safely above that
+  // threshold and forces a real encoder pass (~1s) that keeps the Metal
+  // pipeline/clocks hot. Cost is ~constant regardless of exact length here.
+  std::vector<float> silence(24000, 0.0f);
+  auto * worker = new ProcessWorker(cb, std::move(silence), "en");
+  worker->Queue();
+  return env.Undefined();
+}
+
 Napi::Value Release(const Napi::CallbackInfo& info) {
   g_abort.store(false, std::memory_order_relaxed);
   if (g_ctx) {
@@ -245,6 +270,7 @@ Napi::Object ModuleInit(Napi::Env env, Napi::Object exports) {
   exports.Set("processChunk", Napi::Function::New(env, ProcessChunk));
   exports.Set("requestAbort", Napi::Function::New(env, RequestAbort));
   exports.Set("finalize", Napi::Function::New(env, Finalize));
+  exports.Set("keepalive", Napi::Function::New(env, Keepalive));
   exports.Set("release", Napi::Function::New(env, Release));
   return exports;
 }

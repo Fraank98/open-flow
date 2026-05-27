@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { StreamingWhisperRunner, computeNewSuffix, PassInfo } from "../../src/main/streaming-whisper-runner.js";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -13,6 +13,7 @@ type ChunkCb = (err: Error | null, text: string, info?: PassInfo) => void;
  */
 function makeFakeNative(opts: { chunkResolveMs?: number } = {}) {
   const calls: string[] = [];
+  let keepaliveCount = 0;
   let pendingCb: ChunkCb | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const resolve = (text: string, info: PassInfo) => {
@@ -44,9 +45,13 @@ function makeFakeNative(opts: { chunkResolveMs?: number } = {}) {
       calls.push("finalize");
       cb(null, "final text", { queueMs: 0, execMs: 10, aborted: false });
     },
+    keepalive: (cb: ChunkCb) => {
+      keepaliveCount++;
+      cb(null, "", { queueMs: 0, execMs: 1, aborted: false });
+    },
     release: () => void calls.push("release"),
   };
-  return { calls, native, hasPending: () => pendingCb !== null };
+  return { calls, native, hasPending: () => pendingCb !== null, keepaliveCount: () => keepaliveCount };
 }
 
 describe("StreamingWhisperRunner.finalize", () => {
@@ -82,6 +87,36 @@ describe("StreamingWhisperRunner timing instrumentation", () => {
     expect(phases).toContain("chunk");
     expect(phases).toContain("final");
     expect(events.find((e) => e.phase === "final")?.execMs).toBe(10);
+  });
+});
+
+describe("StreamingWhisperRunner GPU keepalive", () => {
+  it("runs a keepalive pass while idle to keep the GPU warm", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native: fake.native, keepaliveIntervalMs: 50 });
+    // never call start() — the runner is idle
+    await vi.advanceTimersByTimeAsync(160); // ~3 keepalive ticks
+    expect(fake.keepaliveCount()).toBeGreaterThanOrEqual(1);
+    runner.release();
+    vi.useRealTimers();
+  });
+
+  it("does not run keepalive while recording (the chunk loop warms the GPU)", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeNative({ chunkResolveMs: 10_000 });
+    const runner = new StreamingWhisperRunner({
+      modelPath: "m",
+      native: fake.native,
+      keepaliveIntervalMs: 50,
+      chunkIntervalMs: 1000,
+    });
+    runner.start("it"); // active — recording
+    await vi.advanceTimersByTimeAsync(160);
+    expect(fake.keepaliveCount()).toBe(0);
+    runner.cancel();
+    runner.release();
+    vi.useRealTimers();
   });
 });
 

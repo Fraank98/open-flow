@@ -22,6 +22,9 @@ interface NativeWhisperStream {
    *  early. The host calls this before finalize() — see finalize(). */
   requestAbort: () => void;
   finalize: (language: string, cb: NativeCb) => void;
+  /** Run a short pass on silence to keep the Metal pipeline / GPU clocks warm
+   *  while idle. Serialized with processChunk/finalize by the host. */
+  keepalive: (cb: NativeCb) => void;
   release: () => void;
 }
 
@@ -54,15 +57,19 @@ export interface StreamingWhisperOptions {
   modelPath: string;
   /** How often to run processChunk while recording (ms). Default 1500. */
   chunkIntervalMs?: number;
+  /** How often to run a keepalive pass while idle (ms) to keep the GPU warm.
+   *  0 disables. Default 0. */
+  keepaliveIntervalMs?: number;
   /** Injected native addon, for tests. Defaults to loading the built .node
    *  from appRoot. When provided, appRoot/isPackaged are unused. */
   native?: NativeWhisperStream;
 }
 
-/** Emitted after every inference pass (chunk or final) with native timing.
- *  `phase` is "chunk" for streaming passes, "final" for the finalize pass. */
+/** Emitted after every inference pass with native timing. `phase` is "chunk"
+ *  for streaming passes, "final" for the finalize pass, "keepalive" for the
+ *  idle GPU-warming pass. */
 export interface PassTiming extends PassInfo {
-  phase: "chunk" | "final";
+  phase: "chunk" | "final" | "keepalive";
 }
 
 export interface PartialTranscript {
@@ -99,6 +106,7 @@ export class StreamingWhisperRunner extends EventEmitter {
   private readonly native: NativeWhisperStream;
   private readonly chunkIntervalMs: number;
   private intervalHandle: NodeJS.Timeout | null = null;
+  private keepaliveHandle: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private committed = "";
   private currentLanguage = "auto";
@@ -113,6 +121,12 @@ export class StreamingWhisperRunner extends EventEmitter {
     const ok = this.native.init(opts.modelPath);
     if (!ok) {
       throw new Error(`whisper_stream init failed for ${opts.modelPath}`);
+    }
+    const keepaliveMs = opts.keepaliveIntervalMs ?? 0;
+    if (keepaliveMs > 0) {
+      this.keepaliveHandle = setInterval(() => {
+        void this.runKeepaliveIfIdle();
+      }, keepaliveMs);
     }
   }
 
@@ -174,9 +188,34 @@ export class StreamingWhisperRunner extends EventEmitter {
 
   release(): void {
     this.stopChunkLoop();
+    if (this.keepaliveHandle) {
+      clearInterval(this.keepaliveHandle);
+      this.keepaliveHandle = null;
+    }
     this.active = false;
     this.released = true;
     this.native.release();
+  }
+
+  /** Run a GPU-warming pass, but only when idle: never while recording (the
+   *  chunk loop already exercises the GPU) and never while another inference
+   *  is in flight (whisper_full must stay serialized on the single context).
+   *  Shares the `inFlight` guard with runChunkIfIdle, so the two are mutually
+   *  exclusive. */
+  private async runKeepaliveIfIdle(): Promise<void> {
+    if (this.released || this.active || this.inFlight) return;
+    const job = new Promise<void>((resolve) => {
+      this.native.keepalive((_err, _text, info) => {
+        if (info) this.emit("timing", { phase: "keepalive", ...info } as PassTiming);
+        resolve();
+      });
+    });
+    this.inFlight = job;
+    try {
+      await job;
+    } finally {
+      if (this.inFlight === job) this.inFlight = null;
+    }
   }
 
   private armChunkLoop(): void {

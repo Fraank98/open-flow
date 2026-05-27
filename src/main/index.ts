@@ -133,6 +133,10 @@ async function main(): Promise<void> {
       isPackaged: app.isPackaged,
       modelPath: whisperModelPath,
       chunkIntervalMs: 1500,
+      // Keep the Metal GPU warm while idle so the first chunk after a pause
+      // doesn't pay the ~10x cold-start ramp (the powerSaveBlocker prevents
+      // process suspension but not GPU clock-down).
+      keepaliveIntervalMs: 20_000,
     });
     streamingWhisper.on("partial", (p: PartialTranscript) => {
       void logger.info("partial transcript", { newSuffix: p.newSuffix });
@@ -142,12 +146,11 @@ async function main(): Promise<void> {
     // (running inference). A large execMs on the first pass after idle points
     // to GPU/App-Nap; a large queueMs points to threadpool starvation.
     streamingWhisper.on("timing", (t: PassTiming) => {
-      void logger.info("whisper pass timing", {
-        phase: t.phase,
-        queueMs: t.queueMs,
-        execMs: t.execMs,
-        aborted: t.aborted,
-      });
+      // Keepalive fires every 20s forever — log it at debug so it doesn't spam
+      // the normal log, but is available when debugLogging is on.
+      const meta = { phase: t.phase, queueMs: t.queueMs, execMs: t.execMs, aborted: t.aborted };
+      if (t.phase === "keepalive") void logger.debug("whisper pass timing", meta);
+      else void logger.info("whisper pass timing", meta);
     });
     await logger.info("streaming whisper ready", { loadMs: Date.now() - t0 });
   } catch (err) {
@@ -193,20 +196,28 @@ async function main(): Promise<void> {
     // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
     keepaliveMs: 20_000,
   });
-  try {
-    await logger.info("llama-server starting", { model: llmModelPath });
-    const t0 = Date.now();
-    await llmServer.start();
-    await logger.info("llama-server ready", {
-      loadMs: Date.now() - t0,
-      endpoint: llmServer.getEndpoint(),
-    });
-  } catch (err) {
-    await logger.error("llama-server failed to start", {
-      message: err instanceof Error ? err.message : String(err),
-    });
-    // Continue anyway — coordinator will surface clean errors per request.
-    // The user can disable LLM cleanup via preferences.
+  // Only run llama-server when LLM cleanup is enabled. With it off (whisper-only
+  // mode) the model would just sit in RAM and its keepalive would contend with
+  // whisper for the GPU every 20s — pure waste. Toggling the pref on at runtime
+  // takes effect after a restart (see the resilient clean() wiring below).
+  if (prefs.useLlmCleanup) {
+    try {
+      await logger.info("llama-server starting", { model: llmModelPath });
+      const t0 = Date.now();
+      await llmServer.start();
+      await logger.info("llama-server ready", {
+        loadMs: Date.now() - t0,
+        endpoint: llmServer.getEndpoint(),
+      });
+    } catch (err) {
+      await logger.error("llama-server failed to start", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+      // Continue anyway — coordinator will surface clean errors per request.
+      // The user can disable LLM cleanup via preferences.
+    }
+  } else {
+    await logger.info("LLM cleanup disabled in prefs — llama-server not started");
   }
   const llm = new LLMCleaner({
     endpoint: llmServer.getEndpoint(),
@@ -227,7 +238,16 @@ async function main(): Promise<void> {
       }
       return whisper.transcribe({ wavBytes, language });
     },
-    clean: async (raw, languageHint) => llm.clean(raw, languageHint),
+    clean: async (raw, languageHint) => {
+      // If the user turned LLM cleanup on at runtime but the server wasn't
+      // started at launch, don't crash the pipeline — fall back to raw. It
+      // works properly after a restart.
+      if (!llmServer.isRunning()) {
+        await logger.warn("LLM cleanup requested but llama-server not running — restart to enable; using raw");
+        return { text: raw, usedFallback: true, durationMs: 0 };
+      }
+      return llm.clean(raw, languageHint);
+    },
     inject: async (text) => injector.inject(text),
     logger,
   });
