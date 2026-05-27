@@ -8,6 +8,12 @@ export interface LLMServerOptions {
   contextSize?: number;
   /** Max time to wait for /health to return 200 (ms). */
   startupTimeoutMs?: number;
+  /**
+   * Prompt used to warm the Metal kernels AND prime the prefix cache. Pass
+   * the real cleanup-prompt template so the system-instructions prefix is
+   * already in the KV cache when the first user dictation arrives.
+   */
+  warmupPrompt?: string;
 }
 
 /**
@@ -48,7 +54,15 @@ export class LLMServer {
       "--host", "127.0.0.1",
       "--port", String(this.port),
       "-ngl", String(this.opts.ngl ?? 99),
-      "-c", String(this.opts.contextSize ?? 2048),
+      "-c", String(this.opts.contextSize ?? 1536),
+      // Flash attention speeds up both prefill and decode on Apple Silicon
+      // and is required for KV-cache quantization below.
+      "-fa",
+      // Quantize the KV cache to q8_0 (vs default f16). Halves KV-cache
+      // memory and decode bandwidth with negligible quality impact on this
+      // task (punctuation-only edits).
+      "-ctk", "q8_0",
+      "-ctv", "q8_0",
       "--log-disable",
     ];
 
@@ -98,17 +112,28 @@ export class LLMServer {
   }
 
   private async warmup(): Promise<void> {
+    // Goals of warmup:
+    //  1. JIT-compile the Metal kernels (prefill + decode + flash-attn).
+    //     1-token generation is NOT enough when -fa is on — the
+    //     flash-attention decode kernel only gets compiled the first time
+    //     it runs, so we need ~32 tokens of real generation.
+    //  2. Prime the prefix cache. If a realistic warmupPrompt is provided,
+    //     enable cache_prompt:true so the cleanup-template system
+    //     instructions are already in the KV cache when the first real
+    //     dictation arrives.
+    const prompt = this.opts.warmupPrompt ?? "hi";
+    const cachePrompt = this.opts.warmupPrompt !== undefined;
     try {
       await fetch(`${this.getEndpoint()}/completion`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: "hi",
-          n_predict: 1,
+          prompt,
+          n_predict: 32,
           temperature: 0,
-          cache_prompt: false,
+          cache_prompt: cachePrompt,
         }),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(30_000),
       });
     } catch {
       // Warmup is best-effort. If it fails, the real first request will still

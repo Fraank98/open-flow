@@ -24,6 +24,8 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <atomic>
+#include <chrono>
 
 namespace {
 
@@ -37,6 +39,19 @@ std::vector<float> g_samples;
 // Guard for the sample buffer only. Lets feedSamples append while a
 // processChunk snapshot has already been taken.
 std::mutex g_samplesMutex;
+
+// Cooperative abort flag. When set, the abort_callback below tells whisper_full
+// to bail out of the in-flight pass ASAP. The host raises it (via requestAbort)
+// right before finalize() so a slow streaming chunk — whose result is discarded
+// anyway — stops hogging the GPU instead of being awaited to completion. Reset
+// to false by start() (new utterance) and finalize() (its own pass must run to
+// completion). whisper_full / finalize are serialized by the host, so there is
+// never a pass that must abort running concurrently with one that must not.
+std::atomic<bool> g_abort{false};
+
+bool abortCallback(void * /*user_data*/) {
+  return g_abort.load(std::memory_order_relaxed);
+}
 
 std::string runWhisperFull(const std::vector<float>& samples, const std::string& language) {
   if (!g_ctx || samples.empty()) return "";
@@ -54,6 +69,8 @@ std::string runWhisperFull(const std::vector<float>& samples, const std::string&
   params.suppress_non_speech_tokens = true;
   params.n_threads = 4;
   params.no_context = true;
+  params.abort_callback = abortCallback;
+  params.abort_callback_user_data = nullptr;
 
   int ret = whisper_full(g_ctx, params, samples.data(), (int)samples.size());
   if (ret != 0) return "";
@@ -86,8 +103,18 @@ Napi::Value LoadModel(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value Start(const Napi::CallbackInfo& info) {
+  g_abort.store(false, std::memory_order_relaxed);
   std::lock_guard<std::mutex> lock(g_samplesMutex);
   g_samples.clear();
+  return info.Env().Undefined();
+}
+
+// Raise the cooperative abort flag. The in-flight processChunk's whisper_full
+// returns early; the host then awaits it and runs the final pass. Safe to call
+// with nothing in flight — start()/finalize() reset the flag before any pass
+// that must complete.
+Napi::Value RequestAbort(const Napi::CallbackInfo& info) {
+  g_abort.store(true, std::memory_order_relaxed);
   return info.Env().Undefined();
 }
 
@@ -114,21 +141,39 @@ class ProcessWorker : public Napi::AsyncWorker {
   ProcessWorker(Napi::Function& callback, std::vector<float> snapshot, std::string language)
       : AsyncWorker(callback),
         snapshot_(std::move(snapshot)),
-        language_(std::move(language)) {}
+        language_(std::move(language)),
+        queued_(std::chrono::steady_clock::now()) {}
 
   void Execute() override {
+    execStart_ = std::chrono::steady_clock::now();
     result_ = runWhisperFull(snapshot_, language_);
+    execEnd_ = std::chrono::steady_clock::now();
+    aborted_ = g_abort.load(std::memory_order_relaxed);
   }
 
   void OnOK() override {
     Napi::HandleScope scope(Env());
-    Callback().Call({Env().Null(), Napi::String::New(Env(), result_)});
+    // Third arg: timing/abort diagnostics. queueMs separates "stuck waiting for
+    // a libuv worker thread" from execMs "actually running inference" — the two
+    // imply different root causes for a slow pass.
+    auto ms = [](auto a, auto b) {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+    };
+    Napi::Object info = Napi::Object::New(Env());
+    info.Set("queueMs", Napi::Number::New(Env(), (double)ms(queued_, execStart_)));
+    info.Set("execMs", Napi::Number::New(Env(), (double)ms(execStart_, execEnd_)));
+    info.Set("aborted", Napi::Boolean::New(Env(), aborted_));
+    Callback().Call({Env().Null(), Napi::String::New(Env(), result_), info});
   }
 
  private:
   std::vector<float> snapshot_;
   std::string language_;
   std::string result_;
+  std::chrono::steady_clock::time_point queued_;
+  std::chrono::steady_clock::time_point execStart_;
+  std::chrono::steady_clock::time_point execEnd_;
+  bool aborted_ = false;
 };
 
 Napi::Value ProcessChunk(const Napi::CallbackInfo& info) {
@@ -162,6 +207,9 @@ Napi::Value Finalize(const Napi::CallbackInfo& info) {
   }
   std::string language = info[0].As<Napi::String>().Utf8Value();
   Napi::Function cb = info[1].As<Napi::Function>();
+  // The final pass must run to completion — clear any abort the host raised to
+  // interrupt the preceding (now-settled) streaming chunk.
+  g_abort.store(false, std::memory_order_relaxed);
   std::vector<float> snapshot;
   {
     std::lock_guard<std::mutex> lock(g_samplesMutex);
@@ -178,6 +226,7 @@ Napi::Value Finalize(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value Release(const Napi::CallbackInfo& info) {
+  g_abort.store(false, std::memory_order_relaxed);
   if (g_ctx) {
     whisper_free(g_ctx);
     g_ctx = nullptr;
@@ -194,6 +243,7 @@ Napi::Object ModuleInit(Napi::Env env, Napi::Object exports) {
   exports.Set("start", Napi::Function::New(env, Start));
   exports.Set("feedSamples", Napi::Function::New(env, FeedSamples));
   exports.Set("processChunk", Napi::Function::New(env, ProcessChunk));
+  exports.Set("requestAbort", Napi::Function::New(env, RequestAbort));
   exports.Set("finalize", Napi::Function::New(env, Finalize));
   exports.Set("release", Napi::Function::New(env, Release));
   return exports;

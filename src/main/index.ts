@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -12,9 +12,10 @@ import { createDefaultTextInjector } from "./text-injector.js";
 import { createLogger } from "./logger.js";
 import { WhisperRunner } from "./whisper-runner.js";
 import { WhisperServer } from "./whisper-server.js";
-import { StreamingWhisperRunner, PartialTranscript } from "./streaming-whisper-runner.js";
+import { StreamingWhisperRunner, PartialTranscript, PassTiming } from "./streaming-whisper-runner.js";
 import { LLMCleaner } from "./llm-cleaner.js";
 import { LLMServer } from "./llm-server.js";
+import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
@@ -50,6 +51,17 @@ async function main(): Promise<void> {
 
   const logger = createLogger({ dir: LOG_DIR, debug: prefs.debugLogging, maxBytes: 5 * 1024 * 1024 });
   await logger.info("app starting", { setupComplete: prefs.setupComplete });
+
+  // Prevent macOS App Nap from suspending this background (menubar) app while
+  // idle. App Nap throttles timers/threads and lets the GPU power down, which
+  // intermittently makes the FIRST dictation after a long idle take 10-20s
+  // (the in-flight whisper pass stalls). 'prevent-app-suspension' keeps the
+  // process responsive without keeping the display awake.
+  const powerSaveBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+  await logger.info("power save blocker", {
+    id: powerSaveBlockerId,
+    active: powerSaveBlocker.isStarted(powerSaveBlockerId),
+  });
 
   // First-launch: run setup wizard until setupComplete=true
   if (!prefs.setupComplete) {
@@ -126,6 +138,17 @@ async function main(): Promise<void> {
       void logger.info("partial transcript", { newSuffix: p.newSuffix });
       // Forwarded to the overlay further down once it exists.
     });
+    // Per-pass timing: queueMs (waiting for a libuv worker thread) vs execMs
+    // (running inference). A large execMs on the first pass after idle points
+    // to GPU/App-Nap; a large queueMs points to threadpool starvation.
+    streamingWhisper.on("timing", (t: PassTiming) => {
+      void logger.info("whisper pass timing", {
+        phase: t.phase,
+        queueMs: t.queueMs,
+        execMs: t.execMs,
+        aborted: t.aborted,
+      });
+    });
     await logger.info("streaming whisper ready", { loadMs: Date.now() - t0 });
   } catch (err) {
     await logger.error("streaming whisper init failed; falling back to batch path", {
@@ -162,7 +185,10 @@ async function main(): Promise<void> {
     binaryPath: LLAMA_SERVER_BIN,
     modelPath: llmModelPath,
     port: 18080,
-    contextSize: 2048,
+    contextSize: 1536,
+    // Prime the prefix cache with the actual cleanup template so the system
+    // instructions are already prefilled when the first dictation hits.
+    warmupPrompt: buildCleanupPrompt("test", prefs.language),
   });
   try {
     await logger.info("llama-server starting", { model: llmModelPath });
@@ -375,6 +401,7 @@ async function main(): Promise<void> {
 
   app.on("will-quit", () => {
     ptt.stop();
+    if (powerSaveBlocker.isStarted(powerSaveBlockerId)) powerSaveBlocker.stop(powerSaveBlockerId);
     if (streamingWhisper) streamingWhisper.release();
     whisperServer.stop();
     llmServer.stop();

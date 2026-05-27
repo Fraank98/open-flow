@@ -2,12 +2,26 @@ import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
+/** Per-pass timing/abort diagnostics reported by the native addon. queueMs
+ *  (time spent waiting for a libuv worker thread) vs execMs (time actually
+ *  running inference) distinguish threadpool starvation from a slow pass. */
+export interface PassInfo {
+  queueMs: number;
+  execMs: number;
+  aborted: boolean;
+}
+
+type NativeCb = (err: Error | null, text: string, info?: PassInfo) => void;
+
 interface NativeWhisperStream {
   init: (modelPath: string) => boolean;
   start: () => void;
   feedSamples: (samples: Float32Array) => void;
-  processChunk: (language: string, cb: (err: Error | null, text: string) => void) => void;
-  finalize: (language: string, cb: (err: Error | null, text: string) => void) => void;
+  processChunk: (language: string, cb: NativeCb) => void;
+  /** Raise the cooperative abort flag so an in-flight processChunk returns
+   *  early. The host calls this before finalize() — see finalize(). */
+  requestAbort: () => void;
+  finalize: (language: string, cb: NativeCb) => void;
   release: () => void;
 }
 
@@ -35,11 +49,20 @@ function loadNativeAddon(appRoot: string, isPackaged: boolean): NativeWhisperStr
 }
 
 export interface StreamingWhisperOptions {
-  appRoot: string;
-  isPackaged: boolean;
+  appRoot?: string;
+  isPackaged?: boolean;
   modelPath: string;
   /** How often to run processChunk while recording (ms). Default 1500. */
   chunkIntervalMs?: number;
+  /** Injected native addon, for tests. Defaults to loading the built .node
+   *  from appRoot. When provided, appRoot/isPackaged are unused. */
+  native?: NativeWhisperStream;
+}
+
+/** Emitted after every inference pass (chunk or final) with native timing.
+ *  `phase` is "chunk" for streaming passes, "final" for the finalize pass. */
+export interface PassTiming extends PassInfo {
+  phase: "chunk" | "final";
 }
 
 export interface PartialTranscript {
@@ -86,7 +109,7 @@ export class StreamingWhisperRunner extends EventEmitter {
   constructor(opts: StreamingWhisperOptions) {
     super();
     this.chunkIntervalMs = opts.chunkIntervalMs ?? 1500;
-    this.native = loadNativeAddon(opts.appRoot, opts.isPackaged);
+    this.native = opts.native ?? loadNativeAddon(opts.appRoot ?? "", opts.isPackaged ?? false);
     const ok = this.native.init(opts.modelPath);
     if (!ok) {
       throw new Error(`whisper_stream init failed for ${opts.modelPath}`);
@@ -127,14 +150,24 @@ export class StreamingWhisperRunner extends EventEmitter {
     this.currentLanguage = language;
     this.stopChunkLoop();
     if (this.inFlight) {
+      // The in-flight streaming chunk's result is discarded by the final pass
+      // anyway, so abort it rather than awaiting it to completion — otherwise a
+      // single slow chunk gates the entire transcript latency. The abort flag
+      // is cleared native-side before the final pass, so the two stay strictly
+      // serialized (whisper_full is not thread-safe on one context).
+      this.native.requestAbort();
       await this.inFlight.catch(() => undefined);
     }
     this.active = false;
     if (this.cancelled) return "";
     return new Promise<string>((resolve, reject) => {
-      this.native.finalize(language, (err, text) => {
-        if (err) reject(err);
-        else resolve(text);
+      this.native.finalize(language, (err, text, info) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (info) this.emit("timing", { phase: "final", ...info } as PassTiming);
+        resolve(text);
       });
     });
   }
@@ -165,7 +198,8 @@ export class StreamingWhisperRunner extends EventEmitter {
     if (this.inFlight) return;
     const language = this.currentLanguage;
     const job = new Promise<void>((resolve) => {
-      this.native.processChunk(language, (err, text) => {
+      this.native.processChunk(language, (err, text, info) => {
+        if (info) this.emit("timing", { phase: "chunk", ...info } as PassTiming);
         if (!err && !this.cancelled && this.active) {
           this.applyChunkText(text);
         }
