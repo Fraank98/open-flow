@@ -15,7 +15,7 @@ export interface Preferences {
 
 export const DEFAULT_PREFS: Preferences = {
   setupComplete: false,
-  whisperModelId: "whisper-base",
+  whisperModelId: "whisper-small",
   llmModelId: "qwen-1.5b",
   hotkeyAccelerator: "Hold Option",
   language: "auto",
