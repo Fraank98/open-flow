@@ -55,6 +55,15 @@ export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): San
     }
   }
 
+  // Markdown emphasis: Qwen 1.5B routinely bolds/italicizes words (**word**,
+  // *word*) despite the prompt forbidding markdown — and the markers are often
+  // unbalanced (e.g. "**fermo***.*"), so matching paired markers is fragile.
+  // Asterisks never belong in cleaned dictation text, so just drop them all
+  // and collapse the whitespace that "** **" leaves behind.
+  if (text.includes("*")) {
+    text = text.replace(/\*/g, "").replace(/\s{2,}/g, " ").trim();
+  }
+
   for (const pattern of NOISY_PREFIX_PATTERNS) {
     text = text.replace(pattern, "");
   }

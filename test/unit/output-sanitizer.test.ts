@@ -70,4 +70,19 @@ describe("sanitizeLlmOutput", () => {
     expect(sanitizeLlmOutput("Cleaned the dishes earlier.", "cleaned the dishes earlier").text)
       .toBe("Cleaned the dishes earlier.");
   });
+
+  it("strips markdown emphasis markers the model adds despite instructions", () => {
+    // Qwen 1.5B routinely bolds/italicizes words even though the prompt forbids
+    // markdown. The words are correct — only the * markers must go.
+    const raw = "no lo scroll automatico non funziona ancora";
+    const out = "**No**, **lo** *scroll automatico* non funziona ancora.";
+    const result = sanitizeLlmOutput(out, raw);
+    expect(result.text).toBe("No, lo scroll automatico non funziona ancora.");
+    expect(result.usedFallback).toBe(false);
+  });
+
+  it("removes unbalanced markdown asterisks", () => {
+    expect(sanitizeLlmOutput("Vedo tutto **fermo***.*", "vedo tutto fermo").text)
+      .toBe("Vedo tutto fermo.");
+  });
 });

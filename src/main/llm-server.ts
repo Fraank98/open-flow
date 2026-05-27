@@ -1,5 +1,7 @@
 import { ChildProcess, spawn } from "node:child_process";
 
+import { startKeepalive } from "./utils/keepalive.js";
+
 export interface LLMServerOptions {
   binaryPath: string;
   modelPath: string;
@@ -14,6 +16,13 @@ export interface LLMServerOptions {
    * already in the KV cache when the first user dictation arrives.
    */
   warmupPrompt?: string;
+  /**
+   * If > 0, ping the model every N ms to keep its Metal pipeline hot. Without
+   * this, the GPU powers down between dictations (and whisper transcription
+   * contends for it right before each cleanup), so every cleanup pays the
+   * ~2.5s cold-start instead of running in ~0.1-0.5s. Default 0 (disabled).
+   */
+  keepaliveMs?: number;
 }
 
 /**
@@ -33,6 +42,7 @@ export class LLMServer {
   private readonly port: number;
   private readonly opts: LLMServerOptions;
   private stderrBuffer = "";
+  private stopKeepalive: (() => void) | null = null;
 
   constructor(opts: LLMServerOptions) {
     this.opts = opts;
@@ -98,6 +108,12 @@ export class LLMServer {
       // Without this, the first /completion call after model load is ~2x
       // slower than steady-state.
       await this.warmup().catch(() => undefined);
+      // Keep it hot: a periodic lightweight ping stops the GPU from powering
+      // down between dictations, so cleanups stay ~0.1-0.5s instead of ~2.5s.
+      const keepaliveMs = this.opts.keepaliveMs ?? 0;
+      if (keepaliveMs > 0) {
+        this.stopKeepalive = startKeepalive(() => this.pingModel(8), keepaliveMs);
+      }
       void startSpawn;
     } catch (err) {
       this.stop();
@@ -112,15 +128,22 @@ export class LLMServer {
   }
 
   private async warmup(): Promise<void> {
-    // Goals of warmup:
-    //  1. JIT-compile the Metal kernels (prefill + decode + flash-attn).
-    //     1-token generation is NOT enough when -fa is on — the
-    //     flash-attention decode kernel only gets compiled the first time
-    //     it runs, so we need ~32 tokens of real generation.
-    //  2. Prime the prefix cache. If a realistic warmupPrompt is provided,
-    //     enable cache_prompt:true so the cleanup-template system
-    //     instructions are already in the KV cache when the first real
-    //     dictation arrives.
+    // JIT-compile the Metal kernels. 1-token generation is NOT enough when -fa
+    // is on — the flash-attention decode kernel only gets compiled the first
+    // time it runs, so we need ~32 tokens of real generation. pingModel also
+    // primes the prefix cache when a warmupPrompt is provided, so the
+    // cleanup-template system instructions are already in the KV cache when
+    // the first real dictation arrives.
+    await this.pingModel(32);
+  }
+
+  /**
+   * Best-effort POST to /completion. Used both for the initial warmup (large
+   * nPredict to compile kernels) and the periodic keepalive (small nPredict to
+   * keep them hot). Reuses warmupPrompt + cache_prompt so the system-prompt
+   * prefix stays cached. Swallows errors — neither caller blocks on it.
+   */
+  private async pingModel(nPredict: number): Promise<void> {
     const prompt = this.opts.warmupPrompt ?? "hi";
     const cachePrompt = this.opts.warmupPrompt !== undefined;
     try {
@@ -129,19 +152,22 @@ export class LLMServer {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
-          n_predict: 32,
+          n_predict: nPredict,
           temperature: 0,
           cache_prompt: cachePrompt,
         }),
         signal: AbortSignal.timeout(30_000),
       });
     } catch {
-      // Warmup is best-effort. If it fails, the real first request will still
-      // work, just slightly slower.
+      // Best-effort. If it fails, the real request still works, just slower.
     }
   }
 
   stop(): void {
+    if (this.stopKeepalive) {
+      this.stopKeepalive();
+      this.stopKeepalive = null;
+    }
     if (!this.child) return;
     const c = this.child;
     this.child = null;

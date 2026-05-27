@@ -189,6 +189,9 @@ async function main(): Promise<void> {
     // Prime the prefix cache with the actual cleanup template so the system
     // instructions are already prefilled when the first dictation hits.
     warmupPrompt: buildCleanupPrompt("test", prefs.language),
+    // Keep the GPU pipeline hot between dictations — without this every cleanup
+    // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
+    keepaliveMs: 20_000,
   });
   try {
     await logger.info("llama-server starting", { model: llmModelPath });
