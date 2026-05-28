@@ -19,7 +19,7 @@ export interface TranscribeFn {
 }
 
 export interface CleanFn {
-  (raw: string, languageHint?: string): Promise<{ text: string; usedFallback: boolean; durationMs: number }>;
+  (raw: string, languageHint?: string): Promise<{ text: string; usedFallback: boolean; durationMs: number; skipped?: boolean }>;
 }
 
 export interface InjectFn {
@@ -145,6 +145,7 @@ export class PipelineCoordinator {
         await this.deps.logger.info("cleaned", {
           text: c.text,
           usedFallback: c.usedFallback,
+          skipped: c.skipped ?? false,
           durationMs: c.durationMs,
         });
         if (this.cancelled) {
