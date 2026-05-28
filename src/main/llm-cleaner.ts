@@ -23,7 +23,7 @@ export interface CleanResult extends SanitizedOutput {
 // Markers that justify invoking the LLM. If neither matches, the transcript
 // has no disfluencies the model could realistically remove, so we skip the
 // round-trip entirely.
-const FILLER_TOKENS = /\b(ehm|uhm|uh|um|ah|eh|cioè|allora|diciamo|praticamente|insomma|tipo|ecco)\b/i;
+const FILLER_TOKENS = /(?<![\p{L}])(ehm|uhm|uhh|uh|um|ah|eh|cioè|allora|diciamo|praticamente|insomma|tipo|ecco)(?![\p{L}])/iu;
 const FALSE_START = /\w+— ?\w+|\w+- \w+/;
 
 function needsCleanup(text: string): boolean {

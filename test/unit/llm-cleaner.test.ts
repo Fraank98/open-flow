@@ -59,6 +59,31 @@ describe("LLMCleaner fast-path skip", () => {
     await cleaner.clean("uh, hello world.", "en");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("calls the LLM on `cioè` despite the accented final character (Unicode boundary)", async () => {
+    const fetchImpl = fakeFetchReturning("vediamo se funziona.");
+    const cleaner = new LLMCleaner({
+      endpoint: "http://test",
+      timeoutMs: 5000,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await cleaner.clean("Cioè, vediamo se funziona.", "it");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not match filler words embedded inside larger words", async () => {
+    // "Cioèssimo" is not a real word but illustrates the boundary: the regex
+    // must not match `cioè` as a substring of a longer Unicode-letter run.
+    // Also "uhm" should not match inside "uhmistico".
+    const fetchImpl = fakeFetchReturning("never sent");
+    const cleaner = new LLMCleaner({
+      endpoint: "http://test",
+      timeoutMs: 5000,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await cleaner.clean("Cioèssimo uhmistico, niente da fare.", "it");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 describe("LLMCleaner n_predict cap", () => {
