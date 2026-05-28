@@ -364,16 +364,18 @@ async function main(): Promise<void> {
       // finalize time so a Save during recording still takes effect there.
       streamingWhisper.start(prefs.language);
     }
-    // Pause any music/video that's playing so it doesn't bleed into the mic
-    // and so the user doesn't have to hit pause manually. Resumed in the
-    // stop / cancel paths below.
-    mediaController.pauseIfPlaying();
     recorderWin.webContents.send("audio:start");
   });
   ptt.on("start", () => {
     if (pipelineBusy) return;
     coordinator.startRecording();
     menubar.setStatus("Recording…");
+    // Pause music/video here (not on `arm`): `arm` fires the moment Option
+    // goes down, which also happens when Option is used as a modifier in a
+    // chord (Option+letter for accents, Option+arrow, ...). PTTManager only
+    // emits `start` after it has confirmed a real dictation gesture, so this
+    // avoids the flicker pause/resume you'd otherwise see on chord keys.
+    mediaController.pauseIfPlaying();
   });
   ptt.on("stop", async () => {
     if (pipelineBusy) {
