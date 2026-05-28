@@ -23,6 +23,7 @@ import { getModelById } from "./model-catalog.js";
 import { getModelsDir, modelFilePath } from "./utils/model-paths.js";
 import { SetupWizard } from "./setup-wizard.js";
 import { PreferencesWindow } from "./preferences-window.js";
+import { MediaController, loadMediaControlNative } from "./media-control.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -120,6 +121,23 @@ async function main(): Promise<void> {
   const mic = await checkMicrophone();
   const acc = await checkAccessibilityViaProbe();
   await logger.info("permissions", { mic, accessibility: acc });
+
+  // Pauses other audio when dictation starts. If the native addon is missing
+  // the new exports (e.g. a stale ptt_monitor.node from an old build), fall
+  // back to a no-op controller so the rest of the app still works — matches
+  // the pattern used by streamingWhisper / llama-server below.
+  let mediaController: { pauseIfPlaying(): void; resume(): void } = {
+    pauseIfPlaying() {},
+    resume() {},
+  };
+  try {
+    mediaController = new MediaController(loadMediaControlNative(APP_ROOT, app.isPackaged));
+    await logger.info("media-control ready");
+  } catch (err) {
+    await logger.error("media-control init failed; continuing without audio pause", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Streaming Whisper via the in-process native addon. Model loads once
   // into a whisper_context that stays in RAM; each utterance is a
@@ -297,6 +315,7 @@ async function main(): Promise<void> {
     recorderWin.webContents.send("audio:stop");
     orchestrator.reset();
     coordinator.cancel();
+    mediaController.resume();
   });
 
   const ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged });
@@ -345,6 +364,10 @@ async function main(): Promise<void> {
       // finalize time so a Save during recording still takes effect there.
       streamingWhisper.start(prefs.language);
     }
+    // Pause any music/video that's playing so it doesn't bleed into the mic
+    // and so the user doesn't have to hit pause manually. Resumed in the
+    // stop / cancel paths below.
+    mediaController.pauseIfPlaying();
     recorderWin.webContents.send("audio:start");
   });
   ptt.on("start", () => {
@@ -381,6 +404,7 @@ async function main(): Promise<void> {
       menubar.setStatus("Idle");
     } finally {
       pipelineBusy = false;
+      mediaController.resume();
     }
   });
   ptt.on("cancel", () => {
@@ -392,6 +416,7 @@ async function main(): Promise<void> {
     // Reset coordinator state to idle. Without this the overlay would stay
     // stuck at "Recording…" because state change → idle is what hides it.
     coordinator.cancel();
+    mediaController.resume();
     menubar.setStatus("Idle");
   });
 
