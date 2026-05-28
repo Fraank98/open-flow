@@ -16,6 +16,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
+#include <CoreAudio/CoreAudio.h>
 #include <napi.h>
 
 static id g_flagsMonitor = nil;
@@ -103,11 +104,78 @@ Napi::Value RequestTrust(const Napi::CallbackInfo& info) {
   return Napi::Boolean::New(env, trusted);
 }
 
+// Returns true iff something is actively flowing through the current default
+// output device — i.e. another process is playing audio. Uses the public
+// CoreAudio property kAudioDevicePropertyDeviceIsRunningSomewhere, which
+// reports activity across ALL processes (not just the caller).
+Napi::Value IsAudioOutputRunning(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  AudioObjectPropertyAddress defaultOutAddr = {
+    kAudioHardwarePropertyDefaultOutputDevice,
+    kAudioObjectPropertyScopeGlobal,
+    0  // kAudioObjectPropertyElementMain on macOS 12+, value is 0 on all SDKs
+  };
+  AudioDeviceID device = kAudioObjectUnknown;
+  UInt32 size = sizeof(device);
+  OSStatus s = AudioObjectGetPropertyData(
+    kAudioObjectSystemObject, &defaultOutAddr, 0, NULL, &size, &device);
+  if (s != noErr || device == kAudioObjectUnknown) {
+    return Napi::Boolean::New(env, false);
+  }
+
+  AudioObjectPropertyAddress isRunningAddr = {
+    kAudioDevicePropertyDeviceIsRunningSomewhere,
+    kAudioObjectPropertyScopeGlobal,
+    0
+  };
+  UInt32 isRunning = 0;
+  size = sizeof(isRunning);
+  s = AudioObjectGetPropertyData(device, &isRunningAddr, 0, NULL, &size, &isRunning);
+  if (s != noErr) {
+    return Napi::Boolean::New(env, false);
+  }
+  return Napi::Boolean::New(env, isRunning != 0);
+}
+
+// Posts a system Play/Pause media key (the same event the keyboard's hardware
+// Play/Pause key generates). macOS routes it to the current Now Playing app,
+// so it pauses Spotify / Music / Safari & Chrome video / QuickTime / Podcasts
+// etc. A second invocation toggles back to playing. If no app is registered
+// as Now Playing, the event is harmlessly dropped.
+Napi::Value PostMediaPlayPause(const Napi::CallbackInfo& info) {
+  // Constants from IOKit/hidsystem/ev_keymap.h, inlined to avoid pulling the
+  // header (and a framework link) just for two numbers.
+  static const int NX_KEYTYPE_PLAY = 16;
+  static const int kSubtypeAuxControlButtons = 8;
+
+  // Emit key down (0xA) then key up (0xB) — both are needed for the system
+  // to register a media-key press.
+  for (int state : { 0xA, 0xB }) {
+    // 0xA00 is the modifier-flag value emitted by hardware media keys; not a
+    // CGEventFlags mask — lives in NSEvent's modifier-flag bit space.
+    NSEvent *ev = [NSEvent otherEventWithType:NSEventTypeSystemDefined
+                                     location:NSZeroPoint
+                                modifierFlags:0xA00
+                                    timestamp:0
+                                 windowNumber:0
+                                      context:nil
+                                      subtype:kSubtypeAuxControlButtons
+                                        data1:(NX_KEYTYPE_PLAY << 16) | (state << 8)
+                                        data2:-1];
+    CGEventRef cg = [ev CGEvent];
+    if (cg) CGEventPost(kCGHIDEventTap, cg);
+  }
+  return info.Env().Undefined();
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("start", Napi::Function::New(env, Start));
   exports.Set("stop", Napi::Function::New(env, Stop));
   exports.Set("isTrusted", Napi::Function::New(env, IsTrusted));
   exports.Set("requestTrust", Napi::Function::New(env, RequestTrust));
+  exports.Set("isAudioOutputRunning", Napi::Function::New(env, IsAudioOutputRunning));
+  exports.Set("postMediaPlayPause",  Napi::Function::New(env, PostMediaPlayPause));
   return exports;
 }
 

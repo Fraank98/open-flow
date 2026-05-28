@@ -20,7 +20,8 @@
             "libraries": [
               "$(SDKROOT)/System/Library/Frameworks/Cocoa.framework",
               "$(SDKROOT)/System/Library/Frameworks/Foundation.framework",
-              "$(SDKROOT)/System/Library/Frameworks/ApplicationServices.framework"
+              "$(SDKROOT)/System/Library/Frameworks/ApplicationServices.framework",
+              "$(SDKROOT)/System/Library/Frameworks/CoreAudio.framework"
             ]
           }
         }]
