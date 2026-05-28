@@ -1,56 +1,81 @@
 import { describe, it, expect, vi } from "vitest";
-import { MediaController } from "../../src/main/media-control.js";
+import { MediaController, MediaScripter } from "../../src/main/media-control.js";
 
-function makeFakeNative(isRunning: boolean) {
+/**
+ * Fake scripter — captures what the controller asks it to do without spawning
+ * a real osascript process. The behavior under test is the controller's state
+ * machine (pause/resume bookkeeping), not the AppleScript itself.
+ */
+function makeFakeScripter(playing: readonly string[] = []) {
   return {
-    isAudioOutputRunning: vi.fn(() => isRunning),
-    postMediaPlayPause: vi.fn(),
+    pauseRunningPlayers: vi.fn(async (): Promise<readonly string[]> => playing),
+    resumePlayers: vi.fn(async (_apps: readonly string[]): Promise<void> => {}),
   };
 }
 
 describe("MediaController.pauseIfPlaying", () => {
-  it("posts a media key when audio output is running", () => {
-    const native = makeFakeNative(true);
-    new MediaController(native).pauseIfPlaying();
-    expect(native.postMediaPlayPause).toHaveBeenCalledTimes(1);
+  it("asks the scripter and remembers which apps it paused", async () => {
+    const scripter: MediaScripter = makeFakeScripter(["Spotify"]);
+    const m = new MediaController(scripter);
+    await m.pauseIfPlaying();
+    expect(scripter.pauseRunningPlayers).toHaveBeenCalledTimes(1);
   });
 
-  it("does nothing when nothing is playing", () => {
-    const native = makeFakeNative(false);
-    new MediaController(native).pauseIfPlaying();
-    expect(native.postMediaPlayPause).not.toHaveBeenCalled();
+  it("does nothing else when no known app is playing", async () => {
+    const scripter = makeFakeScripter([]); // scripter returns empty: nothing was playing
+    const m = new MediaController(scripter);
+    await m.pauseIfPlaying();
+    expect(scripter.pauseRunningPlayers).toHaveBeenCalledTimes(1);
+    // ...and resume on this state must be a no-op
+    await m.resume();
+    expect(scripter.resumePlayers).not.toHaveBeenCalled();
   });
 
-  it("is idempotent — never double-pauses", () => {
-    const native = makeFakeNative(true);
-    const m = new MediaController(native);
-    m.pauseIfPlaying();
-    m.pauseIfPlaying();
-    expect(native.postMediaPlayPause).toHaveBeenCalledTimes(1);
+  it("is idempotent — does not call the scripter again if already paused", async () => {
+    const scripter = makeFakeScripter(["Spotify"]);
+    const m = new MediaController(scripter);
+    await m.pauseIfPlaying();
+    await m.pauseIfPlaying();
+    expect(scripter.pauseRunningPlayers).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports multiple apps paused at once", async () => {
+    const scripter = makeFakeScripter(["Spotify", "Music"]);
+    const m = new MediaController(scripter);
+    await m.pauseIfPlaying();
+    await m.resume();
+    expect(scripter.resumePlayers).toHaveBeenCalledWith(["Spotify", "Music"]);
   });
 });
 
 describe("MediaController.resume", () => {
-  it("posts a media key after a successful pause", () => {
-    const native = makeFakeNative(true);
-    const m = new MediaController(native);
-    m.pauseIfPlaying();
-    m.resume();
-    expect(native.postMediaPlayPause).toHaveBeenCalledTimes(2);
+  it("resumes only the apps we previously paused, then clears state", async () => {
+    const scripter = makeFakeScripter(["Spotify"]);
+    const m = new MediaController(scripter);
+    await m.pauseIfPlaying();
+    await m.resume();
+    expect(scripter.resumePlayers).toHaveBeenCalledTimes(1);
+    expect(scripter.resumePlayers).toHaveBeenCalledWith(["Spotify"]);
+    // Calling resume again is a no-op
+    await m.resume();
+    expect(scripter.resumePlayers).toHaveBeenCalledTimes(1);
   });
 
-  it("does nothing if we did not pause anything", () => {
-    const native = makeFakeNative(true);
-    new MediaController(native).resume();
-    expect(native.postMediaPlayPause).not.toHaveBeenCalled();
+  it("does nothing if we did not pause anything", async () => {
+    const scripter = makeFakeScripter(["Spotify"]);
+    const m = new MediaController(scripter);
+    await m.resume(); // never paused
+    expect(scripter.resumePlayers).not.toHaveBeenCalled();
   });
 
-  it("does not double-resume — only the first resume after a pause fires", () => {
-    const native = makeFakeNative(true);
-    const m = new MediaController(native);
-    m.pauseIfPlaying();
-    m.resume();
-    m.resume();
-    expect(native.postMediaPlayPause).toHaveBeenCalledTimes(2);
+  it("survives a pause → resume → pause → resume sequence", async () => {
+    const scripter = makeFakeScripter(["Spotify"]);
+    const m = new MediaController(scripter);
+    await m.pauseIfPlaying();
+    await m.resume();
+    await m.pauseIfPlaying();
+    await m.resume();
+    expect(scripter.pauseRunningPlayers).toHaveBeenCalledTimes(2);
+    expect(scripter.resumePlayers).toHaveBeenCalledTimes(2);
   });
 });

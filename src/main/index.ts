@@ -23,7 +23,7 @@ import { getModelById } from "./model-catalog.js";
 import { getModelsDir, modelFilePath } from "./utils/model-paths.js";
 import { SetupWizard } from "./setup-wizard.js";
 import { PreferencesWindow } from "./preferences-window.js";
-import { MediaController, loadMediaControlNative } from "./media-control.js";
+import { MediaController, createDefaultScripter } from "./media-control.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -122,22 +122,34 @@ async function main(): Promise<void> {
   const acc = await checkAccessibilityViaProbe();
   await logger.info("permissions", { mic, accessibility: acc });
 
-  // Pauses other audio when dictation starts. If the native addon is missing
-  // the new exports (e.g. a stale ptt_monitor.node from an old build), fall
-  // back to a no-op controller so the rest of the app still works — matches
-  // the pattern used by streamingWhisper / llama-server below.
-  let mediaController: { pauseIfPlaying(): void; resume(): void } = {
-    pauseIfPlaying() {},
-    resume() {},
+  // Pauses Spotify / Apple Music when dictation starts (via AppleScript that
+  // checks each app's player state first, so we never blindly toggle media
+  // that the user manually paused). Wrapped in try/catch with a no-op
+  // fallback to match the pattern used by streamingWhisper / llama-server.
+  let mediaController: {
+    pauseIfPlaying(): Promise<void>;
+    resume(): Promise<void>;
+  } = {
+    async pauseIfPlaying() {},
+    async resume() {},
   };
   try {
-    mediaController = new MediaController(loadMediaControlNative(APP_ROOT, app.isPackaged));
+    mediaController = new MediaController(createDefaultScripter());
     await logger.info("media-control ready");
   } catch (err) {
     await logger.error("media-control init failed; continuing without audio pause", {
       message: err instanceof Error ? err.message : String(err),
     });
   }
+  // Pause/resume now run osascript, so they return Promises. The 4 call sites
+  // fire-and-forget — these are best-effort UX side-effects, never block the
+  // pipeline. Swallow + log so a hiccup never surfaces as an unhandled
+  // rejection but is still visible in the log.
+  const swallowMcError = (op: string) => (err: unknown) => {
+    void logger.warn(`media-control ${op} failed`, {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  };
 
   // Streaming Whisper via the in-process native addon. Model loads once
   // into a whisper_context that stays in RAM; each utterance is a
@@ -315,7 +327,7 @@ async function main(): Promise<void> {
     recorderWin.webContents.send("audio:stop");
     orchestrator.reset();
     coordinator.cancel();
-    mediaController.resume();
+    void mediaController.resume().catch(swallowMcError("resume"));
   });
 
   const ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged });
@@ -375,7 +387,7 @@ async function main(): Promise<void> {
     // chord (Option+letter for accents, Option+arrow, ...). PTTManager only
     // emits `start` after it has confirmed a real dictation gesture, so this
     // avoids the flicker pause/resume you'd otherwise see on chord keys.
-    mediaController.pauseIfPlaying();
+    void mediaController.pauseIfPlaying().catch(swallowMcError("pause"));
   });
   ptt.on("stop", async () => {
     if (pipelineBusy) {
@@ -406,7 +418,7 @@ async function main(): Promise<void> {
       menubar.setStatus("Idle");
     } finally {
       pipelineBusy = false;
-      mediaController.resume();
+      void mediaController.resume().catch(swallowMcError("resume"));
     }
   });
   ptt.on("cancel", () => {
@@ -418,7 +430,7 @@ async function main(): Promise<void> {
     // Reset coordinator state to idle. Without this the overlay would stay
     // stuck at "Recording…" because state change → idle is what hides it.
     coordinator.cancel();
-    mediaController.resume();
+    void mediaController.resume().catch(swallowMcError("resume"));
     menubar.setStatus("Idle");
   });
 
