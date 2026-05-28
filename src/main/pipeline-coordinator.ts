@@ -1,19 +1,6 @@
 import { encodeWav } from "./utils/wav-encoder.js";
 import { applySpokenPunctuation } from "./utils/spoken-punctuation.js";
-
-// Capitalize the first letter and add a sentence-terminating period if the
-// text doesn't already end with a punctuation mark. Used as a cheap
-// substitute for the LLM cleanup on inputs too short to be worth (or safe
-// to) send to a small instruct model.
-function lightTouchUp(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) return trimmed;
-  const head = trimmed[0]!.toUpperCase();
-  const rest = trimmed.slice(1);
-  const lastChar = trimmed[trimmed.length - 1] ?? "";
-  const endsWithPunct = /[.!?…]/.test(lastChar);
-  return head + rest + (endsWithPunct ? "" : ".");
-}
+import { lightTouchUp } from "./utils/light-touch-up.js";
 
 export type PipelineState =
   | "idle"

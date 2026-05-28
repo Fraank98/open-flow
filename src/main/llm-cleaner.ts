@@ -1,5 +1,6 @@
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { sanitizeLlmOutput, SanitizedOutput } from "./utils/output-sanitizer.js";
+import { lightTouchUp } from "./utils/light-touch-up.js";
 
 export interface LLMCleanerOptions {
   /** Base URL of the llama-server, e.g. http://127.0.0.1:18080 */
@@ -7,10 +8,26 @@ export interface LLMCleanerOptions {
   timeoutMs: number;
   maxTokens?: number;
   temperature?: number;
+  /** Override the HTTP fetch (for tests). Defaults to globalThis.fetch. */
+  fetchImpl?: typeof fetch;
 }
 
 export interface CleanResult extends SanitizedOutput {
   durationMs: number;
+  /** True if the LLM was skipped because the transcript had no obvious
+   *  disfluency markers. The returned `text` is the raw transcript with
+   *  `lightTouchUp` applied. */
+  skipped?: boolean;
+}
+
+// Markers that justify invoking the LLM. If neither matches, the transcript
+// has no disfluencies the model could realistically remove, so we skip the
+// round-trip entirely.
+const FILLER_TOKENS = /\b(ehm|uhm|uh|um|ah|eh|cioè|allora|diciamo|praticamente|insomma|tipo|ecco)\b/i;
+const FALSE_START = /\w+— ?\w+|\w+- \w+/;
+
+function needsCleanup(text: string): boolean {
+  return FILLER_TOKENS.test(text) || FALSE_START.test(text);
 }
 
 export class LLMError extends Error {
@@ -35,16 +52,30 @@ export class LLMCleaner {
 
   async clean(rawTranscript: string, languageHint?: string): Promise<CleanResult> {
     const start = Date.now();
+
+    // Fast-path: nothing for the LLM to remove → return raw with lightTouchUp.
+    if (!needsCleanup(rawTranscript)) {
+      return {
+        text: lightTouchUp(rawTranscript),
+        usedFallback: false,
+        skipped: true,
+        durationMs: Date.now() - start,
+      };
+    }
+
     const prompt = buildCleanupPrompt(rawTranscript, languageHint);
 
-    // Cap n_predict based on the input length. Small models (Qwen 1.5B) will
-    // sometimes "run away" — generate hundreds of tokens of garbage when
-    // confused by partial-word Whisper errors — burning ~6s of inference
-    // that the sanitizer ultimately rejects. A cleanup pass should never
-    // produce dramatically more text than the input (~1.5× as a safety
-    // margin for added punctuation and minor expansions).
+    // Cap n_predict based on the input length. The disfluency-only task never
+    // produces MORE text than the input (it only removes filler words), so we
+    // only need a small margin above input length — enough to allow the
+    // capitalize-after-filler boundary (rule 4 in the prompt) and any minor
+    // re-tokenization. The 48-token floor protects very short inputs where
+    // 1.2x would clip below useful generation length. The fast-path
+    // (needsCleanup gate) prevents the cleaner from being called when there
+    // are no fillers, so when we DO reach this line we genuinely need the
+    // model to remove something.
     const approxInputTokens = Math.ceil(rawTranscript.length / 3); // conservative chars/token estimate
-    const dynamicCap = Math.max(48, Math.ceil(approxInputTokens * 1.8));
+    const dynamicCap = Math.max(48, Math.ceil(approxInputTokens * 1.2));
     const requestedMax = this.opts.maxTokens ?? 512;
     const maxTokens = Math.min(requestedMax, dynamicCap);
 
@@ -66,9 +97,10 @@ export class LLMCleaner {
       repeat_last_n: 128,
     };
 
+    const fetchFn = this.opts.fetchImpl ?? fetch;
     let res: Response;
     try {
-      res = await fetch(`${this.opts.endpoint}/completion`, {
+      res = await fetchFn(`${this.opts.endpoint}/completion`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
