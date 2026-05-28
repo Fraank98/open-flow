@@ -37,6 +37,13 @@ export const LLM_MODELS: readonly ModelDescriptor[] = [
     sha256: "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
     url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
   },
+  {
+    id: "qwen-3b",
+    filename: "qwen2.5-3b-instruct-q4_k_m.gguf",
+    sizeBytes: 2_104_932_768,
+    sha256: "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
+    url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+  },
 ];
 
 export interface TierDescriptor {
@@ -65,9 +72,9 @@ export const TIERS: readonly TierDescriptor[] = [
   {
     id: "max",
     label: "Maximum quality",
-    description: "Large v3 Turbo + 1.5B cleanup. ~2.7 GB total. Best accuracy, still fast on Apple Silicon.",
+    description: "Large v3 Turbo + 3B cleanup. ~3.5 GB total. Best accuracy, disfluency-aware.",
     whisperId: "whisper-large-v3-turbo",
-    llmId: "qwen-1.5b",
+    llmId: "qwen-3b",
   },
 ];
 
