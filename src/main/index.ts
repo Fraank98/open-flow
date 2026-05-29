@@ -44,6 +44,16 @@ const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
 
 async function main(): Promise<void> {
+  // Single-instance lock: if another open-flow is already running, exit
+  // immediately instead of spinning up a duplicate menubar icon, llama-server,
+  // PTT NSEvent monitor, etc. This happens when the user reinstalls via
+  // `cp -R` while the old instance is still alive, or double-clicks the .app
+  // in Finder. Must be called BEFORE app.whenReady().
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+    return;
+  }
+
   await app.whenReady();
 
   const preferencesStore = new PreferencesStore(PREFS_PATH);
