@@ -28,7 +28,17 @@ export class TextInjector {
         reason: err instanceof Error ? err.message : String(err),
       };
     }
-    await this.deps.sleep(150);
+    // Wait long enough for the receiving app to actually READ the clipboard
+    // before we restore. `runPaste` resolves when the ⌘V event has been SENT
+    // (osascript exits), not when the target app has processed it. Slow
+    // receivers (Electron/Chromium with async paste handlers, or any app
+    // while the system is under whisper+llama load) can lag 100-300ms before
+    // reading the clipboard. With 150ms we'd intermittently restore `prior`
+    // first → the app would then read it and paste the OLD clipboard content
+    // instead of the transcript. 500ms gives generous headroom; the user
+    // doesn't perceive the extra latency because the original clipboard is
+    // already overwritten anyway.
+    await this.deps.sleep(500);
     this.deps.writeClipboard(prior);
     return { pasted: true };
   }

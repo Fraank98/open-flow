@@ -55,11 +55,14 @@ describe("TextInjector", () => {
     expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
   });
 
-  it("sleeps briefly between paste and restore", async () => {
+  it("sleeps long enough between paste and restore to avoid a race", async () => {
     const deps = makeDeps();
     const injector = new TextInjector(deps);
     await injector.inject("text");
     expect(deps.sleep).toHaveBeenCalledOnce();
-    expect(deps.sleep).toHaveBeenCalledWith(150);
+    // 500ms — enough headroom for slow Electron/Chromium receivers to read
+    // the clipboard before we restore the prior contents. Bumped from 150ms
+    // after intermittent reports of prior-clipboard content being pasted.
+    expect(deps.sleep).toHaveBeenCalledWith(500);
   });
 });
