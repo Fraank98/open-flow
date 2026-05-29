@@ -71,6 +71,68 @@ describe("LLMCleaner fast-path skip", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("calls the LLM on an English discourse-marker filler (well)", async () => {
+    const fetchImpl = fakeFetchReturning(" I was thinking we should leave.");
+    const cleaner = new LLMCleaner({
+      endpoint: "http://test",
+      timeoutMs: 5000,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await cleaner.clean("Well, I was thinking we should leave.", "en");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the LLM on multi-word fillers (you know, o sea, en fait, tu sais)", async () => {
+    for (const input of [
+      "I think, you know, it works.",
+      "Es importante, o sea, fundamental.",
+      "C'est compliqué, en fait, très compliqué.",
+      "Le ferai, tu sais, demain.",
+    ]) {
+      const fetchImpl = fakeFetchReturning("cleaned");
+      const cleaner = new LLMCleaner({
+        endpoint: "http://test",
+        timeoutMs: 5000,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      await cleaner.clean(input, "auto");
+      expect(fetchImpl, `expected LLM call for input: ${input}`).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("calls the LLM on a German discourse-marker filler (also)", async () => {
+    const fetchImpl = fakeFetchReturning(" ich denke wir sollten gehen.");
+    const cleaner = new LLMCleaner({
+      endpoint: "http://test",
+      timeoutMs: 5000,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await cleaner.clean("Also, ich denke wir sollten gehen.", "de");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the LLM on a French discourse-marker filler (alors)", async () => {
+    const fetchImpl = fakeFetchReturning(" je pense qu'on devrait partir.");
+    const cleaner = new LLMCleaner({
+      endpoint: "http://test",
+      timeoutMs: 5000,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await cleaner.clean("Alors, je pense qu'on devrait partir.", "fr");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the LLM on a Spanish discourse-marker filler (pues)", async () => {
+    const fetchImpl = fakeFetchReturning(" vamos a empezar.");
+    const cleaner = new LLMCleaner({
+      endpoint: "http://test",
+      timeoutMs: 5000,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await cleaner.clean("Pues, vamos a empezar.", "es");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not match filler words embedded inside larger words", async () => {
     // "Cioèssimo" is not a real word but illustrates the boundary: the regex
     // must not match `cioè` as a substring of a longer Unicode-letter run.

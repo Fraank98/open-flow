@@ -1,6 +1,7 @@
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { sanitizeLlmOutput, SanitizedOutput } from "./utils/output-sanitizer.js";
 import { lightTouchUp } from "./utils/light-touch-up.js";
+import { allFillerWords } from "./utils/filler-words.js";
 
 export interface LLMCleanerOptions {
   /** Base URL of the llama-server, e.g. http://127.0.0.1:18080 */
@@ -22,8 +23,17 @@ export interface CleanResult extends SanitizedOutput {
 
 // Markers that justify invoking the LLM. If neither matches, the transcript
 // has no disfluencies the model could realistically remove, so we skip the
-// round-trip entirely.
-const FILLER_TOKENS = /(?<![\p{L}])(ehm|uhm|uhh|uh|um|ah|eh|cioè|allora|diciamo|praticamente|insomma|tipo|ecco)(?![\p{L}])/iu;
+// round-trip entirely. The token list is shared with the prompt template
+// (filler-words.ts) so the regex always knows about every word the LLM is
+// instructed to remove. We don't know the input language at runtime, so the
+// regex unions every language's discourse markers — the prompt's "leave when
+// it carries meaning" rule handles legitimate occurrences.
+const FILLER_TOKENS = (() => {
+  const tokens = allFillerWords()
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) // belt-and-braces escape
+    .join("|");
+  return new RegExp(`(?<![\\p{L}])(${tokens})(?![\\p{L}])`, "iu");
+})();
 const FALSE_START = /\w+— ?\w+|\w+- \w+/;
 
 function needsCleanup(text: string): boolean {
