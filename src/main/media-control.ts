@@ -60,10 +60,21 @@ export class MediaController {
  * One AppleScript that checks each KNOWN_PLAYERS app's `player state`, pauses
  * the ones that are playing, and emits a comma-separated list of paused names
  * on stdout. Single osascript spawn per arm.
+ *
+ * Process check via System Events (not AppleScript's `application "X" is
+ * running`): the latter can return true for background helpers/daemons like
+ * `com.apple.Music.MusicLibraryService`, causing `tell application "Music"`
+ * to launch the GUI app — which on a fresh user pops the library-setup
+ * prompt. `exists process "X"` looks at the visible process list (Activity
+ * Monitor's Applications section), so only a real GUI presence counts.
  */
 const PAUSE_SCRIPT = `
+tell application "System Events"
+  set spotifyRunning to (exists process "Spotify")
+  set musicRunning to (exists process "Music")
+end tell
 set out to ""
-if application "Spotify" is running then
+if spotifyRunning then
   tell application "Spotify"
     if player state is playing then
       pause
@@ -71,7 +82,7 @@ if application "Spotify" is running then
     end if
   end tell
 end if
-if application "Music" is running then
+if musicRunning then
   tell application "Music"
     if player state is playing then
       pause
@@ -84,13 +95,20 @@ return out
 `;
 
 function buildResumeScript(apps: readonly string[]): string {
-  const lines: string[] = [];
-  for (const app of apps) {
-    if ((KNOWN_PLAYERS as readonly string[]).includes(app)) {
-      lines.push(`if application "${app as KnownPlayer}" is running then tell application "${app as KnownPlayer}" to play`);
-    }
-  }
-  return lines.join("\n");
+  const safeApps = apps.filter((a) => (KNOWN_PLAYERS as readonly string[]).includes(a));
+  if (safeApps.length === 0) return "";
+  // Same process-check rationale as PAUSE_SCRIPT: skip apps whose GUI is not
+  // actually open, so resume never accidentally launches a quit player.
+  const checks = safeApps
+    .map((a) => `  set ${a.toLowerCase()}Running to (exists process "${a}")`)
+    .join("\n");
+  const tells = safeApps
+    .map(
+      (a) =>
+        `if ${a.toLowerCase()}Running then tell application "${a as KnownPlayer}" to play`,
+    )
+    .join("\n");
+  return `tell application "System Events"\n${checks}\nend tell\n${tells}`;
 }
 
 async function runOsa(script: string): Promise<string> {
