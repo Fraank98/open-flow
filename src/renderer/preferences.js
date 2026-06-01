@@ -3,12 +3,15 @@
 const $ = (sel) => document.querySelector(sel);
 
 // Fields that the running main-process can't pick up without a relaunch:
-// the hotkey accelerator is registered once at startup, and Whisper / LLM
-// models are loaded into their respective servers at boot. Changes to any
-// of these flip the Save button into "Save & Restart".
+// the hotkey accelerator is registered once at startup, Whisper / LLM models
+// are loaded into their respective servers at boot, and the llama-server is
+// only started at launch when LLM cleanup is enabled — so toggling cleanup
+// must restart too (turning it on at runtime otherwise falls back to raw
+// text until the next launch). Changes to any of these flip the Save button
+// into "Save & Restart".
 // hotkeyAccelerator is not user-configurable yet (PTT is hardcoded to
 // Option in the native addon), so it never triggers a restart.
-const RESTART_REQUIRED_FIELDS = ["whisperModelId", "llmModelId"];
+const RESTART_REQUIRED_FIELDS = ["whisperModelId", "llmModelId", "useLlmCleanup"];
 
 async function init() {
   const prefs = await window.openFlowPrefs.load();
