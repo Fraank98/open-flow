@@ -11,10 +11,11 @@ type ChunkCb = (err: Error | null, text: string, info?: PassInfo) => void;
  * fires (simulating inference finishing on its own) or requestAbort() cuts it
  * short (simulating the abort_callback bailing whisper_full out early).
  */
-function makeFakeNative(opts: { chunkResolveMs?: number } = {}) {
+function makeFakeNative(opts: { chunkResolveMs?: number; deferFinalize?: boolean } = {}) {
   const calls: string[] = [];
   let keepaliveCount = 0;
   let pendingCb: ChunkCb | null = null;
+  let pendingFinalizeCb: ChunkCb | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const resolve = (text: string, info: PassInfo) => {
     if (timer) {
@@ -43,6 +44,13 @@ function makeFakeNative(opts: { chunkResolveMs?: number } = {}) {
     },
     finalize: (_lang: string, cb: ChunkCb) => {
       calls.push("finalize");
+      // When deferred, hold the callback so the final pass stays "in flight"
+      // under test control — simulates a final whisper_full still running on a
+      // worker thread, the window in which a keepalive tick could race it.
+      if (opts.deferFinalize) {
+        pendingFinalizeCb = cb;
+        return;
+      }
       cb(null, "final text", { queueMs: 0, execMs: 10, aborted: false });
     },
     keepalive: (cb: ChunkCb) => {
@@ -51,7 +59,18 @@ function makeFakeNative(opts: { chunkResolveMs?: number } = {}) {
     },
     release: () => void calls.push("release"),
   };
-  return { calls, native, hasPending: () => pendingCb !== null, keepaliveCount: () => keepaliveCount };
+  const resolveFinalize = () => {
+    const cb = pendingFinalizeCb;
+    pendingFinalizeCb = null;
+    cb?.(null, "final text", { queueMs: 0, execMs: 10, aborted: false });
+  };
+  return {
+    calls,
+    native,
+    hasPending: () => pendingCb !== null,
+    keepaliveCount: () => keepaliveCount,
+    resolveFinalize,
+  };
 }
 
 describe("StreamingWhisperRunner.finalize", () => {
@@ -115,6 +134,31 @@ describe("StreamingWhisperRunner GPU keepalive", () => {
     await vi.advanceTimersByTimeAsync(160);
     expect(fake.keepaliveCount()).toBe(0);
     runner.cancel();
+    runner.release();
+    vi.useRealTimers();
+  });
+
+  it("does not run keepalive while the final pass is still in flight", async () => {
+    // Regression: finalize() set active=false but did NOT track the final pass
+    // in `inFlight`, leaving a window where a keepalive tick fired a second
+    // whisper_full concurrently with the final pass on the same context →
+    // ggml_abort / SIGABRT. The final pass must keep the keepalive guard closed.
+    vi.useFakeTimers();
+    const fake = makeFakeNative({ deferFinalize: true });
+    const runner = new StreamingWhisperRunner({
+      modelPath: "m",
+      native: fake.native,
+      keepaliveIntervalMs: 50,
+      chunkIntervalMs: 10_000, // no streaming chunk fires during this test
+    });
+    runner.start("it");
+    const finalP = runner.finalize("it"); // final pass now in flight (deferred)
+
+    await vi.advanceTimersByTimeAsync(160); // ~3 keepalive ticks during the pass
+    expect(fake.keepaliveCount()).toBe(0); // must NOT run a concurrent pass
+
+    fake.resolveFinalize();
+    expect(await finalP).toBe("final text");
     runner.release();
     vi.useRealTimers();
   });

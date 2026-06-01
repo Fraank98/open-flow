@@ -174,7 +174,7 @@ export class StreamingWhisperRunner extends EventEmitter {
     }
     this.active = false;
     if (this.cancelled) return "";
-    return new Promise<string>((resolve, reject) => {
+    const result = new Promise<string>((resolve, reject) => {
       this.native.finalize(language, (err, text, info) => {
         if (err) {
           reject(err);
@@ -184,6 +184,21 @@ export class StreamingWhisperRunner extends EventEmitter {
         resolve(text);
       });
     });
+    // Track the final pass in `inFlight` until it settles. The chunk loop is
+    // already stopped, but the idle keepalive timer is not — without this guard
+    // a keepalive tick during the final pass fires a second whisper_full
+    // concurrently on the same context, corrupting ggml's graph allocator
+    // (ggml_abort / SIGABRT). With it, runKeepaliveIfIdle sees inFlight and skips.
+    const job = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlight = job;
+    try {
+      return await result;
+    } finally {
+      if (this.inFlight === job) this.inFlight = null;
+    }
   }
 
   release(): void {

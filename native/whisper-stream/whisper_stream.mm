@@ -4,11 +4,11 @@
 // utterances. Each utterance is a start() → feedSamples()* → processChunk()*
 // → finalize() → (next utterance) cycle. release() frees the model.
 //
-// Threading: whisper_full() is NOT thread-safe on a single context, so all
-// inference calls run on the JS thread (or via AsyncWorker, scheduled
-// strictly serially by the host PTTManager / pipeline coordinator). The
-// host MUST NOT call processChunk() concurrently with itself or with
-// finalize().
+// Threading: whisper_full() is NOT thread-safe on a single context. The host
+// is expected to schedule inference calls serially (via AsyncWorker, one in
+// flight at a time per the pipeline coordinator). As a hard backstop, every
+// pass takes g_inferenceMutex around whisper_full so a stray overlap blocks
+// instead of corrupting ggml state and aborting the process.
 //
 // JS API:
 //   const w = require('./build/Release/whisper_stream.node');
@@ -33,6 +33,15 @@ namespace {
 // All access is serialized by the host (no concurrent processChunk).
 struct whisper_context * g_ctx = nullptr;
 
+// Hard serialization guard for the context. whisper_full() is not thread-safe
+// on a single context: two concurrent passes corrupt ggml's shared graph
+// allocator and the process aborts (ggml_abort / SIGABRT). The host serializes
+// calls, but this lock is the last line of defense — a stray overlap (e.g. an
+// idle keepalive racing the final pass) blocks here instead of crashing. It
+// also fences whisper_free against an in-flight pass (use-after-free at quit).
+// Mirrors the global whisper_mutex in whisper.cpp's own server example.
+std::mutex g_inferenceMutex;
+
 // Sample buffer for the in-flight utterance. Reset by start().
 std::vector<float> g_samples;
 
@@ -54,7 +63,7 @@ bool abortCallback(void * /*user_data*/) {
 }
 
 std::string runWhisperFull(const std::vector<float>& samples, const std::string& language) {
-  if (!g_ctx || samples.empty()) return "";
+  if (samples.empty()) return "";
 
   struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   params.language = language.c_str();
@@ -71,6 +80,12 @@ std::string runWhisperFull(const std::vector<float>& samples, const std::string&
   params.no_context = true;
   params.abort_callback = abortCallback;
   params.abort_callback_user_data = nullptr;
+
+  // Hold the lock across the whole pass: whisper_full plus the segment reads,
+  // which also touch the context's mutable state. g_ctx is re-checked here
+  // because release() may have freed it while this worker was queued.
+  std::lock_guard<std::mutex> lock(g_inferenceMutex);
+  if (!g_ctx) return "";
 
   int ret = whisper_full(g_ctx, params, samples.data(), (int)samples.size());
   if (ret != 0) return "";
@@ -91,6 +106,8 @@ Napi::Value LoadModel(const Napi::CallbackInfo& info) {
     return env.Null();
   }
   std::string modelPath = info[0].As<Napi::String>().Utf8Value();
+  // Fence model swap against any in-flight pass — see g_inferenceMutex.
+  std::lock_guard<std::mutex> lock(g_inferenceMutex);
   if (g_ctx) {
     whisper_free(g_ctx);
     g_ctx = nullptr;
@@ -251,11 +268,17 @@ Napi::Value Keepalive(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value Release(const Napi::CallbackInfo& info) {
-  g_abort.store(false, std::memory_order_relaxed);
-  if (g_ctx) {
-    whisper_free(g_ctx);
-    g_ctx = nullptr;
+  // Raise abort first so an in-flight pass bails ASAP, then wait on the
+  // inference lock before freeing — never whisper_free() under an active pass.
+  g_abort.store(true, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(g_inferenceMutex);
+    if (g_ctx) {
+      whisper_free(g_ctx);
+      g_ctx = nullptr;
+    }
   }
+  g_abort.store(false, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> lock(g_samplesMutex);
     g_samples.clear();
