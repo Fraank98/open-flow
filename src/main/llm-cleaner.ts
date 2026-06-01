@@ -98,12 +98,15 @@ export class LLMCleaner {
       // "<<</clean_transcript>>"), and double newline.
       stop: ["<<<", "<|im_end|>", "<|endoftext|>", "[end of text]", "\n\n"],
       cache_prompt: true,
-      // Small instruct models (Qwen 1.5B) routinely lock into repetition
-      // loops on near-identity tasks like transcript cleanup, regenerating
-      // the cleaned sentence over and over until n_predict caps them.
-      // repeat_penalty + repeat_last_n discourage emitting the same token
-      // pattern seen in the recent window.
-      repeat_penalty: 1.3,
+      // Cleanup is a near-copy task: the output should reuse ~95% of the input
+      // tokens. A high repeat_penalty fights that — it pushes the model to
+      // SUBSTITUTE input words to dodge the penalty, mangling conjugations
+      // (volevo→voleva, vado→va) and inflating word-drift until the sanitizer
+      // rejects the result and falls back to raw. Measured on the fixtures, 1.3
+      // fell back on most runs (EN 3/3, IT 2/3); 1.1 eliminated the fallbacks
+      // with no mangling. Keep a mild penalty for residual loop protection —
+      // the sanitizer's repetition guard is the real backstop against loops.
+      repeat_penalty: 1.1,
       repeat_last_n: 128,
     };
 
