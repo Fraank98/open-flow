@@ -24,18 +24,19 @@ const NOISY_SUFFIX_PATTERNS: RegExp[] = [
 
 const SHORT_OUTPUT_THRESHOLD = 50; // chars
 
-// Compute the fraction of words in `output` that don't appear anywhere in
-// `input`. Words are runs of Unicode letters; case is normalized. Returns
-// 0 when output is empty.
-function outputWordDrift(input: string, output: string): number {
-  const inWords = new Set((input.toLowerCase().match(/\p{L}+/gu) ?? []));
-  const outWords = (output.toLowerCase().match(/\p{L}+/gu) ?? []);
-  if (outWords.length === 0) return 0;
-  let invented = 0;
+// True when every word of `output` appears in `input` in the same relative
+// order — i.e. `output` is a word-subsequence of `input`. Words are runs of
+// Unicode letters; case is normalized. Empty output is trivially a subsequence.
+function isWordSubsequence(input: string, output: string): boolean {
+  const inWords = input.toLowerCase().match(/\p{L}+/gu) ?? [];
+  const outWords = output.toLowerCase().match(/\p{L}+/gu) ?? [];
+  let i = 0;
   for (const w of outWords) {
-    if (!inWords.has(w)) invented++;
+    while (i < inWords.length && inWords[i] !== w) i++;
+    if (i >= inWords.length) return false;
+    i++; // consume the matched input word
   }
-  return invented / outWords.length;
+  return true;
 }
 
 export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): SanitizedOutput {
@@ -87,23 +88,12 @@ export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): San
     return { text: rawTranscript, usedFallback: true };
   }
 
-  // Drift detector: small models sometimes paraphrase / invent vocabulary
-  // even when explicitly told not to. Compare the set of words used in the
-  // input vs in the output. If more than ~35% of the output's words don't
-  // appear in the input, the model invented content — discard and use raw.
-  // Run on every non-empty input; the previous length gate was letting
-  // heavy paraphrasing through on short Italian sentences.
-  if (rawTranscript.trim().length > 0) {
-    const drift = outputWordDrift(rawTranscript, text);
-    if (drift > 0.35) {
-      return { text: rawTranscript, usedFallback: true };
-    }
-  }
-
   // Repetition guard: small LLMs sometimes lock into a loop and emit the
-  // cleaned sentence two or more times. Detect by looking for any
-  // substring of ≥20 chars from the start of the output that appears
-  // again later in the same string.
+  // cleaned sentence two or more times. Detect by looking for a substring from
+  // the start of the output that appears again later, and keep only the first
+  // copy. This runs BEFORE the subsequence check below: a doubled output is not
+  // a subsequence of the (single) input, so without de-duping first it would be
+  // discarded as mangled instead of salvaged.
   if (text.length >= 40) {
     const probeLen = Math.min(40, Math.floor(text.length / 2));
     const probe = text.slice(0, probeLen);
@@ -113,9 +103,22 @@ export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): San
       // model meant to output before it started repeating.
       const single = text.slice(0, secondIdx).trim();
       if (single.length > 0) {
-        return { text: single, usedFallback: false };
+        text = single;
       }
     }
+  }
+
+  // Removal-only contract: the cleaned output must be a word-subsequence of the
+  // input — same words, same order, some deleted (fillers). The task never
+  // substitutes, inserts, or reorders words, so anything that breaks the
+  // subsequence is the model mangling content (e.g. finisci→finisco, or moving
+  // a word mid-sentence). Discard and use raw. Case is normalized so
+  // capitalizing the word after a removed sentence-initial filler still matches.
+  // This subsumes the older fraction-based drift heuristic, which let a single
+  // substitution in a short sentence through (1/6 = 17% < 35%) and was blind to
+  // reordering (the word is still "present").
+  if (rawTranscript.trim().length > 0 && !isWordSubsequence(rawTranscript, text)) {
+    return { text: rawTranscript, usedFallback: true };
   }
 
   return { text, usedFallback: false };

@@ -59,7 +59,7 @@ describe("sanitizeLlmOutput", () => {
       .toBe("Sure, cleaned my room today.");
     expect(sanitizeLlmOutput("Sure, corrected the report yesterday.", "sure corrected the report yesterday").text)
       .toBe("Sure, corrected the report yesterday.");
-    expect(sanitizeLlmOutput("Sure here's the deal.", "sure here is the deal").text)
+    expect(sanitizeLlmOutput("Sure here's the deal.", "sure here's the deal").text)
       .toBe("Sure here's the deal.");
     expect(sanitizeLlmOutput("Sure here is my answer.", "sure here is my answer").text)
       .toBe("Sure here is my answer.");
@@ -84,5 +84,51 @@ describe("sanitizeLlmOutput", () => {
   it("removes unbalanced markdown asterisks", () => {
     expect(sanitizeLlmOutput("Vedo tutto **fermo***.*", "vedo tutto fermo").text)
       .toBe("Vedo tutto fermo.");
+  });
+
+  // Cleanup is a removal-only task: a valid output is a word-subsequence of the
+  // input (same words, same order, some deleted). Anything else — a substituted
+  // word or a reordering — is the model mangling content, and must fall back to
+  // raw. The old fraction-based drift check (35% invented words) let a single
+  // substitution in a short sentence through (1/6 = 17%) and was blind to
+  // reordering entirely (the word is still "present").
+  it("falls back when the model substitutes a word (conjugation change)", () => {
+    const raw = "Se finisci il lavoro, allora possiamo uscire.";
+    // model dropped "allora" (ok) but also changed finisci -> finisco (not ok)
+    const out = "Se finisco il lavoro, possiamo uscire.";
+    const result = sanitizeLlmOutput(out, raw);
+    expect(result.text).toBe(raw);
+    expect(result.usedFallback).toBe(true);
+  });
+
+  it("falls back when the model reorders words", () => {
+    const raw = "allora praticamente il sistema cioè funziona insomma abbastanza bene ecco";
+    // "ecco" moved from the end to mid-sentence (before "funziona")
+    const out = "allora praticamente il sistema ecco funziona abbastanza bene";
+    const result = sanitizeLlmOutput(out, raw);
+    expect(result.text).toBe(raw);
+    expect(result.usedFallback).toBe(true);
+  });
+
+  it("accepts pure filler removal (output is a subsequence of input)", () => {
+    const result = sanitizeLlmOutput("Pensavo di andare al mare.", "Allora, pensavo di andare al mare.");
+    expect(result.text).toBe("Pensavo di andare al mare.");
+    expect(result.usedFallback).toBe(false);
+  });
+
+  it("accepts capitalization of the word after a removed sentence-initial filler", () => {
+    // "Cioè, funziona" -> "Funziona": only the leading filler dropped and the
+    // next word capitalized; case-insensitive matching keeps this a subsequence.
+    const result = sanitizeLlmOutput("Funziona bene.", "Cioè, funziona bene.");
+    expect(result.text).toBe("Funziona bene.");
+    expect(result.usedFallback).toBe(false);
+  });
+
+  it("de-dups a doubled output then validates the single copy as a subsequence", () => {
+    const raw = "questo è il testo pulito";
+    const out = "Questo è il testo pulito. Questo è il testo pulito.";
+    const result = sanitizeLlmOutput(out, raw);
+    expect(result.text).toBe("Questo è il testo pulito.");
+    expect(result.usedFallback).toBe(false);
   });
 });
