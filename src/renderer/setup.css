@@ -1,39 +1,68 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; font-family: -apple-system, system-ui, sans-serif; background: #1e1e1e; color: #eee; }
 #root { max-width: 560px; margin: 0 auto; padding: 32px; }
-header h1 { font-size: 18px; margin-bottom: 24px; opacity: 0.7; font-weight: 500; }
+
+header { margin-bottom: 24px; }
+header h1 { font-size: 18px; opacity: 0.7; font-weight: 500; }
+
+/* Step indicator */
+.stepper { list-style: none; display: flex; gap: 8px; margin-top: 14px; }
+.stepper li { flex: 1; height: 4px; border-radius: 2px; background: #3a3a3c; transition: background 200ms ease; }
+.stepper li.done { background: #0a84ff; }
+.stepper li.current { background: #0a84ff; }
+.stepper li.upcoming { background: #3a3a3c; }
 
 .step { display: none; }
 .step.active { display: block; }
-.step h2 { font-size: 22px; margin-bottom: 14px; }
+.step h2 { font-size: 22px; margin-bottom: 14px; outline: none; }
 .step p { margin-bottom: 14px; line-height: 1.5; }
-.muted { opacity: 0.6; font-size: 13px; }
+.muted { opacity: 0.72; font-size: 13px; }
 
-button { background: #2a2a2c; color: #fff; border: 1px solid #3a3a3c; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; margin-right: 6px; }
+/* Subtle entrance for the active step; disabled under reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .step.active { animation: step-in 220ms ease-out; }
+  @keyframes step-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+
+.actions { display: flex; gap: 10px; align-items: center; margin-top: 24px; }
+
+button {
+  background: #2a2a2c; color: #fff; border: 1px solid #3a3a3c;
+  padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
 button:hover:not(:disabled) { background: #34343a; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
-button.primary { background: #0a84ff; border-color: #0a84ff; padding: 10px 20px; font-size: 14px; margin-top: 20px; }
+button:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
+button.primary { background: #0a84ff; border-color: #0a84ff; padding: 10px 20px; font-size: 14px; }
 button.primary:hover:not(:disabled) { background: #1090ff; }
+button.secondary { margin-right: auto; } /* push primary action to the right */
 
 .perm { padding: 14px; background: #2a2a2c; border-radius: 8px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.perm-info { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
 .perm strong { font-size: 14px; }
-.status { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: #444; }
+.perm-hint { font-size: 12px; opacity: 0.65; }
+.status { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: #4a4a4a; white-space: nowrap; }
 .status.granted { background: #2c6e2c; color: #fff; }
-.status.denied { background: #6e2c2c; color: #fff; }
+.status.denied { background: #8a3a3a; color: #fff; }
 
-.tier { padding: 14px; background: #2a2a2c; border-radius: 8px; margin-bottom: 10px; cursor: pointer; border: 2px solid transparent; }
+/* Tier cards behave as radios */
+#tier-list { display: flex; flex-direction: column; gap: 10px; }
+.tier {
+  width: 100%; text-align: left; padding: 14px; background: #2a2a2c; color: #fff;
+  border-radius: 8px; cursor: pointer; border: 2px solid transparent; font: inherit;
+}
 .tier:hover { background: #34343a; }
-.tier.selected { border-color: #0a84ff; }
-.tier strong { display: block; margin-bottom: 4px; }
-.tier .desc { font-size: 12px; opacity: 0.75; }
+.tier[aria-checked="true"] { border-color: #0a84ff; background: #2f3340; }
+.tier:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
+.tier strong { display: block; margin-bottom: 4px; font-size: 14px; }
+.tier .desc { font-size: 12px; opacity: 0.8; }
 
 .progress-container { margin-top: 20px; }
 .progress-label { font-size: 13px; margin-bottom: 6px; }
-.progress-bytes { font-size: 11px; opacity: 0.6; margin-top: 4px; }
+.progress-bytes { font-size: 12px; opacity: 0.72; margin-top: 4px; font-variant-numeric: tabular-nums; }
 progress { width: 100%; height: 6px; }
 
-.error { background: #6e2c2c; padding: 12px; border-radius: 8px; margin-top: 12px; font-size: 13px; }
-#dl-actions { margin-top: 16px; display: flex; gap: 10px; }
+.error { background: #8a3a3a; padding: 12px; border-radius: 8px; margin-top: 12px; font-size: 13px; }
 .hidden { display: none; }
 
 kbd { background: #444; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }

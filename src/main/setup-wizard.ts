@@ -69,6 +69,10 @@ export class SetupWizard {
       shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
     });
 
+    ipcMain.on("setup:open-mic-settings", () => {
+      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+    });
+
     ipcMain.handle("setup:start-download", async (_e, tierId: string) => {
       const tier = getTier(tierId);
       if (!tier) {
@@ -125,6 +129,7 @@ export class SetupWizard {
     ipcMain.removeHandler("setup:refresh-accessibility");
     ipcMain.removeHandler("setup:start-download");
     ipcMain.removeAllListeners("setup:open-accessibility-settings");
+    ipcMain.removeAllListeners("setup:open-mic-settings");
     ipcMain.removeAllListeners("setup:finish");
   }
 

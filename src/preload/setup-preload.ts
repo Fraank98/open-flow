@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("openFlowSetup", {
   requestMicPermission: (): Promise<string> => ipcRenderer.invoke("setup:request-mic"),
   refreshAccessibilityStatus: (): Promise<string> => ipcRenderer.invoke("setup:refresh-accessibility"),
   openAccessibilitySettings: (): void => ipcRenderer.send("setup:open-accessibility-settings"),
+  openMicSettings: (): void => ipcRenderer.send("setup:open-mic-settings"),
 
   startDownload: (tierId: string): Promise<void> => ipcRenderer.invoke("setup:start-download", tierId),
   onDownloadProgress: (cb: (p: { stage: string; bytes: number; total: number }) => void): (() => void) => {
@@ -37,6 +38,7 @@ declare global {
       requestMicPermission: () => Promise<string>;
       refreshAccessibilityStatus: () => Promise<string>;
       openAccessibilitySettings: () => void;
+      openMicSettings: () => void;
       startDownload: (tierId: string) => Promise<void>;
       onDownloadProgress: (cb: (p: { stage: string; bytes: number; total: number }) => void) => () => void;
       onDownloadDone: (cb: (result: { ok: boolean; error?: string }) => void) => () => void;
