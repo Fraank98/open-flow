@@ -34,6 +34,15 @@ const FILLER_TOKENS = (() => {
     .join("|");
   return new RegExp(`(?<![\\p{L}])(${tokens})(?![\\p{L}])`, "iu");
 })();
+// Only dash/break-marked stutters trigger the gate ("io— io", "vol- volevo").
+// KNOWN LIMITATION: Whisper usually transcribes real stutters as plain adjacent
+// repetitions WITHOUT a dash ("io io penso"), which this regex misses — so they
+// take the fast-path and never reach the LLM (which, when called, removes them
+// well). We deliberately do NOT gate on bare adjacent duplicates: the model
+// then collapses legitimate Italian reduplication too ("via via"→"via" is
+// wrong, "no no"→"no" debatable), and the subsequence sanitizer can't catch it
+// (a dropped duplicate is still a valid subsequence). Net: under-clean real
+// stutters rather than risk corrupting meaningful reduplication.
 const FALSE_START = /\w+— ?\w+|\w+- \w+/;
 
 function needsCleanup(text: string): boolean {
