@@ -62,6 +62,7 @@ async function init() {
     input.value = "";
     renderDict();
     refreshSaveButton();
+    input.focus();
   }
 
   $("#dictAdd").addEventListener("click", addDictTerm);

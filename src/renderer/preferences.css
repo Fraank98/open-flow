@@ -24,7 +24,7 @@ code { background: #2a2a2c; padding: 2px 5px; border-radius: 3px; font-size: 11p
 .dict-add input { flex: 1; }
 .dict-add button { background: #2a2a2c; color: #eee; border: 1px solid #3a3a3c; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-size: 13px; white-space: nowrap; }
 .dict-add button:hover { background: #3a3a3c; }
-.dict-list { list-style: none; margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.dict-list { list-style: none; margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
 .dict-list li { display: flex; align-items: center; padding: 5px 10px; background: #2a2a2c; border-radius: 5px; }
 .dict-term { flex: 1; font-size: 13px; }
 .dict-list button.danger { background: #6e2c2c; color: #fff; border: none; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; line-height: 1; }
