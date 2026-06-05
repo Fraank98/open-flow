@@ -28,8 +28,19 @@ describe("applyDictionary — exact & multi-word", () => {
   });
 
   it("applies longer terms before shorter overlapping ones", () => {
-    // "Wispr Flow" must win over a bare "Flow" term
-    expect(applyDictionary("uso wispr flow", ["Flow", "Wispr Flow"]))
+    // "Wispr Flow" must win even when a shorter, differently-cased "FLOW" term
+    // is also present — the shorter term must not mutate the longer's output.
+    expect(applyDictionary("uso wispr flow", ["FLOW", "Wispr Flow"]))
       .toBe("uso Wispr Flow");
+  });
+
+  it("handles terms containing regex-special characters", () => {
+    expect(applyDictionary("uso c++ ogni giorno", ["C++"])).toBe("uso C++ ogni giorno");
+    expect(applyDictionary("apri node.js", ["Node.js"])).toBe("apri Node.js");
+  });
+
+  it("inserts the canonical spelling literally (no $-pattern expansion)", () => {
+    // Regression for Bug 1: a term with a $-sequence must be inserted verbatim.
+    expect(applyDictionary("x a$&b y", ["a$&b"])).toBe("x a$&b y");
   });
 });
