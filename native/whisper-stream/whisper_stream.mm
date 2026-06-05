@@ -45,6 +45,11 @@ std::mutex g_inferenceMutex;
 // Sample buffer for the in-flight utterance. Reset by start().
 std::vector<float> g_samples;
 
+// initial_prompt for the in-flight utterance (dictionary vocabulary hint).
+// Set by start(), snapshotted per-pass into ProcessWorker. Guarded by
+// g_samplesMutex (utterance state, same lifetime as g_samples).
+std::string g_initialPrompt;
+
 // Guard for the sample buffer only. Lets feedSamples append while a
 // processChunk snapshot has already been taken.
 std::mutex g_samplesMutex;
@@ -62,7 +67,7 @@ bool abortCallback(void * /*user_data*/) {
   return g_abort.load(std::memory_order_relaxed);
 }
 
-std::string runWhisperFull(const std::vector<float>& samples, const std::string& language) {
+std::string runWhisperFull(const std::vector<float>& samples, const std::string& language, const std::string& prompt) {
   if (samples.empty()) return "";
 
   struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
@@ -80,6 +85,9 @@ std::string runWhisperFull(const std::vector<float>& samples, const std::string&
   params.no_context = true;
   params.abort_callback = abortCallback;
   params.abort_callback_user_data = nullptr;
+  if (!prompt.empty()) {
+    params.initial_prompt = prompt.c_str();
+  }
 
   // Hold the lock across the whole pass: whisper_full plus the segment reads,
   // which also touch the context's mutable state. g_ctx is re-checked here
@@ -121,8 +129,13 @@ Napi::Value LoadModel(const Napi::CallbackInfo& info) {
 
 Napi::Value Start(const Napi::CallbackInfo& info) {
   g_abort.store(false, std::memory_order_relaxed);
+  std::string prompt;
+  if (info.Length() >= 1 && info[0].IsString()) {
+    prompt = info[0].As<Napi::String>().Utf8Value();
+  }
   std::lock_guard<std::mutex> lock(g_samplesMutex);
   g_samples.clear();
+  g_initialPrompt = std::move(prompt);
   return info.Env().Undefined();
 }
 
@@ -155,15 +168,16 @@ Napi::Value FeedSamples(const Napi::CallbackInfo& info) {
 // Must NOT be called concurrently with itself or Finalize on the same context.
 class ProcessWorker : public Napi::AsyncWorker {
  public:
-  ProcessWorker(Napi::Function& callback, std::vector<float> snapshot, std::string language)
+  ProcessWorker(Napi::Function& callback, std::vector<float> snapshot, std::string language, std::string prompt)
       : AsyncWorker(callback),
         snapshot_(std::move(snapshot)),
         language_(std::move(language)),
+        prompt_(std::move(prompt)),
         queued_(std::chrono::steady_clock::now()) {}
 
   void Execute() override {
     execStart_ = std::chrono::steady_clock::now();
-    result_ = runWhisperFull(snapshot_, language_);
+    result_ = runWhisperFull(snapshot_, language_, prompt_);
     execEnd_ = std::chrono::steady_clock::now();
     aborted_ = g_abort.load(std::memory_order_relaxed);
   }
@@ -186,6 +200,7 @@ class ProcessWorker : public Napi::AsyncWorker {
  private:
   std::vector<float> snapshot_;
   std::string language_;
+  std::string prompt_;
   std::string result_;
   std::chrono::steady_clock::time_point queued_;
   std::chrono::steady_clock::time_point execStart_;
@@ -203,15 +218,17 @@ Napi::Value ProcessChunk(const Napi::CallbackInfo& info) {
   Napi::Function cb = info[1].As<Napi::Function>();
 
   std::vector<float> snapshot;
+  std::string prompt;
   {
     std::lock_guard<std::mutex> lock(g_samplesMutex);
     snapshot = g_samples; // copy
+    prompt = g_initialPrompt;
   }
   if (!g_ctx || snapshot.empty()) {
     cb.Call({env.Null(), Napi::String::New(env, "")});
     return env.Undefined();
   }
-  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language));
+  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language), std::move(prompt));
   worker->Queue();
   return env.Undefined();
 }
@@ -228,16 +245,18 @@ Napi::Value Finalize(const Napi::CallbackInfo& info) {
   // interrupt the preceding (now-settled) streaming chunk.
   g_abort.store(false, std::memory_order_relaxed);
   std::vector<float> snapshot;
+  std::string prompt;
   {
     std::lock_guard<std::mutex> lock(g_samplesMutex);
     snapshot = std::move(g_samples);
     g_samples.clear();
+    prompt = g_initialPrompt;
   }
   if (!g_ctx || snapshot.empty()) {
     cb.Call({env.Null(), Napi::String::New(env, "")});
     return env.Undefined();
   }
-  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language));
+  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language), std::move(prompt));
   worker->Queue();
   return env.Undefined();
 }
@@ -262,7 +281,7 @@ Napi::Value Keepalive(const Napi::CallbackInfo& info) {
   // threshold and forces a real encoder pass (~1s) that keeps the Metal
   // pipeline/clocks hot. Cost is ~constant regardless of exact length here.
   std::vector<float> silence(24000, 0.0f);
-  auto * worker = new ProcessWorker(cb, std::move(silence), "en");
+  auto * worker = new ProcessWorker(cb, std::move(silence), "en", "");
   worker->Queue();
   return env.Undefined();
 }
@@ -282,6 +301,7 @@ Napi::Value Release(const Napi::CallbackInfo& info) {
   {
     std::lock_guard<std::mutex> lock(g_samplesMutex);
     g_samples.clear();
+    g_initialPrompt.clear();
   }
   return info.Env().Undefined();
 }
