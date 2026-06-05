@@ -424,6 +424,7 @@ async function main(): Promise<void> {
       await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {
         useLlmCleanup: currentPrefs.useLlmCleanup,
         spokenPunctuation: currentPrefs.spokenPunctuation,
+        dictionary: currentPrefs.dictionary,
       });
       menubar.setStatus("Idle");
     } finally {

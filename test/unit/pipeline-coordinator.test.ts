@@ -101,4 +101,31 @@ describe("PipelineCoordinator", () => {
     coord.startRecording();
     expect(coord.getState()).toBe<PipelineState>("recording");
   });
+
+  it("applies dictionary correction before the LLM cleanup", async () => {
+    const deps = makeDeps({
+      transcribe: vi.fn(async () => ({ text: "ho usato slack", language: "it", durationMs: 1 })),
+    });
+    const coord = new PipelineCoordinator(deps);
+    coord.startRecording();
+    await coord.finishWithAudio(new Float32Array(16000), 16000, "it", {
+      useLlmCleanup: true,
+      dictionary: ["Slack"],
+    });
+    // The LLM must receive the dictionary-corrected text, not the raw one.
+    expect(deps.clean).toHaveBeenCalledWith("ho usato Slack", expect.anything());
+  });
+
+  it("applies dictionary correction even when LLM cleanup is off", async () => {
+    const deps = makeDeps({
+      transcribe: vi.fn(async () => ({ text: "ho usato slack", language: "it", durationMs: 1 })),
+    });
+    const coord = new PipelineCoordinator(deps);
+    coord.startRecording();
+    await coord.finishWithAudio(new Float32Array(16000), 16000, "it", {
+      useLlmCleanup: false,
+      dictionary: ["Slack"],
+    });
+    expect(deps.inject).toHaveBeenCalledWith("ho usato Slack");
+  });
 });

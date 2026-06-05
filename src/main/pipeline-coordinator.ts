@@ -1,6 +1,7 @@
 import { encodeWav } from "./utils/wav-encoder.js";
 import { applySpokenPunctuation } from "./utils/spoken-punctuation.js";
 import { lightTouchUp } from "./utils/light-touch-up.js";
+import { applyDictionary } from "./utils/dictionary.js";
 
 export type PipelineState =
   | "idle"
@@ -81,11 +82,12 @@ export class PipelineCoordinator {
     samples: Float32Array,
     sampleRate: number,
     language: string,
-    options: { useLlmCleanup?: boolean; spokenPunctuation?: boolean } = {},
+    options: { useLlmCleanup?: boolean; spokenPunctuation?: boolean; dictionary?: string[] } = {},
   ): Promise<void> {
     if (this.state !== "recording") return;
     const useLlmCleanup = options.useLlmCleanup !== false; // default true
     const spokenPunctuation = options.spokenPunctuation === true; // default false
+    const dictionary = options.dictionary ?? [];
 
     const totalStart = Date.now();
     try {
@@ -127,21 +129,33 @@ export class PipelineCoordinator {
         }
       }
 
-      let textToInject = withPunct;
+      // Deterministic dictionary normalization (preferred spellings of proper
+      // nouns / jargon). Runs after spoken-punctuation and before the LLM so
+      // the corrected spelling is what the (removal-only) LLM polishes. No-op
+      // fast path on an empty dictionary. Applies with or without LLM cleanup.
+      let corrected = withPunct;
+      if (dictionary.length > 0) {
+        corrected = applyDictionary(withPunct, dictionary);
+        if (corrected !== withPunct) {
+          await this.deps.logger.info("dictionary applied", { text: corrected });
+        }
+      }
+
+      let textToInject = corrected;
       // Skip the LLM for single-word / very short inputs. Small models like
       // Qwen 1.5B routinely degenerate on near-empty prompts, inventing
       // narration / HTML tags / fake punctuation. For these inputs the raw
       // Whisper output is already good enough — just capitalize and add a
       // trailing period.
-      const isSingleShortWord = withPunct.length < 12 && !withPunct.trim().includes(" ");
+      const isSingleShortWord = corrected.length < 12 && !corrected.trim().includes(" ");
       if (useLlmCleanup && isSingleShortWord) {
         await this.deps.logger.info("skipping LLM for short single-word input", {
-          length: withPunct.length,
+          length: corrected.length,
         });
-        textToInject = lightTouchUp(withPunct);
+        textToInject = lightTouchUp(corrected);
       } else if (useLlmCleanup) {
         this.setState("cleaning");
-        const c = await this.deps.clean(withPunct, langHint ?? undefined);
+        const c = await this.deps.clean(corrected, langHint ?? undefined);
         await this.deps.logger.info("cleaned", {
           text: c.text,
           usedFallback: c.usedFallback,
