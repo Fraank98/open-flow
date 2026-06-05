@@ -26,6 +26,53 @@ async function init() {
   $("#launchAtLogin").checked = prefs.launchAtLogin !== false;
   $("#spokenPunctuation").checked = prefs.spokenPunctuation === true;
 
+  // Working copy of the dictionary terms; rendered as a removable list.
+  let dictTerms = Array.isArray(prefs.dictionary) ? [...prefs.dictionary] : [];
+
+  function renderDict() {
+    const list = $("#dictList");
+    list.innerHTML = "";
+    dictTerms.forEach((term, i) => {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.className = "dict-term";
+      span.textContent = term;
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "danger";
+      rm.textContent = "×";
+      rm.setAttribute("aria-label", `Remove ${term}`);
+      rm.addEventListener("click", () => {
+        dictTerms.splice(i, 1);
+        renderDict();
+        refreshSaveButton();
+      });
+      li.append(span, rm);
+      list.appendChild(li);
+    });
+  }
+
+  function addDictTerm() {
+    const input = $("#dictInput");
+    const term = input.value.trim();
+    if (!term) return;
+    // Case-insensitive de-dupe; keep the spelling the user typed last.
+    dictTerms = dictTerms.filter((t) => t.toLowerCase() !== term.toLowerCase());
+    dictTerms.push(term);
+    input.value = "";
+    renderDict();
+    refreshSaveButton();
+  }
+
+  $("#dictAdd").addEventListener("click", addDictTerm);
+  $("#dictInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addDictTerm();
+    }
+  });
+  renderDict();
+
   const langSel = $("#language");
   for (const lang of catalog.languages) {
     const opt = document.createElement("option");
@@ -202,6 +249,7 @@ async function init() {
       useLlmCleanup: $("#cleanup").checked,
       launchAtLogin: $("#launchAtLogin").checked,
       spokenPunctuation: $("#spokenPunctuation").checked,
+      dictionary: dictTerms,
     };
   }
 
