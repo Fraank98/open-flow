@@ -13,7 +13,7 @@
 // JS API:
 //   const w = require('./build/Release/whisper_stream.node');
 //   w.init(modelPath)         → boolean
-//   w.start()                  → void   (reset utterance state)
+//   w.start(initialPrompt?)    → void   (reset utterance state; optional vocab-hint prompt)
 //   w.feedSamples(Float32Array)→ void   (append PCM 16 kHz mono)
 //   w.processChunk(language)   → string (latest full transcript so far)
 //   w.finalize(language)       → string (final transcript, releases utterance state)
