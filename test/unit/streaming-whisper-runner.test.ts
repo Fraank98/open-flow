@@ -164,6 +164,44 @@ describe("StreamingWhisperRunner GPU keepalive", () => {
   });
 });
 
+describe("StreamingWhisperRunner.start initial_prompt forwarding", () => {
+  it("forwards the initial prompt to the native start()", () => {
+    const startArgs: Array<string | undefined> = [];
+    const native = {
+      init: () => true,
+      start: (initialPrompt?: string) => { startArgs.push(initialPrompt); },
+      feedSamples: () => {},
+      processChunk: (_lang: string, _cb: ChunkCb) => {},
+      requestAbort: () => {},
+      finalize: (_lang: string, _cb: ChunkCb) => {},
+      keepalive: (_cb: ChunkCb) => {},
+      release: () => {},
+    };
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    runner.start("it", "Slack, Wispr Flow");
+    expect(startArgs).toEqual(["Slack, Wispr Flow"]);
+    runner.cancel();
+  });
+
+  it("forwards an empty string when no prompt is given", () => {
+    const startArgs: Array<string | undefined> = [];
+    const native = {
+      init: () => true,
+      start: (initialPrompt?: string) => { startArgs.push(initialPrompt); },
+      feedSamples: () => {},
+      processChunk: (_lang: string, _cb: ChunkCb) => {},
+      requestAbort: () => {},
+      finalize: (_lang: string, _cb: ChunkCb) => {},
+      keepalive: (_cb: ChunkCb) => {},
+      release: () => {},
+    };
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    runner.start("it");
+    expect(startArgs).toEqual([""]);
+    runner.cancel();
+  });
+});
+
 describe("computeNewSuffix", () => {
   it("returns the full current when committed is empty", () => {
     expect(computeNewSuffix("", "hello world")).toBe("hello world");
