@@ -44,3 +44,37 @@ describe("applyDictionary — exact & multi-word", () => {
     expect(applyDictionary("x a$&b y", ["a$&b"])).toBe("x a$&b y");
   });
 });
+
+describe("applyDictionary — fuzzy (gated)", () => {
+  it("repairs a clear near-miss on a long term", () => {
+    expect(applyDictionary("ciao gianluk", ["Gianluca"])).toBe("ciao Gianluca");
+  });
+
+  it("never fuzzy-matches short terms (< 6 chars)", () => {
+    // "flow" (4) must never swallow "slow"/"flew"
+    expect(applyDictionary("going slow now", ["flow"])).toBe("going slow now");
+    expect(applyDictionary("the river flew", ["flow"])).toBe("the river flew");
+    // 'Slack' is 5 chars → fuzzy disabled, 'slac' stays
+    expect(applyDictionary("apri slac ora", ["Slack"])).toBe("apri slac ora");
+  });
+
+  it("respects the distance threshold scaled by term length", () => {
+    // 'Kubernetes' (10) allows distance <= 2
+    expect(applyDictionary("uso kubernets", ["Kubernetes"])).toBe("uso Kubernetes");
+    // distance 3 is too far → untouched
+    expect(applyDictionary("uso kuberxyz", ["Kubernetes"])).toBe("uso kuberxyz");
+  });
+
+  it("skips fuzzy when the source length is far from the term length", () => {
+    expect(applyDictionary("the doc", ["Postgres"])).toBe("the doc");
+  });
+
+  it("leaves a token untouched when it is ambiguous between two terms", () => {
+    // 'korpus' is within distance 1 of both 'Corpus' and 'Korpux' → ambiguous
+    expect(applyDictionary("the korpus", ["Corpus", "Korpux"])).toBe("the korpus");
+  });
+
+  it("does not fuzzy-rewrite a token already exact-matched", () => {
+    expect(applyDictionary("Gianluca", ["Gianluca"])).toBe("Gianluca");
+  });
+});

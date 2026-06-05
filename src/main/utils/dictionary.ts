@@ -53,5 +53,71 @@ export function applyDictionary(text: string, terms: string[]): string {
     cursor = m.end;
   }
   out += text.slice(cursor);
+  return applyFuzzy(out, ordered);
+}
+
+/** Classic iterative Levenshtein edit distance. */
+function editDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr = new Array<number>(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n]!;
+}
+
+/** Fuzzy distance budget for a term: 1 for 6-7 chars, 2 for >=8. The >=8 band
+ *  (not >=10) is what lets "gianluk" -> "Gianluca" (8 chars, distance 2) correct
+ *  while 6-7 char terms stay at the most conservative distance 1. */
+function fuzzyThreshold(termLen: number): number {
+  return termLen >= 8 ? 2 : 1;
+}
+
+/**
+ * Conservative single-token fuzzy repair. Gates (all must hold):
+ *   - term length >= 6 (short terms are never fuzzy-matched);
+ *   - |sourceToken.length - term.length| <= 2 (length proximity);
+ *   - edit distance <= fuzzyThreshold(term.length);
+ *   - the token isn't already an exact (case-insensitive) match of any term;
+ *   - the match is UNIQUE — if two+ eligible terms qualify, skip the token.
+ */
+function applyFuzzy(text: string, terms: string[]): string {
+  const eligible = terms.filter((t) => t.length >= 6);
+  if (eligible.length === 0) return text;
+  const exactLower = new Set(terms.map((t) => t.toLowerCase()));
+
+  const tokenRe = /[\p{L}\p{N}][\p{L}\p{N}''-]*/gu;
+  let out = "";
+  let last = 0;
+  for (const match of text.matchAll(tokenRe)) {
+    const token = match[0];
+    const start = match.index!;
+    out += text.slice(last, start);
+    last = start + token.length;
+
+    const lower = token.toLowerCase();
+    let replacement = token;
+    if (!exactLower.has(lower)) {
+      const candidates: string[] = [];
+      for (const term of eligible) {
+        if (Math.abs(token.length - term.length) > 2) continue;
+        if (editDistance(lower, term.toLowerCase()) <= fuzzyThreshold(term.length)) {
+          candidates.push(term);
+        }
+      }
+      if (candidates.length === 1) replacement = candidates[0]!;
+    }
+    out += replacement;
+  }
+  out += text.slice(last);
   return out;
 }
