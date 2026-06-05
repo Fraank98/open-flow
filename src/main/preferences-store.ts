@@ -11,6 +11,9 @@ export interface Preferences {
   useLlmCleanup: boolean;
   launchAtLogin: boolean;
   spokenPunctuation: boolean;
+  /** User-defined preferred spellings normalized in the transcript and used to
+   *  bias Whisper (proper nouns, product names, jargon). */
+  dictionary: string[];
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -23,6 +26,7 @@ export const DEFAULT_PREFS: Preferences = {
   useLlmCleanup: true,
   launchAtLogin: true,
   spokenPunctuation: false,
+  dictionary: [],
 };
 
 export class PreferencesStore {
