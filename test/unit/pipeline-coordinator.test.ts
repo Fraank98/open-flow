@@ -128,4 +128,20 @@ describe("PipelineCoordinator", () => {
     });
     expect(deps.inject).toHaveBeenCalledWith("ho usato Slack");
   });
+
+  it("applies dictionary correction on the short-word lightTouchUp path", async () => {
+    const deps = makeDeps({
+      transcribe: vi.fn(async () => ({ text: "slack", language: "en", durationMs: 1 })),
+    });
+    const coord = new PipelineCoordinator(deps);
+    coord.startRecording();
+    await coord.finishWithAudio(new Float32Array(16000), 16000, "en", {
+      useLlmCleanup: true,
+      dictionary: ["Slack"],
+    });
+    // "slack" is a short single word → LLM is skipped and lightTouchUp runs on
+    // the dictionary-corrected text, so inject gets "Slack." (capitalized + period).
+    expect(deps.clean).not.toHaveBeenCalled();
+    expect(deps.inject).toHaveBeenCalledWith("Slack.");
+  });
 });
