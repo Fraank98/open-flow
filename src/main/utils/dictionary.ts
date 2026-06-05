@@ -91,11 +91,14 @@ function fuzzyThreshold(termLen: number): number {
  *   - the match is UNIQUE — if two+ eligible terms qualify, skip the token.
  */
 function applyFuzzy(text: string, terms: string[]): string {
-  const eligible = terms.filter((t) => t.length >= 6);
+  // Single-token fuzzy only: a term with a space can't fuzzy-match one token
+  // without expanding it into a multi-word span (out of scope; the exact pass
+  // handles multi-word terms).
+  const eligible = terms.filter((t) => t.length >= 6 && !t.includes(" "));
   if (eligible.length === 0) return text;
   const exactLower = new Set(terms.map((t) => t.toLowerCase()));
 
-  const tokenRe = /[\p{L}\p{N}][\p{L}\p{N}''-]*/gu;
+  const tokenRe = /[\p{L}\p{N}][\p{L}\p{N}''\-]*/gu;
   let out = "";
   let last = 0;
   for (const match of text.matchAll(tokenRe)) {

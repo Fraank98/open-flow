@@ -61,7 +61,7 @@ describe("applyDictionary — fuzzy (gated)", () => {
   it("respects the distance threshold scaled by term length", () => {
     // 'Kubernetes' (10) allows distance <= 2
     expect(applyDictionary("uso kubernets", ["Kubernetes"])).toBe("uso Kubernetes");
-    // distance 3 is too far → untouched
+    // distance 5 >> threshold of 2 → untouched
     expect(applyDictionary("uso kuberxyz", ["Kubernetes"])).toBe("uso kuberxyz");
   });
 
@@ -76,5 +76,11 @@ describe("applyDictionary — fuzzy (gated)", () => {
 
   it("does not fuzzy-rewrite a token already exact-matched", () => {
     expect(applyDictionary("Gianluca", ["Gianluca"])).toBe("Gianluca");
+  });
+
+  it("does not fuzzy-expand a single token into a multi-word term", () => {
+    // 'openflow' is edit-distance 1 from 'Open Flow', but multi-word terms are
+    // excluded from single-token fuzzy — the exact pass owns multi-word.
+    expect(applyDictionary("uso openflow", ["Open Flow"])).toBe("uso openflow");
   });
 });
