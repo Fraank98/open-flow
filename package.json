@@ -4,6 +4,7 @@
   "description": "Local-first dictation app for macOS — Whisper + LLM cleanup",
   "author": "open-flow",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {

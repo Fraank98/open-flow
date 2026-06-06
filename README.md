@@ -85,3 +85,12 @@ npm run package
 ```
 
 Produces `release/open-flow-<version>-arm64.dmg`. See `docs/release-process.md` for the full release workflow.
+
+## License
+
+open-flow is **source-available, not open source**, under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). You may use, modify, and
+share it for **noncommercial purposes only**. Commercial use — selling it,
+offering it as a paid service, or bundling it into a paid product — is reserved
+to the project owner. See [CONTRIBUTING.md](CONTRIBUTING.md) for how
+contributions are licensed.
