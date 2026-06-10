@@ -1,7 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { StreamingWhisperRunner, computeNewSuffix, PassInfo } from "../../src/main/streaming-whisper-runner.js";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Safety net: a test that throws mid-way (before its own useRealTimers) must not
+// leak fake timers into the next test and hang it on a real-time delay().
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 type ChunkCb = (err: Error | null, text: string, info?: PassInfo) => void;
 
@@ -72,6 +78,86 @@ function makeFakeNative(opts: { chunkResolveMs?: number; deferFinalize?: boolean
     resolveFinalize,
   };
 }
+
+/**
+ * Fake native whose passes NEVER invoke their callback — simulates a
+ * whisper_full / Metal stall that holds the inference mutex forever. Used to
+ * exercise the runner's watchdog (the JS side must not wedge indefinitely).
+ */
+function makeHangingNative() {
+  const calls: string[] = [];
+  let keepaliveCount = 0;
+  const native = {
+    init: () => true,
+    start: () => void calls.push("start"),
+    feedSamples: () => {},
+    processChunk: (_lang: string, _cb: ChunkCb) => void calls.push("processChunk"), // never calls back
+    requestAbort: () => void calls.push("requestAbort"),
+    finalize: (_lang: string, _cb: ChunkCb) => void calls.push("finalize"), // never calls back
+    keepalive: (_cb: ChunkCb) => {
+      keepaliveCount++; // attempted, but never calls back
+    },
+    release: () => void calls.push("release"),
+  };
+  return { calls, native, keepaliveCount: () => keepaliveCount };
+}
+
+describe("StreamingWhisperRunner watchdog (hung pass recovery)", () => {
+  it("emits 'stall' and rejects finalize when the final pass never returns", async () => {
+    vi.useFakeTimers();
+    const fake = makeHangingNative();
+    const runner = new StreamingWhisperRunner({
+      modelPath: "m",
+      native: fake.native,
+      chunkIntervalMs: 1_000_000, // no streaming chunk fires during this test
+      passTimeoutMs: 5000,
+    });
+    const stalls: Array<{ phase: string; timeoutMs: number }> = [];
+    runner.on("stall", (e) => stalls.push(e));
+
+    runner.start("it");
+    const outcome = runner.finalize("it").then(() => "resolved", () => "rejected");
+    await vi.advanceTimersByTimeAsync(5001); // trip the watchdog
+
+    expect(stalls).toEqual([{ phase: "final", timeoutMs: 5000 }]);
+    expect(await outcome).toBe("rejected");
+    vi.useRealTimers();
+  });
+
+  it("emits 'stall' when an idle keepalive pass hangs, and stops scheduling further passes", async () => {
+    vi.useFakeTimers();
+    const fake = makeHangingNative();
+    const runner = new StreamingWhisperRunner({
+      modelPath: "m",
+      native: fake.native,
+      keepaliveIntervalMs: 50,
+      passTimeoutMs: 5000,
+    });
+    const stalls: Array<{ phase: string }> = [];
+    runner.on("stall", (e) => stalls.push(e));
+
+    await vi.advanceTimersByTimeAsync(60); // keepalive fires once, then hangs
+    expect(fake.keepaliveCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(5001); // watchdog trips
+    expect(stalls.some((s) => s.phase === "keepalive")).toBe(true);
+    await vi.advanceTimersByTimeAsync(500); // keepalive interval must be stopped now
+    expect(fake.keepaliveCount()).toBe(1);
+    vi.useRealTimers();
+  });
+});
+
+describe("StreamingWhisperRunner.shutdown", () => {
+  it("tears down for quit WITHOUT calling the blocking native release()", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native: fake.native, keepaliveIntervalMs: 50 });
+    runner.shutdown();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(fake.calls).not.toContain("release"); // crucial: never block on native release at quit
+    expect(fake.keepaliveCount()).toBe(0); // keepalive interval cleared
+    vi.useRealTimers();
+  });
+});
 
 describe("StreamingWhisperRunner.finalize", () => {
   it("aborts the in-flight chunk before running the final pass", async () => {

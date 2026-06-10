@@ -60,6 +60,13 @@ export interface StreamingWhisperOptions {
   /** How often to run a keepalive pass while idle (ms) to keep the GPU warm.
    *  0 disables. Default 0. */
   keepaliveIntervalMs?: number;
+  /** Watchdog: if a native pass (chunk/final/keepalive) doesn't call back
+   *  within this many ms it's treated as a hung whisper_full (a Metal/GPU
+   *  stall that holds the inference mutex forever). The runner emits "stall"
+   *  and stops scheduling work; the host should relaunch. Default 30000.
+   *  Kept well above the worst legitimate cold pass (~11s observed) so a
+   *  slow-but-progressing pass is never mistaken for a hang. */
+  passTimeoutMs?: number;
   /** Injected native addon, for tests. Defaults to loading the built .node
    *  from appRoot. When provided, appRoot/isPackaged are unused. */
   native?: NativeWhisperStream;
@@ -70,6 +77,15 @@ export interface StreamingWhisperOptions {
  *  idle GPU-warming pass. */
 export interface PassTiming extends PassInfo {
   phase: "chunk" | "final" | "keepalive";
+}
+
+/** Emitted when a native pass fails to return within passTimeoutMs — a hung
+ *  whisper_full (Metal/GPU stall) that holds the single-context inference mutex
+ *  forever. The runner cannot recover in-process (init()/release() would block
+ *  on that same mutex), so the host should relaunch the app. */
+export interface StallInfo {
+  phase: PassTiming["phase"];
+  timeoutMs: number;
 }
 
 export interface PartialTranscript {
@@ -105,6 +121,7 @@ export interface PartialTranscript {
 export class StreamingWhisperRunner extends EventEmitter {
   private readonly native: NativeWhisperStream;
   private readonly chunkIntervalMs: number;
+  private readonly passTimeoutMs: number;
   private intervalHandle: NodeJS.Timeout | null = null;
   private keepaliveHandle: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
@@ -113,10 +130,15 @@ export class StreamingWhisperRunner extends EventEmitter {
   private active = false;
   private cancelled = false;
   private released = false;
+  /** Set once a pass is detected as hung. The native context is poisoned (a
+   *  worker thread holds the inference mutex forever), so all further native
+   *  calls are guarded off and the host is asked to relaunch via "stall". */
+  private stalled = false;
 
   constructor(opts: StreamingWhisperOptions) {
     super();
     this.chunkIntervalMs = opts.chunkIntervalMs ?? 1500;
+    this.passTimeoutMs = opts.passTimeoutMs ?? 30000;
     this.native = opts.native ?? loadNativeAddon(opts.appRoot ?? "", opts.isPackaged ?? false);
     const ok = this.native.init(opts.modelPath);
     if (!ok) {
@@ -134,6 +156,9 @@ export class StreamingWhisperRunner extends EventEmitter {
     if (this.released) {
       throw new Error("StreamingWhisperRunner.start() called after release()");
     }
+    if (this.stalled) {
+      throw new Error("StreamingWhisperRunner.start() called after a stall (awaiting relaunch)");
+    }
     this.native.start();
     this.committed = "";
     this.currentLanguage = language;
@@ -143,7 +168,7 @@ export class StreamingWhisperRunner extends EventEmitter {
   }
 
   feedSamples(samples: Float32Array): void {
-    if (!this.active || this.released) return;
+    if (!this.active || this.released || this.stalled) return;
     this.native.feedSamples(samples);
   }
 
@@ -160,7 +185,7 @@ export class StreamingWhisperRunner extends EventEmitter {
    *  one final inference pass and return the final text. After resolving,
    *  the runner is ready for another start(). */
   async finalize(language: string): Promise<string> {
-    if (this.released) return "";
+    if (this.released || this.stalled) return "";
     this.currentLanguage = language;
     this.stopChunkLoop();
     if (this.inFlight) {
@@ -173,29 +198,25 @@ export class StreamingWhisperRunner extends EventEmitter {
       await this.inFlight.catch(() => undefined);
     }
     this.active = false;
-    if (this.cancelled) return "";
-    const result = new Promise<string>((resolve, reject) => {
-      this.native.finalize(language, (err, text, info) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        if (info) this.emit("timing", { phase: "final", ...info } as PassTiming);
-        resolve(text);
-      });
-    });
+    // The in-flight chunk may have stalled while we awaited it above — if so the
+    // context is poisoned; don't launch the final pass (it would block forever
+    // on the held inference mutex). The "stall" event already asked for relaunch.
+    if (this.cancelled || this.stalled) return "";
     // Track the final pass in `inFlight` until it settles. The chunk loop is
     // already stopped, but the idle keepalive timer is not — without this guard
     // a keepalive tick during the final pass fires a second whisper_full
     // concurrently on the same context, corrupting ggml's graph allocator
     // (ggml_abort / SIGABRT). With it, runKeepaliveIfIdle sees inFlight and skips.
-    const job = result.then(
+    const pass = this.runNativePass("final", (cb) => this.native.finalize(language, cb));
+    const job = pass.then(
       () => undefined,
       () => undefined,
     );
     this.inFlight = job;
     try {
-      return await result;
+      const { text, info } = await pass;
+      if (info) this.emit("timing", { phase: "final", ...info } as PassTiming);
+      return text;
     } finally {
       if (this.inFlight === job) this.inFlight = null;
     }
@@ -212,19 +233,82 @@ export class StreamingWhisperRunner extends EventEmitter {
     this.native.release();
   }
 
+  /**
+   * Tear down for app quit WITHOUT calling the blocking native release().
+   *
+   * The native release() takes the inference mutex to free the model safely —
+   * but a hung whisper_full pass holds that mutex forever, so calling release()
+   * on quit blocks the main thread indefinitely and the app can never quit
+   * (force-quit territory). At process exit the OS reclaims the model and GPU
+   * anyway, so we just stop our timers and let the process die. Use this on
+   * `will-quit`; use release() only for a graceful, non-quit teardown.
+   */
+  shutdown(): void {
+    this.stopChunkLoop();
+    if (this.keepaliveHandle) {
+      clearInterval(this.keepaliveHandle);
+      this.keepaliveHandle = null;
+    }
+    this.active = false;
+    this.released = true;
+  }
+
+  /**
+   * Invoke a native pass and resolve when its callback fires. If the callback
+   * does not arrive within passTimeoutMs the pass is treated as hung — a
+   * whisper_full / Metal stall that holds the inference mutex forever — so we
+   * raise a stall and reject. A callback that arrives after the timeout is
+   * ignored (its worker thread is wedged; we've already moved on / relaunched).
+   */
+  private runNativePass(
+    phase: PassTiming["phase"],
+    arm: (cb: NativeCb) => void,
+  ): Promise<{ text: string; info?: PassInfo }> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.onStall(phase);
+        reject(new Error(`whisper ${phase} pass timed out after ${this.passTimeoutMs}ms`));
+      }, this.passTimeoutMs);
+      arm((err, text, info) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (err) reject(err);
+        else resolve({ text, info });
+      });
+    });
+  }
+
+  /** A native pass hung. The worker thread is stuck inside whisper_full holding
+   *  the inference mutex; we can't recover in-process (init/release would block
+   *  on it too). Stop all scheduling and signal the host to relaunch. */
+  private onStall(phase: PassTiming["phase"]): void {
+    if (this.stalled) return;
+    this.stalled = true;
+    this.active = false;
+    this.stopChunkLoop();
+    if (this.keepaliveHandle) {
+      clearInterval(this.keepaliveHandle);
+      this.keepaliveHandle = null;
+    }
+    this.emit("stall", { phase, timeoutMs: this.passTimeoutMs } as StallInfo);
+  }
+
   /** Run a GPU-warming pass, but only when idle: never while recording (the
    *  chunk loop already exercises the GPU) and never while another inference
    *  is in flight (whisper_full must stay serialized on the single context).
    *  Shares the `inFlight` guard with runChunkIfIdle, so the two are mutually
    *  exclusive. */
   private async runKeepaliveIfIdle(): Promise<void> {
-    if (this.released || this.active || this.inFlight) return;
-    const job = new Promise<void>((resolve) => {
-      this.native.keepalive((_err, _text, info) => {
+    if (this.released || this.active || this.inFlight || this.stalled) return;
+    const job = this.runNativePass("keepalive", (cb) => this.native.keepalive(cb))
+      .then(({ info }) => {
         if (info) this.emit("timing", { phase: "keepalive", ...info } as PassTiming);
-        resolve();
-      });
-    });
+      })
+      .catch(() => undefined); // stall already handled in onStall; don't reject the timer loop
     this.inFlight = job;
     try {
       await job;
@@ -248,18 +332,17 @@ export class StreamingWhisperRunner extends EventEmitter {
   }
 
   private async runChunkIfIdle(): Promise<void> {
-    if (!this.active || this.cancelled || this.released) return;
+    if (!this.active || this.cancelled || this.released || this.stalled) return;
     if (this.inFlight) return;
     const language = this.currentLanguage;
-    const job = new Promise<void>((resolve) => {
-      this.native.processChunk(language, (err, text, info) => {
+    const job = this.runNativePass("chunk", (cb) => this.native.processChunk(language, cb))
+      .then(({ text, info }) => {
         if (info) this.emit("timing", { phase: "chunk", ...info } as PassTiming);
-        if (!err && !this.cancelled && this.active) {
+        if (!this.cancelled && this.active) {
           this.applyChunkText(text);
         }
-        resolve();
-      });
-    });
+      })
+      .catch(() => undefined); // stall already handled in onStall; don't reject the timer loop
     this.inFlight = job;
     try {
       await job;
