@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+  # Allow manual runs (e.g. to validate the build without cutting a release).
+  # On a non-tag run the publish step is skipped; the DMG is still uploaded as
+  # a build artifact.
+  workflow_dispatch: {}
 
 jobs:
   build-dmg:
@@ -16,19 +20,39 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install deps
-        run: npm ci
-
       - name: Install cmake
         run: brew install cmake
 
-      - name: Build native binaries
+      # Build the whisper.cpp / llama.cpp engines FIRST. This also produces the
+      # whisper.cpp headers (resources/bin/build-tmp/whisper.cpp/include) that
+      # the whisper_stream native addon #includes. `npm ci` compiles that addon
+      # on install via node-gyp, so the headers MUST exist before it runs —
+      # otherwise the build fails with "'whisper.h' file not found".
+      - name: Build native engines
         run: npm run fetch-binaries
 
+      - name: Install deps
+        run: npm ci
+
+      # `npm run package` runs electron-builder, which re-runs @electron/rebuild
+      # so the bundled .node matches the Electron ABI (npm ci built it against
+      # the Node ABI). The whisper.cpp headers from the step above are required
+      # here too.
       - name: Package
         run: npm run package
 
-      - name: Upload to release
+      - name: Upload DMG as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-flow-dmg
+          path: release/*.dmg
+          if-no-files-found: error
+
+      # Only publish a GitHub Release on a version tag push. Manual
+      # (workflow_dispatch) runs build and upload the artifact but do not
+      # publish, so they can't create a bogus branch-named release.
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.dmg

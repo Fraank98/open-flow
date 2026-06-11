@@ -12,7 +12,7 @@ import { createDefaultTextInjector } from "./text-injector.js";
 import { createLogger } from "./logger.js";
 import { WhisperRunner } from "./whisper-runner.js";
 import { WhisperServer } from "./whisper-server.js";
-import { StreamingWhisperRunner, PartialTranscript, PassTiming } from "./streaming-whisper-runner.js";
+import { StreamingWhisperRunner, PartialTranscript, PassTiming, StallInfo } from "./streaming-whisper-runner.js";
 import { LLMCleaner } from "./llm-cleaner.js";
 import { LLMServer } from "./llm-server.js";
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
@@ -178,6 +178,11 @@ async function main(): Promise<void> {
       // doesn't pay the ~10x cold-start ramp (the powerSaveBlocker prevents
       // process suspension but not GPU clock-down).
       keepaliveIntervalMs: 20_000,
+      // Watchdog: a whisper_full pass occasionally hangs forever (Metal/GPU
+      // stall), holding the inference mutex — that froze dictation AND blocked
+      // app quit (force-quit territory). 30s is well above the worst legit cold
+      // pass (~11s observed); past it we treat the pass as hung and relaunch.
+      passTimeoutMs: 30_000,
     });
     streamingWhisper.on("partial", (p: PartialTranscript) => {
       void logger.info("partial transcript", { newSuffix: p.newSuffix });
@@ -192,6 +197,17 @@ async function main(): Promise<void> {
       const meta = { phase: t.phase, queueMs: t.queueMs, execMs: t.execMs, aborted: t.aborted };
       if (t.phase === "keepalive") void logger.debug("whisper pass timing", meta);
       else void logger.info("whisper pass timing", meta);
+    });
+    // A hung whisper_full pass poisons the single in-process whisper context and
+    // can't be recovered in-process (it blocks quit too). Relaunch with a fresh
+    // process/GPU context — converts an unrecoverable freeze into an auto-restart.
+    streamingWhisper.on("stall", (s: StallInfo) => {
+      void logger.error("whisper pass stalled — relaunching app", {
+        phase: s.phase,
+        timeoutMs: s.timeoutMs,
+      });
+      app.relaunch();
+      app.exit(0);
     });
     await logger.info("streaming whisper ready", { loadMs: Date.now() - t0 });
   } catch (err) {
@@ -481,7 +497,10 @@ async function main(): Promise<void> {
   app.on("will-quit", () => {
     ptt.stop();
     if (powerSaveBlocker.isStarted(powerSaveBlockerId)) powerSaveBlocker.stop(powerSaveBlockerId);
-    if (streamingWhisper) streamingWhisper.release();
+    // shutdown(), NOT release(): release() blocks on the native inference mutex,
+    // which a hung pass holds forever — that would freeze quit. The OS reclaims
+    // the model/GPU on process exit.
+    if (streamingWhisper) streamingWhisper.shutdown();
     whisperServer.stop();
     llmServer.stop();
     overlay.destroy();

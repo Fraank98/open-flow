@@ -1,8 +1,8 @@
 # Open Flow
 
-Local-first dictation app for macOS. Hotkey → record → Whisper → LLM cleanup → paste into the active text field.
+Local-first dictation app for macOS — a Wispr Flow-style replica that runs entirely on-device. Hold a key, speak, and your words are transcribed, cleaned up, and pasted into whatever text field has focus. Speech-to-text and cleanup both run locally; nothing is sent to the cloud.
 
-Status: **foundation phase** — headless core modules only. No GUI yet.
+**Pipeline:** hold Option → record → streaming Whisper → spoken punctuation + custom dictionary → optional local LLM cleanup → paste into the active text field.
 
 ## Requirements
 
@@ -40,23 +40,25 @@ npm run smoke -- --wav test/fixtures/audio/en-short-clean.wav
 npm run dev
 ```
 
-Launches a menubar tray icon. Press `Option+Space` over any text field to start dictation; press again to stop. See `docs/electron-smoke-checklist.md` for the full manual test plan.
+Launches a menubar tray icon. Hold either **Option** key over any text field to dictate; release to transcribe and paste. See `docs/electron-smoke-checklist.md` for the full manual test plan.
 
 ## Project layout
 
-See `docs/superpowers/specs/2026-05-21-open-flow-mvp-design.md` for the full design.
+See `docs/superpowers/specs/2026-05-21-open-flow-mvp-design.md` for the original design.
 
-Headless modules live under `src/main/`:
-- `whisper-runner.ts` — spawns `whisper-cli`
-- `llm-cleaner.ts` — spawns `llama-cli` with cleanup prompt + sanitizer
-- `logger.ts` — file logger with rotation
-- `utils/` — WAV encoder, prompt template, output sanitizer, model paths
+Main-process modules live under `src/main/`:
+- `ptt-manager.ts` / `hotkey-manager.ts` — push-to-talk on the Option key
+- `streaming-whisper-runner.ts` — in-process streaming transcription via the `whisper_stream` native addon (`native/whisper-stream/`), with `whisper-server.ts` as a batch fallback
+- `llm-server.ts` / `llm-cleaner.ts` — local `llama-server` cleanup pass with a removal-only output sanitizer
+- `pipeline-coordinator.ts` — orchestrates transcribe → spoken punctuation → custom dictionary → cleanup → paste
+- `preferences-window.ts`, `setup-wizard.ts`, `model-manager.ts`, `overlay-window.ts`, `menubar-app.ts` — the GUI shell
+- `utils/` — spoken punctuation, dictionary correction, initial-prompt builder, WAV encoder, prompt template, output sanitizer, model paths
 
-## Known limitations (foundation phase)
+## Known limitations
 
-- Output sanitizer doesn't yet strip llama.cpp end-of-text markers (`<<</transcript>`, `[end of text]`) that may leak into cleaned output. Hardening pass in Plan 2.
-- On Apple Silicon, Node must run natively (arm64). The build script auto-reexecs via `arch -arm64` if needed, but tests assume the runtime path is also arm64.
-- Tiny Whisper model produces imperfect transcriptions — fine for integration tests, but use `base` or larger for real use.
+- On Apple Silicon, Node and the native addons must run as arm64. The build script auto-reexecs via `arch -arm64` if needed; rebuild native addons with `electron-rebuild -f --arch arm64` (the dev shell's Rosetta x86_64 node otherwise produces an incompatible `.node`).
+- The tiny dev Whisper model used by the test fixtures produces imperfect transcriptions — fine for integration tests, but the app downloads `base` or larger for real use.
+- The packaged build is unsigned, so the first launch needs **right-click → Open**.
 
 ## Status
 
@@ -74,7 +76,7 @@ On first launch, a setup wizard walks you through:
 2. Picking a quality tier (Fast / Balanced / Max)
 3. Downloading the chosen AI models
 
-Then press `Option+Space` over any text field to start dictating.
+Then hold the **Option** key over any text field to start dictating, and release to paste.
 
 ## Build a release locally
 
@@ -85,3 +87,12 @@ npm run package
 ```
 
 Produces `release/open-flow-<version>-arm64.dmg`. See `docs/release-process.md` for the full release workflow.
+
+## License
+
+open-flow is **source-available, not open source**, under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). You may use, modify, and
+share it for **noncommercial purposes only**. Commercial use — selling it,
+offering it as a paid service, or bundling it into a paid product — is reserved
+to the project owner. See [CONTRIBUTING.md](CONTRIBUTING.md) for how
+contributions are licensed.
