@@ -9,6 +9,13 @@ on:
   # a build artifact.
   workflow_dispatch: {}
 
+# softprops/action-gh-release creates a GitHub Release, which needs write access
+# to repo contents. The repo's default workflow token is read-only, so grant the
+# scope explicitly here (otherwise the publish step fails with HTTP 403
+# "Resource not accessible by integration").
+permissions:
+  contents: write
+
 jobs:
   build-dmg:
     runs-on: macos-14
