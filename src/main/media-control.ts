@@ -57,9 +57,16 @@ export class MediaController {
 }
 
 /**
- * One AppleScript that checks each KNOWN_PLAYERS app's `player state`, pauses
- * the ones that are playing, and emits a comma-separated list of paused names
- * on stdout. Single osascript spawn per arm.
+ * Detect which KNOWN_PLAYERS are running. CRITICAL: this script talks ONLY to
+ * System Events — it never names a player's scripting dictionary. macOS compiles
+ * an AppleScript in full before running it, so a `tell application "Spotify"`
+ * block fails to *compile* (not just fail at runtime) when Spotify is not
+ * installed: the terms `player state`/`playing` can't resolve, raising error
+ * -2741. The old design put both players' tell-blocks in one combined script, so
+ * an absent Spotify took the Music block down with it and nothing got paused
+ * even while Music was playing. By generating an app's tell-block only after we
+ * know that app is running (below), every tell-block we ever compile is backed
+ * by a loadable dictionary.
  *
  * Process check via System Events (not AppleScript's `application "X" is
  * running`): the latter can return true for background helpers/daemons like
@@ -68,47 +75,35 @@ export class MediaController {
  * prompt. `exists process "X"` looks at the visible process list (Activity
  * Monitor's Applications section), so only a real GUI presence counts.
  */
-const PAUSE_SCRIPT = `
-tell application "System Events"
-  set spotifyRunning to (exists process "Spotify")
-  set musicRunning to (exists process "Music")
-end tell
-set out to ""
-if spotifyRunning then
-  tell application "Spotify"
-    if player state is playing then
-      pause
-      set out to out & "Spotify"
-    end if
-  end tell
-end if
-if musicRunning then
-  tell application "Music"
-    if player state is playing then
-      pause
-      if out is not "" then set out to out & ","
-      set out to out & "Music"
-    end if
-  end tell
-end if
-return out
-`;
+function buildRunningPlayersScript(): string {
+  const checks = KNOWN_PLAYERS.map((a) => `  if (exists process "${a}") then set out to out & "${a},"`).join(
+    "\n",
+  );
+  return `tell application "System Events"\n  set out to ""\n${checks}\nend tell\nreturn out`;
+}
 
-function buildResumeScript(apps: readonly string[]): string {
-  const safeApps = apps.filter((a) => (KNOWN_PLAYERS as readonly string[]).includes(a));
-  if (safeApps.length === 0) return "";
-  // Same process-check rationale as PAUSE_SCRIPT: skip apps whose GUI is not
-  // actually open, so resume never accidentally launches a quit player.
-  const checks = safeApps
-    .map((a) => `  set ${a.toLowerCase()}Running to (exists process "${a}")`)
-    .join("\n");
-  const tells = safeApps
-    .map(
-      (a) =>
-        `if ${a.toLowerCase()}Running then tell application "${a as KnownPlayer}" to play`,
-    )
-    .join("\n");
-  return `tell application "System Events"\n${checks}\nend tell\n${tells}`;
+/** Self-contained pause script for ONE app. Only ever built for an app already
+ *  confirmed running, so its `tell` block always compiles. Echoes the app name
+ *  on stdout iff it was playing and got paused. */
+function buildPauseScript(app: KnownPlayer): string {
+  return `tell application "${app}"
+  if player state is playing then
+    pause
+    return "${app}"
+  end if
+end tell
+return ""`;
+}
+
+/** Self-contained resume script for ONE app. Same compile-safety contract as
+ *  buildPauseScript: only call for an app known to be running. The System
+ *  Events guard skips apps whose GUI has since quit, so resume never relaunches
+ *  a closed player. */
+function buildResumeScript(app: KnownPlayer): string {
+  return `tell application "System Events"
+  set isRunning to (exists process "${app}")
+end tell
+if isRunning then tell application "${app}" to play`;
 }
 
 async function runOsa(script: string): Promise<string> {
@@ -116,21 +111,48 @@ async function runOsa(script: string): Promise<string> {
   return stdout.trim();
 }
 
-/** Default scripter that shells out to /usr/bin/osascript. */
-export function createDefaultScripter(): MediaScripter {
+function isKnownPlayer(s: string): s is KnownPlayer {
+  return (KNOWN_PLAYERS as readonly string[]).includes(s);
+}
+
+/**
+ * Default scripter that shells out to /usr/bin/osascript. The osascript runner
+ * is injectable so the per-app fault-isolation logic can be unit-tested without
+ * spawning real processes (see media-control.test.ts).
+ */
+export function createDefaultScripter(run: (script: string) => Promise<string> = runOsa): MediaScripter {
   return {
     async pauseRunningPlayers(): Promise<readonly string[]> {
-      const out = await runOsa(PAUSE_SCRIPT);
-      if (!out) return [];
-      return out
+      const detected = await run(buildRunningPlayersScript());
+      const running = detected
         .split(",")
         .map((s) => s.trim())
-        .filter((s) => (KNOWN_PLAYERS as readonly string[]).includes(s));
+        .filter(isKnownPlayer);
+      const paused: string[] = [];
+      // One osascript spawn per running player. Each is isolated: if one app's
+      // script throws (Automation denied, timeout, a dictionary hiccup), the
+      // others still get paused — the whole point of dropping the combined
+      // script. Sequential, but this is fire-and-forget and never blocks the
+      // dictation pipeline (at most KNOWN_PLAYERS.length spawns).
+      for (const app of running) {
+        try {
+          const out = await run(buildPauseScript(app));
+          if (out.trim() === app) paused.push(app);
+        } catch {
+          // best-effort: a failure here must not stop us pausing other players
+        }
+      }
+      return paused;
     },
     async resumePlayers(apps: readonly string[]): Promise<void> {
-      const script = buildResumeScript(apps);
-      if (!script) return;
-      await runOsa(script);
+      for (const app of apps) {
+        if (!isKnownPlayer(app)) continue;
+        try {
+          await run(buildResumeScript(app));
+        } catch {
+          // best-effort: an app may have quit between pause and resume
+        }
+      }
     },
   };
 }
