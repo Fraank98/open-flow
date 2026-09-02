@@ -72,7 +72,16 @@ std::string runWhisperFull(const std::vector<float>& samples, const std::string&
   params.print_realtime = false;
   params.print_special = false;
   params.print_timestamps = false;
-  params.no_timestamps = true;
+  // MUST stay false. whisper.cpp derives how far to advance the sliding
+  // 30s window from the last timestamp token; with no_timestamps=true it
+  // instead hard-codes seek_delta = 100*WHISPER_CHUNK_SIZE (whisper.cpp
+  // src/whisper.cpp:5920-5923), so whatever the decoder left untranscribed
+  // in a window is skipped for good. A natural pause makes the decoder emit
+  // EOT early, and every word between that point and the 30s boundary is
+  // then silently dropped — reproduced as speech at 22-30s vanishing from a
+  // 36s utterance. Timestamps are not printed (print_timestamps=false) and
+  // never reach the output: whisper_full_get_segment_text returns text only.
+  params.no_timestamps = false;
   params.single_segment = false;
   params.suppress_blank = true;
   params.suppress_non_speech_tokens = true;
