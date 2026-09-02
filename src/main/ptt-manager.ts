@@ -1,12 +1,15 @@
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
-type NativePttState = "DOWN" | "UP" | "CHORD";
+/** States the native monitor reports. "DESYNC" is purely diagnostic: it means
+ *  the addon's cached Option state disagreed with the live modifier flags, i.e.
+ *  a flagsChanged edge was dropped (an NSEvent global monitor never sees events
+ *  routed to our own windows, nor anything while Secure Input is engaged). */
+export type NativePttState = "DOWN" | "UP" | "CHORD" | "DESYNC";
 
 interface NativePttModule {
-  start: (cb: (state: NativePttState) => void) => boolean;
+  start: (cb: (state: NativePttState, detail?: string) => void) => boolean;
   stop: () => void;
   isTrusted: () => boolean;
   requestTrust: () => boolean;
@@ -40,11 +43,14 @@ function loadNativeAddon(appRoot: string, isPackaged: boolean): NativePttModule 
 
 export interface PTTManagerOptions {
   /** Repo root (for dev) or asar root (for packaged). Used to resolve the native addon. */
-  appRoot: string;
+  appRoot?: string;
   /** Whether the app is running from a packaged .app bundle. */
-  isPackaged: boolean;
+  isPackaged?: boolean;
   /** Minimum hold duration to count as PTT vs accidental tap (ms). */
   minHoldMs?: number;
+  /** Injected native addon, for tests. Defaults to loading the built .node
+   *  from appRoot. When provided, appRoot/isPackaged are unused. */
+  native?: NativePttModule;
 }
 
 /**
@@ -61,6 +67,7 @@ export interface PTTManagerOptions {
  *   - 'cancel' if the user releases before minHoldMs (accidental tap)
  *   - 'trustRequired' if Accessibility is not granted
  *   - 'ready'  after the monitor is armed
+ *   - 'rawEvent' (state, detail) for every native event, diagnostics included
  */
 export class PTTManager extends EventEmitter {
   private readonly native: NativePttModule;
@@ -74,7 +81,8 @@ export class PTTManager extends EventEmitter {
   constructor(opts: PTTManagerOptions) {
     super();
     this.minHoldMs = opts.minHoldMs ?? 150;
-    this.native = loadNativeAddon(opts.appRoot, opts.isPackaged);
+    this.native =
+      opts.native ?? loadNativeAddon(opts.appRoot ?? "", opts.isPackaged ?? false);
   }
 
   start(): void {
@@ -85,7 +93,7 @@ export class PTTManager extends EventEmitter {
       this.emit("trustRequired");
       return;
     }
-    const installed = this.native.start((state) => this.handleState(state));
+    const installed = this.native.start((state, detail) => this.handleState(state, detail));
     if (!installed) {
       this.emit("trustRequired");
       return;
@@ -107,8 +115,11 @@ export class PTTManager extends EventEmitter {
     return this.native.isTrusted();
   }
 
-  private handleState(state: NativePttState): void {
-    this.emit("rawEvent", state);
+  private handleState(state: NativePttState, detail?: string): void {
+    this.emit("rawEvent", state, detail);
+    // Observation only — a dropped-edge report must never arm, start or cancel
+    // a gesture, so it stops here before touching the state machine.
+    if (state === "DESYNC") return;
     if (state === "DOWN") {
       if (this.heldSince !== null) return;
       this.heldSince = Date.now();

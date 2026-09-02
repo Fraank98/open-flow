@@ -379,9 +379,11 @@ async function main(): Promise<void> {
   });
 
   // Diagnostic: log every raw NSEvent we receive so duplicate-fire bugs
-  // can be diagnosed from the log.
-  ptt.on("rawEvent", (state: string) => {
-    void logger.info("PTT rawEvent", { state });
+  // can be diagnosed from the log. `detail` carries the keyCode behind a CHORD
+  // (which distinguishes a genuine Option shortcut from a spurious one) and the
+  // cached-vs-live comparison behind a DESYNC.
+  ptt.on("rawEvent", (state: string, detail?: string) => {
+    void logger.info("PTT rawEvent", { state, detail });
   });
 
   // Global busy flag: prevent a second 'stop' from firing while a pipeline
