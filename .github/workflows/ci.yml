@@ -17,21 +17,27 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
-
+      # The engines MUST be built before `npm ci`. Installing runs node-gyp,
+      # which compiles the whisper_stream addon, which #includes whisper.h from
+      # resources/bin/build-tmp/whisper.cpp/include — produced by this step.
+      # With the old ordering every CI run died on "'whisper.h' file not found".
+      # release.yml already builds in this order (see 76daf00); this mirrors it.
+      # The cache covers build-tmp too, so a hit restores the headers as well.
       - name: Cache native binaries
         id: cache-binaries
         uses: actions/cache@v4
         with:
           path: resources/bin
-          key: native-bins-v1-${{ runner.os }}-${{ hashFiles('scripts/fetch-binaries.sh') }}
+          key: native-bins-v2-${{ runner.os }}-${{ hashFiles('scripts/fetch-binaries.sh') }}
 
       - name: Build native binaries
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: |
           brew install cmake
           npm run fetch-binaries
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Cache fixture models
         id: cache-models
