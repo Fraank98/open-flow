@@ -24,13 +24,18 @@ extraResources:
     filter:
       - "whisper-server"
       - "llama-server"
+      # Silero VAD model — without it whisper_full runs with VAD disabled and
+      # hallucinates filler text on silence.
+      - "ggml-silero-*.bin"
   # Streaming Whisper native addon ships these dylibs alongside the .node.
   # Placed at Contents/Resources/lib/ so the .node's @rpath finds them.
   - from: resources/bin/lib
     to: lib
     filter:
       - "libwhisper*.dylib"
-      - "libggml.dylib"
+      # ggml was split into libggml, -base, -cpu, -metal and -blas in
+      # whisper.cpp v1.9.2; all of them are loaded at runtime.
+      - "libggml*.dylib"
 
 asar: true
 

@@ -14,7 +14,7 @@ export interface PassInfo {
 type NativeCb = (err: Error | null, text: string, info?: PassInfo) => void;
 
 interface NativeWhisperStream {
-  init: (modelPath: string) => boolean;
+  init: (modelPath: string, vadModelPath?: string) => boolean;
   start: (initialPrompt?: string) => void;
   feedSamples: (samples: Float32Array) => void;
   processChunk: (language: string, cb: NativeCb) => void;
@@ -55,6 +55,10 @@ export interface StreamingWhisperOptions {
   appRoot?: string;
   isPackaged?: boolean;
   modelPath: string;
+  /** Silero VAD model shipped alongside the engines. When set, speech-only
+   *  regions reach the decoder, which stops Whisper from hallucinating filler
+   *  ("Grazie.", "Thank you.") on silence. Omit to disable VAD. */
+  vadModelPath?: string;
   /** How often to run processChunk while recording (ms). Default 1500. */
   chunkIntervalMs?: number;
   /** How often to run a keepalive pass while idle (ms) to keep the GPU warm.
@@ -140,7 +144,7 @@ export class StreamingWhisperRunner extends EventEmitter {
     this.chunkIntervalMs = opts.chunkIntervalMs ?? 1500;
     this.passTimeoutMs = opts.passTimeoutMs ?? 30000;
     this.native = opts.native ?? loadNativeAddon(opts.appRoot ?? "", opts.isPackaged ?? false);
-    const ok = this.native.init(opts.modelPath);
+    const ok = this.native.init(opts.modelPath, opts.vadModelPath);
     if (!ok) {
       throw new Error(`whisper_stream init failed for ${opts.modelPath}`);
     }

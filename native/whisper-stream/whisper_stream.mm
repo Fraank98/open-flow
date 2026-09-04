@@ -12,7 +12,7 @@
 //
 // JS API:
 //   const w = require('./build/Release/whisper_stream.node');
-//   w.init(modelPath)         → boolean
+//   w.init(modelPath, vadModelPath?)         → boolean
 //   w.start(initialPrompt?)    → void   (reset utterance state; optional vocab-hint prompt)
 //   w.feedSamples(Float32Array)→ void   (append PCM 16 kHz mono)
 //   w.processChunk(language)   → string (latest full transcript so far)
@@ -50,6 +50,10 @@ std::vector<float> g_samples;
 // g_samplesMutex (utterance state, same lifetime as g_samples).
 std::string g_initialPrompt;
 
+// Path to the Silero VAD model, set once at init(). Empty disables VAD, which
+// keeps the addon working when the model is missing from the bundle.
+std::string g_vadModelPath;
+
 // Guard for the sample buffer only. Lets feedSamples append while a
 // processChunk snapshot has already been taken.
 std::mutex g_samplesMutex;
@@ -67,7 +71,7 @@ bool abortCallback(void * /*user_data*/) {
   return g_abort.load(std::memory_order_relaxed);
 }
 
-std::string runWhisperFull(const std::vector<float>& samples, const std::string& language, const std::string& prompt) {
+std::string runWhisperFull(const std::vector<float>& samples, const std::string& language, const std::string& prompt, bool useVad) {
   if (samples.empty()) return "";
 
   struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
@@ -89,11 +93,34 @@ std::string runWhisperFull(const std::vector<float>& samples, const std::string&
   params.no_timestamps = false;
   params.single_segment = false;
   params.suppress_blank = true;
-  params.suppress_non_speech_tokens = true;
+  // Renamed from suppress_non_speech_tokens in whisper.cpp v1.9.2. Value kept
+  // as-is: it is not what causes the silence hallucination (whisper-cli, which
+  // leaves it at the upstream default of false, hallucinates identically), so
+  // changing it here would be an unrelated behaviour change.
+  params.suppress_nst = true;
   params.n_threads = 4;
   params.no_context = true;
   params.abort_callback = abortCallback;
   params.abort_callback_user_data = nullptr;
+
+  // Voice Activity Detection. Whisper hallucinates its training-set filler
+  // ("Grazie.", "Thank you.") on audio without speech, so hand the decoder only
+  // the regions Silero marks as speech. Verified: 3s of digital silence yields
+  // "Grazie a tutti." without this and nothing with it, while real speech is
+  // untouched.
+  //
+  // NOT enabled for the keepalive pass (useVad=false): that one deliberately
+  // feeds 1.5s of silence to force an encoder run and keep the Metal clocks
+  // hot. With VAD it would find no speech, skip the encoder, and the GPU would
+  // cool down again — reintroducing the cold-start latency it exists to avoid.
+  //
+  // Requires timestamps (no_timestamps=false above): with VAD and timestamps
+  // off, a 36s clip collapsed from 20 sentences to 2.
+  if (useVad && !g_vadModelPath.empty()) {
+    params.vad = true;
+    params.vad_model_path = g_vadModelPath.c_str();
+    params.vad_params = whisper_vad_default_params();
+  }
   if (!prompt.empty()) {
     params.initial_prompt = prompt.c_str();
   }
@@ -119,10 +146,13 @@ std::string runWhisperFull(const std::vector<float>& samples, const std::string&
 Napi::Value LoadModel(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 1 || !info[0].IsString()) {
-    Napi::TypeError::New(env, "Expected (modelPath: string)").ThrowAsJavaScriptException();
+    Napi::TypeError::New(env, "Expected (modelPath: string, vadModelPath?: string)")
+        .ThrowAsJavaScriptException();
     return env.Null();
   }
   std::string modelPath = info[0].As<Napi::String>().Utf8Value();
+  std::string vadModelPath =
+      (info.Length() >= 2 && info[1].IsString()) ? info[1].As<Napi::String>().Utf8Value() : "";
   // Fence model swap against any in-flight pass — see g_inferenceMutex.
   std::lock_guard<std::mutex> lock(g_inferenceMutex);
   if (g_ctx) {
@@ -133,6 +163,7 @@ Napi::Value LoadModel(const Napi::CallbackInfo& info) {
   cparams.use_gpu = true;
   cparams.flash_attn = false;
   g_ctx = whisper_init_from_file_with_params(modelPath.c_str(), cparams);
+  g_vadModelPath = vadModelPath;
   return Napi::Boolean::New(env, g_ctx != nullptr);
 }
 
@@ -177,16 +208,18 @@ Napi::Value FeedSamples(const Napi::CallbackInfo& info) {
 // Must NOT be called concurrently with itself or Finalize on the same context.
 class ProcessWorker : public Napi::AsyncWorker {
  public:
-  ProcessWorker(Napi::Function& callback, std::vector<float> snapshot, std::string language, std::string prompt)
+  ProcessWorker(Napi::Function& callback, std::vector<float> snapshot, std::string language, std::string prompt,
+                bool useVad)
       : AsyncWorker(callback),
         snapshot_(std::move(snapshot)),
         language_(std::move(language)),
         prompt_(std::move(prompt)),
+        useVad_(useVad),
         queued_(std::chrono::steady_clock::now()) {}
 
   void Execute() override {
     execStart_ = std::chrono::steady_clock::now();
-    result_ = runWhisperFull(snapshot_, language_, prompt_);
+    result_ = runWhisperFull(snapshot_, language_, prompt_, useVad_);
     execEnd_ = std::chrono::steady_clock::now();
     aborted_ = g_abort.load(std::memory_order_relaxed);
   }
@@ -210,6 +243,7 @@ class ProcessWorker : public Napi::AsyncWorker {
   std::vector<float> snapshot_;
   std::string language_;
   std::string prompt_;
+  bool useVad_ = false;
   std::string result_;
   std::chrono::steady_clock::time_point queued_;
   std::chrono::steady_clock::time_point execStart_;
@@ -237,7 +271,7 @@ Napi::Value ProcessChunk(const Napi::CallbackInfo& info) {
     cb.Call({env.Null(), Napi::String::New(env, "")});
     return env.Undefined();
   }
-  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language), std::move(prompt));
+  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language), std::move(prompt), true);
   worker->Queue();
   return env.Undefined();
 }
@@ -265,7 +299,7 @@ Napi::Value Finalize(const Napi::CallbackInfo& info) {
     cb.Call({env.Null(), Napi::String::New(env, "")});
     return env.Undefined();
   }
-  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language), std::move(prompt));
+  auto * worker = new ProcessWorker(cb, std::move(snapshot), std::move(language), std::move(prompt), true);
   worker->Queue();
   return env.Undefined();
 }
@@ -290,7 +324,7 @@ Napi::Value Keepalive(const Napi::CallbackInfo& info) {
   // threshold and forces a real encoder pass (~1s) that keeps the Metal
   // pipeline/clocks hot. Cost is ~constant regardless of exact length here.
   std::vector<float> silence(24000, 0.0f);
-  auto * worker = new ProcessWorker(cb, std::move(silence), "en", "");
+  auto * worker = new ProcessWorker(cb, std::move(silence), "en", "", /*useVad=*/false);
   worker->Queue();
   return env.Undefined();
 }

@@ -319,3 +319,49 @@ describe("computeNewSuffix", () => {
     expect(computeNewSuffix("hello world", "   ")).toBe("");
   });
 });
+
+describe("StreamingWhisperRunner VAD wiring", () => {
+  it("forwards the VAD model path to the native init", () => {
+    const seen: Array<string | undefined> = [];
+    const native = {
+      init: (_m: string, vad?: string) => {
+        seen.push(vad);
+        return true;
+      },
+      start: () => {},
+      feedSamples: () => {},
+      processChunk: () => {},
+      requestAbort: () => {},
+      finalize: () => {},
+      keepalive: () => {},
+      release: () => {},
+    };
+    new StreamingWhisperRunner({
+      modelPath: "m",
+      vadModelPath: "/bin/ggml-silero-v6.2.0.bin",
+      native: native as never,
+    });
+    // Without this the addon runs with VAD off and Whisper hallucinates its
+    // training-set filler ("Grazie.", "Thank you.") on silent audio.
+    expect(seen).toEqual(["/bin/ggml-silero-v6.2.0.bin"]);
+  });
+
+  it("leaves the path undefined when no VAD model is configured", () => {
+    const seen: Array<string | undefined> = [];
+    const native = {
+      init: (_m: string, vad?: string) => {
+        seen.push(vad);
+        return true;
+      },
+      start: () => {},
+      feedSamples: () => {},
+      processChunk: () => {},
+      requestAbort: () => {},
+      finalize: () => {},
+      keepalive: () => {},
+      release: () => {},
+    };
+    new StreamingWhisperRunner({ modelPath: "m", native: native as never });
+    expect(seen).toEqual([undefined]);
+  });
+});

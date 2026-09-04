@@ -40,6 +40,7 @@ const BIN_DIR = app.isPackaged
   : join(APP_ROOT, "resources", "bin");
 const WHISPER_SERVER_BIN = join(BIN_DIR, "whisper-server");
 const LLAMA_SERVER_BIN = join(BIN_DIR, "llama-server");
+const VAD_MODEL = join(BIN_DIR, "ggml-silero-v6.2.0.bin");
 
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
@@ -173,6 +174,7 @@ async function main(): Promise<void> {
       appRoot: APP_ROOT,
       isPackaged: app.isPackaged,
       modelPath: whisperModelPath,
+      vadModelPath: VAD_MODEL,
       chunkIntervalMs: 1500,
       // Keep the Metal GPU warm while idle so the first chunk after a pause
       // doesn't pay the ~10x cold-start ramp (the powerSaveBlocker prevents
