@@ -58,4 +58,8 @@ describe("PreferencesStore", () => {
     const raw = await readFile(path, "utf8");
     expect(() => JSON.parse(raw)).not.toThrow();
   });
+
+  it("defaults dictionary to an empty array", () => {
+    expect(DEFAULT_PREFS.dictionary).toEqual([]);
+  });
 });

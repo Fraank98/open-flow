@@ -40,6 +40,16 @@
       </section>
 
       <section>
+        <label for="dictInput">Dictionary</label>
+        <p class="muted">Preferred spellings for names, products, and jargon. Applied to every transcript (no restart needed) and used to nudge Whisper toward the right spelling.</p>
+        <div class="dict-add">
+          <input id="dictInput" type="text" placeholder="e.g. Wispr Flow" />
+          <button id="dictAdd" type="button">Add</button>
+        </div>
+        <ul id="dictList" class="dict-list"></ul>
+      </section>
+
+      <section>
         <label><input type="checkbox" id="launchAtLogin" /> Launch open-flow at login</label>
       </section>
 

@@ -16,6 +16,7 @@ import { StreamingWhisperRunner, PartialTranscript, PassTiming, StallInfo } from
 import { LLMCleaner } from "./llm-cleaner.js";
 import { LLMServer } from "./llm-server.js";
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
+import { buildInitialPrompt } from "./utils/initial-prompt.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
@@ -399,10 +400,15 @@ async function main(): Promise<void> {
     }
     orchestrator.reset();
     if (streamingWhisper) {
-      // Read language synchronously from the last-known prefs — the chunk
-      // loop needs a language hint right away. We re-read prefs again at
-      // finalize time so a Save during recording still takes effect there.
-      streamingWhisper.start(prefs.language);
+      // Read language + dictionary synchronously from last-known prefs — the
+      // chunk loop needs them right away. (Like language, the dictionary's
+      // biasing reflects the launch-time value; the hot, always-correct layer
+      // is the dictionary CORRECTION applied at finalize in the coordinator.)
+      const { prompt, dropped } = buildInitialPrompt(prefs.dictionary);
+      if (dropped.length > 0) {
+        void logger.info("initial_prompt truncated", { dropped });
+      }
+      streamingWhisper.start(prefs.language, prompt);
     }
     recorderWin.webContents.send("audio:start");
   });
@@ -442,6 +448,7 @@ async function main(): Promise<void> {
       await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {
         useLlmCleanup: currentPrefs.useLlmCleanup,
         spokenPunctuation: currentPrefs.spokenPunctuation,
+        dictionary: currentPrefs.dictionary,
       });
       menubar.setStatus("Idle");
     } finally {

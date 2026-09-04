@@ -15,7 +15,7 @@ type NativeCb = (err: Error | null, text: string, info?: PassInfo) => void;
 
 interface NativeWhisperStream {
   init: (modelPath: string) => boolean;
-  start: () => void;
+  start: (initialPrompt?: string) => void;
   feedSamples: (samples: Float32Array) => void;
   processChunk: (language: string, cb: NativeCb) => void;
   /** Raise the cooperative abort flag so an in-flight processChunk returns
@@ -152,14 +152,14 @@ export class StreamingWhisperRunner extends EventEmitter {
     }
   }
 
-  start(language: string): void {
+  start(language: string, initialPrompt?: string): void {
     if (this.released) {
       throw new Error("StreamingWhisperRunner.start() called after release()");
     }
     if (this.stalled) {
       throw new Error("StreamingWhisperRunner.start() called after a stall (awaiting relaunch)");
     }
-    this.native.start();
+    this.native.start(initialPrompt ?? "");
     this.committed = "";
     this.currentLanguage = language;
     this.active = true;
