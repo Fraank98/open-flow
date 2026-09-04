@@ -98,7 +98,7 @@ function applyFuzzy(text: string, terms: string[]): string {
   if (eligible.length === 0) return text;
   const exactLower = new Set(terms.map((t) => t.toLowerCase()));
 
-  const tokenRe = /[\p{L}\p{N}][\p{L}\p{N}''\-]*/gu;
+  const tokenRe = /[\p{L}\p{N}][\p{L}\p{N}''-]*/gu;
   let out = "";
   let last = 0;
   for (const match of text.matchAll(tokenRe)) {
