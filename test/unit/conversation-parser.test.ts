@@ -75,6 +75,20 @@ describe("dedupeByContainment", () => {
     expect(dedupeByContainment([body, full])).toEqual([full]);
   });
 
+  it("drops a fragment contained in a longer one, ignoring a trailing H.MM timestamp", () => {
+    const full = "Marta: possiamo risentirci domani alle 9.05";
+    const body = "possiamo risentirci domani alle";
+    expect(dedupeByContainment([full, body])).toEqual([full]);
+    expect(dedupeByContainment([body, full])).toEqual([full]);
+  });
+
+  it("drops a fragment contained in a longer one, ignoring a trailing AM/PM timestamp", () => {
+    const full = "Marta: lets sync tomorrow 09:12 PM";
+    const body = "lets sync tomorrow";
+    expect(dedupeByContainment([full, body])).toEqual([full]);
+    expect(dedupeByContainment([body, full])).toEqual([full]);
+  });
+
   it("preserves the original order of the survivors", () => {
     const a = "Fulvio: raga il build è rotto, qualcuno ci ha messo mano? 11:04.";
     const b = "Marta: te lo chiedo perché venerdì dovremmo rilasciare 09:13.";

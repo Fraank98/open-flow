@@ -91,7 +91,7 @@ export function dedupeByContainment(fragments: readonly string[]): string[] {
   for (const i of byLengthDesc) {
     const n = normalized[i]!; // i is a valid index of `normalized`
     if (n.length < 2) continue;
-    if (keptIdx.some((k) => normalized[k]!.includes(n))) continue;
+    if (keptIdx.some((k) => normalized[k]!.includes(n))) continue; // k comes from keptIdx, only ever filled with valid indices
     keptIdx.push(i);
   }
   const keep = new Set(keptIdx);
