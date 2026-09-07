@@ -191,6 +191,12 @@ describe("isUserSpeaker", () => {
     expect(isUserSpeaker("DANILO  FRANCO", "Danilo Franco")).toBe(true);
     expect(isUserSpeaker("Nicolò", "Nicolo")).toBe(true);
   });
+  it("matches when the preference extends the speaker by whole trailing tokens", () => {
+    // Preference longer than the speaker: exercises u.startsWith(`${s} `),
+    // the one branch the other cases never hit (they all resolve via
+    // s === first or s.startsWith(`${u} `)).
+    expect(isUserSpeaker("Danilo Franco", "Danilo Franco Rossi")).toBe(true);
+  });
   it("does not match a different person or a prefix that is not a whole token", () => {
     expect(isUserSpeaker("Marta", "Danilo")).toBe(false);
     expect(isUserSpeaker("Daniloz", "Danilo")).toBe(false);
@@ -199,6 +205,13 @@ describe("isUserSpeaker", () => {
   it("never matches when the preference is empty", () => {
     expect(isUserSpeaker("Danilo", "")).toBe(false);
     expect(isUserSpeaker("Danilo", "   ")).toBe(false);
+    // Both empty: without the guard, s === u ("" === "") would coincidentally
+    // match. This is the only input the guard actually changes the outcome
+    // for (see task-3-report.md, "Fix round 1").
+    expect(isUserSpeaker("", "")).toBe(false);
+    // Empty speaker with a real preference: exercises the s.length === 0
+    // half of the guard's condition.
+    expect(isUserSpeaker("", "Danilo")).toBe(false);
   });
 });
 
