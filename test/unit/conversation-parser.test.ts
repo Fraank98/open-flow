@@ -338,6 +338,16 @@ describe("buildTranscript", () => {
   it("rejects a budget below 100", () => {
     expect(() => buildTranscript([marta], { tailBudgetChars: 99 })).toThrow(RangeError);
   });
+
+  it("truncates a subject long enough to overflow the budget by itself", () => {
+    // SUBJECT (`(.+)$`) is uncapped: nothing upstream limits how long a
+    // subject line can be, so the OGGETTO line must be truncated like any
+    // other line, not appended whole.
+    const out = buildTranscript([marta], { tailBudgetChars: 100, subject: "S".repeat(500) });
+    expect(out.length).toBeLessThanOrEqual(100);
+    expect(out.startsWith("OGGETTO: ")).toBe(true);
+    expect(out).toContain("…");
+  });
 });
 
 describe("buildGist", () => {
@@ -358,6 +368,10 @@ describe("buildGist", () => {
     const s = "x".repeat(69) + "?";
     expect(buildGist("M", s)).toBe(`Rispondi a M: ${s}`);
   });
+  it("truncates the first sentence one character above the 70-char threshold", () => {
+    const s = "x".repeat(70) + "?"; // 71 chars: the first value that must be truncated
+    expect(buildGist("M", s)).toBe(`Rispondi a M: ${"x".repeat(69)}…`);
+  });
 });
 
 describe("guessLanguage", () => {
@@ -368,6 +382,9 @@ describe("guessLanguage", () => {
   it("returns 'other' when there is not enough signal", () => {
     expect(guessLanguage("ok")).toBe("other");
     expect(guessLanguage("Kubernetes 1.31 released")).toBe("other");
+  });
+  it("returns 'other' with exactly one function word (the threshold is two)", () => {
+    expect(guessLanguage("il gatto salta sul tavolo")).toBe("other");
   });
 });
 

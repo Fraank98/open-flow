@@ -265,10 +265,28 @@ export function buildTranscript(
   }
   const last = turns[turns.length - 1];
   if (!last) return "";
-  const head = opts.subject !== undefined ? `OGGETTO: ${opts.subject}` : null;
+  const label = roleLabel(last);
+
+  // The subject comes from SUBJECT (`(.+)$`, uncapped) and can be arbitrarily
+  // long, so it must be truncated too, not just appended whole. It is capped
+  // to leave room for at least the floor of lastLine (label + "…" + one
+  // char, the same floor lastLine's own truncation below falls back to) plus
+  // the newline that separates head from the body: this guarantees the
+  // OGGETTO line alone can never push the transcript past tailBudgetChars
+  // (spec, privacy §3.8 — the budget is an invariant, not a best effort).
+  const HEAD_PREFIX = "OGGETTO: ";
+  const minLastLineFloor = label.length + 2;
+  const head = opts.subject === undefined
+    ? null
+    : (() => {
+        const maxHeadLen = Math.max(HEAD_PREFIX.length, opts.tailBudgetChars - 1 - minLastLineFloor);
+        const raw = HEAD_PREFIX + opts.subject;
+        if (raw.length <= maxHeadLen) return raw;
+        const keep = Math.max(HEAD_PREFIX.length, maxHeadLen - 1); // 1 for the ellipsis
+        return `${raw.slice(0, keep).trimEnd()}…`;
+      })();
   const remaining = opts.tailBudgetChars - (head ? head.length + 1 : 0);
 
-  const label = roleLabel(last);
   let lastLine = label + last.text;
   if (lastLine.length > remaining) {
     const keep = Math.max(1, remaining - label.length - 1); // 1 for the ellipsis
