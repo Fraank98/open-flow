@@ -140,3 +140,27 @@ export const CASES: readonly ConversationCase[] = [
 export function axFragments(ax: string): string[] {
   return ax.split("⋄").map((s) => s.trim()).filter((s) => s.length > 0);
 }
+
+/** Names that appear in the corpus: content, hence never allowed in logs. */
+export const CORPUS_NAMES: readonly string[] = ["Marta", "Fulvio", "Francesca", "Giulia", "Helen", "Matteo", "Paolo"];
+
+const WINDOW = 8;
+
+/**
+ * True when `haystack` (a serialized log payload) contains any 8-char window
+ * of any fragment of `ax`, case-insensitively, or any corpus name. This is the
+ * executable form of spec privacy requirement 2: metrics only, never text.
+ */
+export function leaksScreenText(haystack: string, ax: string): boolean {
+  const h = haystack.toLowerCase();
+  for (const name of CORPUS_NAMES) {
+    if (h.includes(name.toLowerCase())) return true;
+  }
+  for (const fragment of axFragments(ax)) {
+    const f = fragment.toLowerCase();
+    for (let i = 0; i + WINDOW <= f.length; i++) {
+      if (h.includes(f.slice(i, i + WINDOW))) return true;
+    }
+  }
+  return false;
+}
