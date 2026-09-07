@@ -210,3 +210,190 @@ export function assignRoles(turns: readonly RawTurn[], userDisplayName: string):
     text: t.text,
   }));
 }
+
+export type AbstainReason =
+  | "no-attributed-turns"
+  | "only-user-turns"
+  | "last-turn-is-user"
+  | "last-message-too-short"
+  | "more-than-two-speakers"
+  | "assistant-speaker";
+
+export type GateResult = { ok: true } | { ok: false; reason: AbstainReason };
+
+/** Speakers that are conversational assistants: out of scope by design
+ *  (spec §Out). Compared against the normalized speaker name. */
+export const ASSISTANT_NAMES: readonly string[] =
+  ["chatgpt", "claude", "gemini", "copilot", "assistant", "assistente"];
+
+const RECENT_TURNS_FOR_SPEAKER_COUNT = 8;
+const LAST_MESSAGE_MIN_CHARS = 15;
+const MIN_TAIL_BUDGET = 100;
+const GIST_MAX_CHARS = 70;
+
+/** Phase 7. All gates are blocking and run in this exact order (spec §3.7).
+ *  Abstaining is the normal outcome, not an error. */
+export function gate(turns: readonly Turn[]): GateResult {
+  const last = turns[turns.length - 1];
+  if (!last) return { ok: false, reason: "no-attributed-turns" };
+  if (ASSISTANT_NAMES.includes(normalizeName(last.speaker))) return { ok: false, reason: "assistant-speaker" };
+  const recent = turns.slice(-RECENT_TURNS_FOR_SPEAKER_COUNT);
+  // The user may appear under several spellings ("Danilo", "Danilo Franco"):
+  // count them as one via the role, not the name.
+  const distinct = new Set(recent.map((t) => (t.role === "user" ? " user" : normalizeName(t.speaker))));
+  if (distinct.size > 2) return { ok: false, reason: "more-than-two-speakers" };
+  if (turns.every((t) => t.role === "user")) return { ok: false, reason: "only-user-turns" };
+  if (last.role === "user") return { ok: false, reason: "last-turn-is-user" };
+  if (last.text.trim().length < LAST_MESSAGE_MIN_CHARS) return { ok: false, reason: "last-message-too-short" };
+  return { ok: true };
+}
+
+function roleLabel(t: Turn): string {
+  return t.role === "user" ? `TU (${t.speaker}): ` : `INTERLOCUTORE (${t.speaker}): `;
+}
+
+/** Phase 8. Tail with a character budget: turns are taken newest-first while
+ *  the whole transcript stays <= tailBudgetChars. The last turn is always
+ *  present; if it alone exceeds the budget it is cut at the HEAD (the
+ *  question is at the end). The subject line, when present, is counted. */
+export function buildTranscript(
+  turns: readonly Turn[],
+  opts: { tailBudgetChars: number; subject?: string },
+): string {
+  if (opts.tailBudgetChars < MIN_TAIL_BUDGET) {
+    throw new RangeError(`tailBudgetChars must be >= ${MIN_TAIL_BUDGET}, got ${opts.tailBudgetChars}`);
+  }
+  const last = turns[turns.length - 1];
+  if (!last) return "";
+  const head = opts.subject !== undefined ? `OGGETTO: ${opts.subject}` : null;
+  const remaining = opts.tailBudgetChars - (head ? head.length + 1 : 0);
+
+  const label = roleLabel(last);
+  let lastLine = label + last.text;
+  if (lastLine.length > remaining) {
+    const keep = Math.max(1, remaining - label.length - 1); // 1 for the ellipsis
+    lastLine = `${label}…${last.text.slice(last.text.length - keep)}`;
+  }
+
+  const lines: string[] = [lastLine];
+  let total = lastLine.length;
+  for (let i = turns.length - 2; i >= 0; i--) {
+    const t = turns[i]!; // i in [0, length-2]
+    const line = roleLabel(t) + t.text;
+    if (total + 1 + line.length > remaining) break;
+    lines.unshift(line);
+    total += 1 + line.length;
+  }
+  return (head ? `${head}\n` : "") + lines.join("\n");
+}
+
+/** Phase 9. "Rispondi a {counterpart}: {frase}" — the first sentence of the
+ *  last message that ends with "?", else its first sentence, cut to 70 chars
+ *  with "…". Deterministic on purpose: the user sees exactly what the code
+ *  took as the question and can reject at a glance. */
+export function buildGist(counterpart: string, lastMessage: string): string {
+  const sentences = lastMessage.trim().split(/(?<=[.!?…])\s+/u).map((s) => s.trim()).filter((s) => s.length > 0);
+  const question = sentences.find((s) => s.endsWith("?"));
+  const chosen = question ?? sentences[0] ?? "";
+  const frase = chosen.length > GIST_MAX_CHARS ? `${chosen.slice(0, GIST_MAX_CHARS - 1).trimEnd()}…` : chosen;
+  return `Rispondi a ${counterpart}: ${frase}`;
+}
+
+// Function words chosen to have no homograph in the other language ("a",
+// "in", "due", "come", "i" are excluded for that reason).
+const IT_WORDS: ReadonlySet<string> = new Set(["il", "la", "di", "che", "e", "non", "per", "un", "una",
+  "con", "sono", "ho", "hai", "è", "ma", "se", "ci", "anche", "del", "della", "le", "gli", "mi", "ti", "lo", "so"]);
+const EN_WORDS: ReadonlySet<string> = new Set(["the", "and", "to", "of", "is", "you", "that", "we", "for",
+  "it", "with", "on", "are", "this", "have", "can", "be", "at", "not", "from", "or", "will", "your", "when", "could"]);
+
+/** Phase 10. Coarse it/en/other guess on function-word counts. Only the
+ *  downstream variant filter uses it (Plan B); "other" is the safe default. */
+export function guessLanguage(text: string): "it" | "en" | "other" {
+  const tokens = text.toLowerCase().match(/\p{L}+/gu) ?? [];
+  let it = 0;
+  let en = 0;
+  for (const t of tokens) {
+    if (IT_WORDS.has(t)) it += 1;
+    if (EN_WORDS.has(t)) en += 1;
+  }
+  if (it >= 2 && it > en) return "it";
+  if (en >= 2 && en > it) return "en";
+  return "other";
+}
+
+export interface ParseInput {
+  fragments: readonly string[];
+  /** Preference, mandatory: empty means every turn is a counterpart's. */
+  userDisplayName: string;
+  /** 2_500 in production (spec §3.8). */
+  tailBudgetChars: number;
+}
+
+/** Counts only — safe to log. */
+export interface ParseStats {
+  fragmentsIn: number;
+  fragmentsKept: number;
+  fragmentsDeduped: number;
+  turns: number;
+  speakers: number;
+  unattributedDropped: number;
+  transcriptChars: number;
+}
+
+export type ParseResult =
+  | { kind: "abstain"; reason: AbstainReason; stats: ParseStats }
+  | {
+      kind: "conversation";
+      subject?: string;
+      turns: Turn[];
+      counterpart: string;
+      transcript: string;
+      lastMessage: string;
+      gist: string;
+      languageGuess: "it" | "en" | "other";
+      stats: ParseStats;
+    };
+
+/** The whole pipeline. Pure: same input, same output; no I/O, no logging. */
+export function parse(input: ParseInput): ParseResult {
+  const normalized = normalizeFragments(input.fragments);
+  const kept = keepContentful(normalized);
+  const deduped = dedupeByContainment(kept);
+  const { turns: raw, subject, unattributedDropped } = toTurns(deduped);
+  const turns = assignRoles(raw, input.userDisplayName);
+  const stats: ParseStats = {
+    fragmentsIn: normalized.length,
+    fragmentsKept: kept.length,
+    fragmentsDeduped: deduped.length,
+    turns: turns.length,
+    speakers: new Set(turns.map((t) => normalizeName(t.speaker))).size,
+    unattributedDropped,
+    transcriptChars: 0,
+  };
+  const g = gate(turns);
+  if (!g.ok) return { kind: "abstain", reason: g.reason, stats };
+  const last = turns[turns.length - 1]!; // gate guarantees at least one turn
+  const transcript = buildTranscript(turns, { tailBudgetChars: input.tailBudgetChars, subject });
+  const result: ParseResult = {
+    kind: "conversation",
+    turns,
+    counterpart: last.speaker,
+    transcript,
+    lastMessage: last.text,
+    gist: buildGist(last.speaker, last.text),
+    languageGuess: guessLanguage(turns.map((t) => t.text).join(" ")),
+    stats: { ...stats, transcriptChars: transcript.length },
+  };
+  if (subject !== undefined) result.subject = subject;
+  return result;
+}
+
+/** What may reach the logger: codes and counts, never text (spec, privacy 2). */
+export function toLogMeta(result: ParseResult): Record<string, string | number | null> {
+  return {
+    kind: result.kind,
+    reason: result.kind === "abstain" ? result.reason : null,
+    languageGuess: result.kind === "conversation" ? result.languageGuess : null,
+    ...result.stats,
+  };
+}

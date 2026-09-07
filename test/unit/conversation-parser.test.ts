@@ -8,6 +8,14 @@ import {
   speakerFromPrefix,
   isUserSpeaker,
   assignRoles,
+  gate,
+  buildTranscript,
+  buildGist,
+  guessLanguage,
+  parse,
+  toLogMeta,
+  ASSISTANT_NAMES,
+  type Turn,
 } from "../../src/main/utils/conversation-parser.js";
 
 describe("normalizeFragments", () => {
@@ -225,5 +233,198 @@ describe("assignRoles", () => {
       { speaker: "Matteo", role: "counterpart", text: "ti ho girato il file" },
       { speaker: "Danilo", role: "user", text: "perfetto grazie" },
     ]);
+  });
+});
+
+const T = (speaker: string, role: "user" | "counterpart", text: string): Turn => ({ speaker, role, text });
+
+describe("gate", () => {
+  it("no-attributed-turns when there are no turns", () => {
+    expect(gate([])).toEqual({ ok: false, reason: "no-attributed-turns" });
+  });
+  it("assistant-speaker when the last speaker is a known assistant, case-insensitive", () => {
+    expect(ASSISTANT_NAMES).toEqual(["chatgpt", "claude", "gemini", "copilot", "assistant", "assistente"]);
+    expect(gate([T("ChatGPT", "counterpart", "Posso prepararti la scheda, quante volte a settimana?")]))
+      .toEqual({ ok: false, reason: "assistant-speaker" });
+    expect(gate([T("GEMINI", "counterpart", "Certo, ecco tre opzioni per il viaggio.")]).ok).toBe(false);
+  });
+  it("more-than-two-speakers when the last 8 turns have 3 distinct counterparts (user counts once)", () => {
+    const turns = [
+      T("Marta", "counterpart", "ci vediamo giovedì o venerdì?"),
+      T("Luca", "counterpart", "per me venerdì va benissimo"),
+      T("Danilo", "user", "anche per me"),
+      T("Danilo Franco", "user", "confermo"),
+      T("Paolo", "counterpart", "io preferirei giovedì, si può fare?"),
+    ];
+    expect(gate(turns)).toEqual({ ok: false, reason: "more-than-two-speakers" });
+  });
+  it("ignores a third speaker older than the last 8 turns", () => {
+    const old = T("Paolo", "counterpart", "messaggio vecchio di un terzo");
+    const recent = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? T("Danilo", "user", `mio ${i}`) : T("Marta", "counterpart", `suo ${i} abbastanza lungo`));
+    expect(gate([old, ...recent]).ok).toBe(true);
+  });
+  it("only-user-turns when every turn is the user's", () => {
+    expect(gate([T("Danilo", "user", "promemoria per me stesso, lungo")]))
+      .toEqual({ ok: false, reason: "only-user-turns" });
+  });
+  it("last-turn-is-user when the user spoke last", () => {
+    expect(gate([T("Matteo", "counterpart", "ti ho girato il file"), T("Danilo", "user", "perfetto grazie")]))
+      .toEqual({ ok: false, reason: "last-turn-is-user" });
+  });
+  it("last-message-too-short below 15 chars, passes at 15", () => {
+    expect(gate([T("Marta", "counterpart", "x".repeat(14))])).toEqual({ ok: false, reason: "last-message-too-short" });
+    expect(gate([T("Marta", "counterpart", "x".repeat(15))])).toEqual({ ok: true });
+  });
+  it("applies the gates in the spec order: assistant beats only-user/last-user", () => {
+    expect(gate([T("Danilo", "user", "prova"), T("Claude", "counterpart", "ok")]))
+      .toEqual({ ok: false, reason: "assistant-speaker" });
+  });
+});
+
+describe("buildTranscript", () => {
+  const marta = T("Marta", "counterpart", "ci vediamo giovedì o venerdì?");
+  const me = T("Danilo", "user", "fammi controllare l'agenda");
+  const lastLine = "INTERLOCUTORE (Marta): ci vediamo giovedì o venerdì?";
+  const meLine = "TU (Danilo): fammi controllare l'agenda";
+
+  it("formats one turn per line with explicit roles, oldest first", () => {
+    expect(buildTranscript([me, marta], { tailBudgetChars: 2500 })).toBe(`${meLine}\n${lastLine}`);
+  });
+
+  it("prepends the subject line when present", () => {
+    expect(buildTranscript([marta], { tailBudgetChars: 2500, subject: "Riunione" }))
+      .toBe(`OGGETTO: Riunione\n${lastLine}`);
+  });
+
+  it("takes turns from the tail, dropping the oldest when the budget is exceeded", () => {
+    const older = T("Marta", "counterpart", "y".repeat(30));
+    // Budget that fits exactly meLine + "\n" + lastLine and nothing more.
+    const budget = Math.max(100, meLine.length + 1 + lastLine.length);
+    const out = buildTranscript([older, me, marta], { tailBudgetChars: budget });
+    expect(out).toBe(`${meLine}\n${lastLine}`);
+    expect(out.length).toBeLessThanOrEqual(budget);
+  });
+
+  it("drops the older turn as soon as the budget is one char short of fitting it", () => {
+    const older = T("Marta", "counterpart", "y".repeat(60));
+    const olderLine = `INTERLOCUTORE (Marta): ${"y".repeat(60)}`;
+    const budget = olderLine.length + 1 + lastLine.length; // >= 100 by construction
+    expect(buildTranscript([older, marta], { tailBudgetChars: budget })).toBe(`${olderLine}\n${lastLine}`);
+    expect(buildTranscript([older, marta], { tailBudgetChars: budget - 1 })).toBe(lastLine);
+  });
+
+  it("always includes the last turn whole when only it fits", () => {
+    const longMe = T("Danilo", "user", "x".repeat(60)); // line = 73 chars: 52 + 1 + 73 > 100
+    expect(buildTranscript([longMe, marta], { tailBudgetChars: 100 })).toBe(lastLine);
+  });
+
+  it("truncates the last turn at the head, never at the tail, when it alone exceeds the budget", () => {
+    const long = T("Marta", "counterpart", `${"a".repeat(200)} la review la fai tu?`);
+    const out = buildTranscript([long], { tailBudgetChars: 100 });
+    expect(out.startsWith("INTERLOCUTORE (Marta): …")).toBe(true);
+    expect(out.endsWith("la review la fai tu?")).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(100);
+  });
+
+  it("counts the subject line against the budget", () => {
+    // Without the subject, meLine + lastLine (92 chars) would fit in 100.
+    // "OGGETTO: " + 30 chars = 39 → remaining 60: only the last turn fits.
+    const out = buildTranscript([me, marta], { tailBudgetChars: 100, subject: "S".repeat(30) });
+    expect(out).toBe(`OGGETTO: ${"S".repeat(30)}\n${lastLine}`);
+    expect(out.length).toBeLessThanOrEqual(100);
+  });
+
+  it("rejects a budget below 100", () => {
+    expect(() => buildTranscript([marta], { tailBudgetChars: 99 })).toThrow(RangeError);
+  });
+});
+
+describe("buildGist", () => {
+  it("uses the first sentence ending with '?'", () => {
+    expect(buildGist("Fulvio", "raga il build di staging è rotto da stamattina, errore sul lockfile. qualcuno ci ha già messo mano?"))
+      .toBe("Rispondi a Fulvio: qualcuno ci ha già messo mano?");
+  });
+  it("falls back to the first sentence when there is no question", () => {
+    expect(buildGist("Marta", "Ci vediamo venerdì. Porto io i documenti.")).toBe("Rispondi a Marta: Ci vediamo venerdì.");
+  });
+  it("truncates the sentence to 70 chars with an ellipsis", () => {
+    const g = buildGist("Giulia Rossi", "Riusciamo a spostare a venerdì stessa ora, o preferisce la settimana prossima?");
+    expect(g.startsWith("Rispondi a Giulia Rossi: Riusciamo a spostare")).toBe(true);
+    expect(g.endsWith("…")).toBe(true);
+    expect(g.length - "Rispondi a Giulia Rossi: ".length).toBeLessThanOrEqual(70);
+  });
+  it("keeps a 70-char sentence untouched", () => {
+    const s = "x".repeat(69) + "?";
+    expect(buildGist("M", s)).toBe(`Rispondi a M: ${s}`);
+  });
+});
+
+describe("guessLanguage", () => {
+  it("detects Italian and English from function words", () => {
+    expect(guessLanguage("ciao, ho visto che la PR è ferma e non so se la review la fai tu")).toBe("it");
+    expect(guessLanguage("we still haven't received the payment, could you confirm when we can expect it?")).toBe("en");
+  });
+  it("returns 'other' when there is not enough signal", () => {
+    expect(guessLanguage("ok")).toBe("other");
+    expect(guessLanguage("Kubernetes 1.31 released")).toBe("other");
+  });
+});
+
+describe("parse", () => {
+  it("returns a conversation with transcript, counterpart, lastMessage, gist, language and stats", () => {
+    const r = parse({
+      fragments: ["Marta: ciao, la review della PR la fai tu o la giro a Paolo? 09:12.", "Invia", "09:12"],
+      userDisplayName: "Danilo",
+      tailBudgetChars: 2500,
+    });
+    expect(r.kind).toBe("conversation");
+    if (r.kind !== "conversation") return;
+    expect(r.counterpart).toBe("Marta");
+    expect(r.lastMessage).toBe("ciao, la review della PR la fai tu o la giro a Paolo?");
+    expect(r.transcript).toBe("INTERLOCUTORE (Marta): ciao, la review della PR la fai tu o la giro a Paolo?");
+    expect(r.gist).toBe("Rispondi a Marta: ciao, la review della PR la fai tu o la giro a Paolo?");
+    expect(r.languageGuess).toBe("it");
+    expect(r.subject).toBeUndefined();
+    expect(r.stats).toEqual({
+      fragmentsIn: 3, fragmentsKept: 1, fragmentsDeduped: 1, turns: 1, speakers: 1,
+      unattributedDropped: 0, transcriptChars: r.transcript.length,
+    });
+  });
+
+  it("abstains with the gate's reason and still reports stats", () => {
+    const r = parse({ fragments: ["Invia", "Allega file"], userDisplayName: "Danilo", tailBudgetChars: 2500 });
+    expect(r.kind).toBe("abstain");
+    if (r.kind !== "abstain") return;
+    expect(r.reason).toBe("no-attributed-turns");
+    expect(r.stats.fragmentsIn).toBe(2);
+    expect(r.stats.turns).toBe(0);
+  });
+
+  it("propagates the budget to the transcript and never truncates lastMessage", () => {
+    const r = parse({
+      fragments: [`Marta: ${"a".repeat(300)} va bene per te? 09:12.`],
+      userDisplayName: "Danilo",
+      tailBudgetChars: 120,
+    });
+    if (r.kind !== "conversation") throw new Error("expected conversation");
+    expect(r.transcript.length).toBeLessThanOrEqual(120);
+    expect(r.lastMessage.length).toBeGreaterThan(300);
+  });
+});
+
+describe("toLogMeta", () => {
+  it("contains only codes and numbers, never text", () => {
+    const r = parse({
+      fragments: ["Marta: ciao, la review della PR la fai tu o la giro a Paolo? 09:12."],
+      userDisplayName: "Danilo",
+      tailBudgetChars: 2500,
+    });
+    const meta = toLogMeta(r);
+    expect(meta).toEqual({ kind: "conversation", reason: null, languageGuess: "it", ...r.stats });
+    for (const v of Object.values(meta)) {
+      if (typeof v === "string") expect(v.length).toBeLessThanOrEqual(24);
+      else expect(v === null || typeof v === "number").toBe(true);
+    }
   });
 });
