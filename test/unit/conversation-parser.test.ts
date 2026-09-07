@@ -4,6 +4,10 @@ import {
   keepContentful,
   dedupeByContainment,
   SENTENCE_MIN,
+  toTurns,
+  speakerFromPrefix,
+  isUserSpeaker,
+  assignRoles,
 } from "../../src/main/utils/conversation-parser.js";
 
 describe("normalizeFragments", () => {
@@ -110,5 +114,103 @@ describe("dedupeByContainment", () => {
 
   it("keeps two unrelated fragments", () => {
     expect(dedupeByContainment(["alpha beta", "gamma delta"])).toEqual(["alpha beta", "gamma delta"]);
+  });
+});
+
+describe("speakerFromPrefix", () => {
+  it("extracts the name from an Italian Mail prefix with time", () => {
+    expect(speakerFromPrefix("Il giorno 4 set 2026, alle ore 11:20, Francesca Bianchi <francesca.bianchi@studiotecnico.example>"))
+      .toBe("Francesca Bianchi");
+  });
+  it("extracts the name from an Italian prefix without comma", () => {
+    expect(speakerFromPrefix("Il giorno 3 set 2026 Giulia Rossi")).toBe("Giulia Rossi");
+  });
+  it("extracts the name from an English prefix", () => {
+    expect(speakerFromPrefix("On 4 Sep 2026, at 09:40, Helen Carter")).toBe("Helen Carter");
+  });
+  it("returns the bare name when there is no prefix", () => {
+    expect(speakerFromPrefix("ChatGPT")).toBe("ChatGPT");
+  });
+  it("falls back to 'Sconosciuto' when nothing is left", () => {
+    expect(speakerFromPrefix("<x@y.example>")).toBe("Sconosciuto");
+  });
+  it("caps the name at 40 characters", () => {
+    expect(speakerFromPrefix("A".repeat(80))).toHaveLength(40);
+  });
+});
+
+describe("toTurns", () => {
+  it("builds a chat turn from 'Name: text HH:MM.' stripping the timestamp", () => {
+    expect(toTurns(["Marta: ciao, la review la fai tu? 09:12."])).toEqual({
+      turns: [{ speaker: "Marta", text: "ciao, la review la fai tu?" }],
+      subject: undefined,
+      unattributedDropped: 0,
+    });
+  });
+
+  it("attaches the fragment after a bare speech marker to that speaker", () => {
+    const body = "Buongiorno, mi devo scusare ma giovedì mi è saltato un imprevisto. Riusciamo a spostare a venerdì?";
+    expect(toTurns(["Il giorno 4 set 2026, alle ore 08:15, Giulia Rossi ha scritto:", body]).turns)
+      .toEqual([{ speaker: "Giulia Rossi", text: body }]);
+  });
+
+  it("builds a turn from a speech marker with the body inline", () => {
+    expect(toTurns(["Il giorno 3 set 2026 Giulia Rossi ha scritto: Buongiorno, confermo il sopralluogo."]).turns)
+      .toEqual([{ speaker: "Giulia Rossi", text: "Buongiorno, confermo il sopralluogo." }]);
+  });
+
+  it("extracts the subject from Re:/Fwd:/Oggetto: lines and does not make them turns", () => {
+    const r = toTurns(["Re: Preventivo revisione impianto", "Marta: ok, procedo 09:12."]);
+    expect(r.subject).toBe("Preventivo revisione impianto");
+    expect(r.turns).toHaveLength(1);
+    expect(toTurns(["Fwd: Bozza", "Oggetto: Altro"]).subject).toBe("Bozza"); // first wins
+  });
+
+  it("appends an unattributed sentence-length fragment to the previous turn", () => {
+    const tail = "x".repeat(60);
+    expect(toTurns(["Marta: ciao 09:12.", tail]).turns).toEqual([{ speaker: "Marta", text: `ciao ${tail}` }]);
+  });
+
+  it("drops (and counts) an unattributed fragment that precedes any turn", () => {
+    const r = toTurns(["x".repeat(60), "Marta: ciao 09:12."]);
+    expect(r.turns).toEqual([{ speaker: "Marta", text: "ciao" }]);
+    expect(r.unattributedDropped).toBe(1);
+  });
+
+  it("keeps the order of turns", () => {
+    const r = toTurns(["Matteo: ti ho girato il file 17:20.", "Danilo: perfetto grazie 17:22."]);
+    expect(r.turns.map((t) => t.speaker)).toEqual(["Matteo", "Danilo"]);
+  });
+});
+
+describe("isUserSpeaker", () => {
+  it("matches the full name and the first token, ignoring case, accents and spacing", () => {
+    expect(isUserSpeaker("Danilo", "Danilo")).toBe(true);
+    expect(isUserSpeaker("danilo", "Danilo Franco")).toBe(true);
+    expect(isUserSpeaker("Danilo Franco", "Danilo")).toBe(true);
+    expect(isUserSpeaker("DANILO  FRANCO", "Danilo Franco")).toBe(true);
+    expect(isUserSpeaker("Nicolò", "Nicolo")).toBe(true);
+  });
+  it("does not match a different person or a prefix that is not a whole token", () => {
+    expect(isUserSpeaker("Marta", "Danilo")).toBe(false);
+    expect(isUserSpeaker("Daniloz", "Danilo")).toBe(false);
+    expect(isUserSpeaker("Dan", "Danilo")).toBe(false);
+  });
+  it("never matches when the preference is empty", () => {
+    expect(isUserSpeaker("Danilo", "")).toBe(false);
+    expect(isUserSpeaker("Danilo", "   ")).toBe(false);
+  });
+});
+
+describe("assignRoles", () => {
+  it("labels the user's turns 'user' and everyone else 'counterpart'", () => {
+    const turns = assignRoles(
+      [{ speaker: "Matteo", text: "ti ho girato il file" }, { speaker: "Danilo", text: "perfetto grazie" }],
+      "Danilo Franco",
+    );
+    expect(turns).toEqual([
+      { speaker: "Matteo", role: "counterpart", text: "ti ho girato il file" },
+      { speaker: "Danilo", role: "user", text: "perfetto grazie" },
+    ]);
   });
 });

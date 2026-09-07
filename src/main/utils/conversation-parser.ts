@@ -97,3 +97,116 @@ export function dedupeByContainment(fragments: readonly string[]): string[] {
   const keep = new Set(keptIdx);
   return fragments.filter((_, i) => keep.has(i));
 }
+
+/** A turn before role assignment. */
+export interface RawTurn {
+  speaker: string;
+  text: string;
+}
+
+/** A turn with its role, as the spec's `Turn`. */
+export interface Turn {
+  speaker: string;
+  role: "user" | "counterpart";
+  text: string;
+}
+
+export interface TurnsResult {
+  turns: RawTurn[];
+  /** From the first Re:/Fwd:/Fw:/Oggetto:/Subject: line, if any. */
+  subject: string | undefined;
+  /** Sentence-length fragments that preceded any turn: counted for the log,
+   *  never kept (nothing to attach them to). */
+  unattributedDropped: number;
+}
+
+const SPEAKER_MAX = 40;
+
+/** From "Il giorno 4 set 2026, alle ore 11:20, Francesca Bianchi <x@y>" to
+ *  "Francesca Bianchi". Strips angle-bracketed addresses, the Italian/English
+ *  date prefixes (with or without the time clause), trailing punctuation. */
+export function speakerFromPrefix(prefix: string): string {
+  const who = prefix
+    .replace(/<[^>]*>/g, "")
+    .replace(/^(?:il giorno|on)\b.*?(?:,\s*(?:alle ore|at)\s*\d{1,2}:\d{2}\s*)?,\s*/i, "")
+    .replace(/^(?:il giorno|on)\s+\S+\s+\S+\s+\d{4},?\s*/i, "")
+    .replace(/[,;]\s*$/, "")
+    .trim()
+    .slice(0, SPEAKER_MAX);
+  return who.length > 0 ? who : "Sconosciuto";
+}
+
+/** Phases 4-5. Rebuilds the message sequence from the two attribution forms
+ *  ("Nome: testo HH:MM." and "X ha scritto:" + body) and pulls the subject
+ *  out. An unattributed sentence-length fragment is appended to the previous
+ *  turn (spec §3, phase 5); before any turn it is dropped and counted. */
+export function toTurns(fragments: readonly string[]): TurnsResult {
+  const turns: RawTurn[] = [];
+  let subject: string | undefined;
+  let pending: string | null = null;
+  let unattributedDropped = 0;
+
+  for (const f of fragments) {
+    const su = SUBJECT.exec(f);
+    if (su) {
+      if (subject === undefined) subject = su[1]!.trim(); // group 1 is mandatory in SUBJECT
+      continue;
+    }
+    const sm = SPEECH_MARKER.exec(f);
+    if (sm) {
+      const who = speakerFromPrefix(sm[1]!); // groups 1 and 2 always exist in SPEECH_MARKER
+      const inline = sm[2]!.trim();
+      if (inline.length >= 2) {
+        turns.push({ speaker: who, text: inline });
+        pending = null;
+      } else {
+        pending = who;
+      }
+      continue;
+    }
+    const am = ATTRIBUTED.exec(f);
+    if (am) {
+      turns.push({ speaker: am[1]!.trim(), text: stripTrailingTime(am[2]!) }); // both groups mandatory
+      pending = null;
+      continue;
+    }
+    if (pending !== null) {
+      turns.push({ speaker: pending, text: stripTrailingTime(f) });
+      pending = null;
+      continue;
+    }
+    if (f.length >= SENTENCE_MIN) {
+      const last = turns[turns.length - 1];
+      if (last) last.text = `${last.text} ${f}`;
+      else unattributedDropped += 1;
+    }
+  }
+  return { turns, subject, unattributedDropped };
+}
+
+/** Case-, accent- and whitespace-insensitive form of a name. */
+function normalizeName(s: string): string {
+  return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Phase 6 criterion. True when the speaker, normalized, equals the
+ *  preference, equals its first token (name without surname), or extends it
+ *  by whole tokens in either direction ("Danilo Franco" vs "Danilo"). An
+ *  empty preference matches nobody: without a name, role inversion is
+ *  inevitable, so the feature must not run (spec §Preferenze). */
+export function isUserSpeaker(speaker: string, userDisplayName: string): boolean {
+  const u = normalizeName(userDisplayName);
+  const s = normalizeName(speaker);
+  if (u.length === 0 || s.length === 0) return false;
+  const first = u.split(" ")[0]!; // split() always yields at least one element
+  return s === u || s === first || s.startsWith(`${u} `) || u.startsWith(`${s} `);
+}
+
+/** Phase 6. */
+export function assignRoles(turns: readonly RawTurn[], userDisplayName: string): Turn[] {
+  return turns.map((t) => ({
+    speaker: t.speaker,
+    role: isUserSpeaker(t.speaker, userDisplayName) ? "user" : "counterpart",
+    text: t.text,
+  }));
+}
