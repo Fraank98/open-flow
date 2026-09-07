@@ -75,18 +75,21 @@ describe("dedupeByContainment", () => {
     expect(dedupeByContainment([body, full])).toEqual([full]);
   });
 
-  it("drops a fragment contained in a longer one, ignoring a trailing H.MM timestamp", () => {
-    const full = "Marta: possiamo risentirci domani alle 9.05";
-    const body = "possiamo risentirci domani alle";
-    expect(dedupeByContainment([full, body])).toEqual([full]);
-    expect(dedupeByContainment([body, full])).toEqual([full]);
+  it("drops the short fragment when its trailing H.MM timestamp is what the strip must remove", () => {
+    // The timestamp lives on the SHORT fragment: containment only succeeds if
+    // stripTrailingTime actually removes it. A prefix-only construction (long
+    // fragment carries the timestamp) would pass even with a broken strip.
+    const full = "Marta: ci vediamo domani";
+    const short = "ci vediamo domani 9.05";
+    expect(dedupeByContainment([full, short])).toEqual([full]);
+    expect(dedupeByContainment([short, full])).toEqual([full]);
   });
 
-  it("drops a fragment contained in a longer one, ignoring a trailing AM/PM timestamp", () => {
-    const full = "Marta: lets sync tomorrow 09:12 PM";
-    const body = "lets sync tomorrow";
-    expect(dedupeByContainment([full, body])).toEqual([full]);
-    expect(dedupeByContainment([body, full])).toEqual([full]);
+  it("drops the short fragment when its trailing AM/PM timestamp is what the strip must remove", () => {
+    const full = "Marta: lets sync tomorrow";
+    const short = "lets sync tomorrow 09:12 PM";
+    expect(dedupeByContainment([full, short])).toEqual([full]);
+    expect(dedupeByContainment([short, full])).toEqual([full]);
   });
 
   it("preserves the original order of the survivors", () => {
