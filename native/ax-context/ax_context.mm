@@ -164,8 +164,14 @@ struct Harvest {
 // independently at maxTotalChars and is NOT counted against this budget —
 // see step 9 in ReadContextUnderCursor.) Landing exactly on the cap with a
 // whole, untruncated fragment does not by itself set h.budgetHit — nothing
-// was lost, so it isn't reported as exceeded; if content beyond it exists,
-// the very next node's entry check catches that honestly instead.
+// was lost. Whether it stays unset depends on what's visited next: the
+// entry check above (depth/nodes/chars/deadline) runs unconditionally at
+// the start of every node — sibling, child, or, once this level's whole
+// subtree is exhausted, the root of the next ancestor level climbed — and
+// fires there regardless of whether that node would have contributed any
+// text. It does not require climbing another level; it only requires one
+// more node anywhere in the walk. Only when there is truly no node left to
+// visit anywhere does the result stay honestly unflagged.
 static void collectSubtree(AXUIElementRef el, int depth, Harvest& h, const Budget& b,
                             NSMutableSet<NSString*>* seen) {
   if (!el || h.budgetHit) return;
@@ -321,11 +327,21 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
   NSUInteger jumpMinChars = kDefaultJumpMinChars;
   NSString* filterMode = nil;
   NSMutableSet<NSString*>* filterBundleIds = nil;
-  // True as soon as the caller included a non-null bundleIdFilter value at
-  // all, even one we can't fully interpret (not an object, missing/non-string
-  // mode). A gate we can't decide from must deny, not fall through to "no
-  // filter configured".
+  // True as soon as the caller included a bundleIdFilter key at all, even
+  // one we can't fully interpret (not an object, missing/non-string mode) —
+  // including an explicit null, which is how a filter typically gets lost
+  // crossing a boundary (a `?? null`, a serialization round-trip, a wrong
+  // default upstream) and, until a TS wrapper exists, this addon is the only
+  // privacy gate the feature has. Only an actually absent key (undefined)
+  // means "no filter requested". A gate we can't decide from must deny, not
+  // fall through to "no filter configured".
   bool filterPresent = false;
+  // True only if "bundleIds" is present AND is an array AND every element in
+  // it is a string. A missing/non-array bundleIds, or one with a non-string
+  // element, is a malformed list — distinct from a well-formed *empty*
+  // array, which is the legitimate way to say "block/allow nothing" and
+  // must keep working.
+  bool bundleIdsWellFormed = false;
 
   if (info.Length() > 0 && info[0].IsObject()) {
     Napi::Object opts = info[0].As<Napi::Object>();
@@ -346,9 +362,9 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
     }
     if (opts.Has("bundleIdFilter")) {
       Napi::Value filterVal = opts.Get("bundleIdFilter");
-      if (!filterVal.IsUndefined() && !filterVal.IsNull()) {
-        filterPresent = true;  // a filter was requested, whether or not we can read it below
-        if (filterVal.IsObject()) {
+      if (!filterVal.IsUndefined()) {
+        filterPresent = true;  // present at all, including null — deny below if unusable
+        if (filterVal.IsObject()) {  // false for null: N-API gives null its own type
           Napi::Object filter = filterVal.As<Napi::Object>();
           if (filter.Has("mode") && filter.Get("mode").IsString()) {
             filterMode = [NSString
@@ -356,20 +372,28 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
           }
           if (filter.Has("bundleIds") && filter.Get("bundleIds").IsArray()) {
             Napi::Array arr = filter.Get("bundleIds").As<Napi::Array>();
-            filterBundleIds = [NSMutableSet setWithCapacity:arr.Length()];
+            NSMutableSet<NSString*>* ids = [NSMutableSet setWithCapacity:arr.Length()];
+            bool allStrings = true;
             for (uint32_t i = 0; i < arr.Length(); i++) {
               Napi::Value v = arr.Get(i);
-              if (v.IsString()) {
-                [filterBundleIds addObject:[NSString stringWithUTF8String:v.As<Napi::String>()
-                                                                                .Utf8Value()
-                                                                                .c_str()]];
+              if (!v.IsString()) {
+                allStrings = false;  // one non-string element makes the whole list malformed
+                break;
               }
+              [ids addObject:[NSString
+                                  stringWithUTF8String:v.As<Napi::String>().Utf8Value().c_str()]];
+            }
+            if (allStrings) {
+              filterBundleIds = ids;  // may legitimately be empty — that's "block/allow nothing"
+              bundleIdsWellFormed = true;
             }
           }
         }
-        // filterVal not an object, or "mode" missing/non-string: filterMode
-        // stays nil. filterPresent is already true, so the gate below still
-        // denies — it does not silently behave as "no filter".
+        // filterVal null, not an object, "mode" missing/non-string, or
+        // "bundleIds" missing/non-array/with a non-string element:
+        // filterMode stays nil and/or bundleIdsWellFormed stays false.
+        // filterPresent is already true, so the gate below still denies —
+        // it does not silently behave as "no filter".
       }
     }
   }
@@ -422,18 +446,23 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
     //     was never told about (blocklist) or admit one it can't recognize
     //     (allowlist), and absent any filter we still don't collect from an
     //     app we can't name.
-    //   - a filter was present (filterPresent) but its "mode" isn't exactly
-    //     "allowlist" or "blocklist" (missing, non-string, unrecognized
-    //     value, or the whole bundleIdFilter wasn't even an object): denied,
-    //     not treated as "no filter".
+    //   - a filter was present (filterPresent — includes an explicit null)
+    //     but its "mode" isn't exactly "allowlist" or "blocklist" (missing,
+    //     non-string, unrecognized value, or the whole bundleIdFilter wasn't
+    //     even an object): denied, not treated as "no filter".
+    //   - "mode" is valid but "bundleIds" isn't a well-formed array of
+    //     strings (bundleIdsWellFormed false — missing, wrong type, or one
+    //     non-string element): denied in both modes. A well-formed *empty*
+    //     array is not this case — bundleIdsWellFormed is still true, and an
+    //     empty allowlist/blocklist legitimately allows nothing/everything.
     bool appIdentified = pidOk && bundleId.length > 0;
     bool allowed = appIdentified;
     if (allowed && filterPresent) {
       bool inList = filterBundleIds && [filterBundleIds containsObject:bundleId];
       if ([filterMode isEqualToString:@"allowlist"]) {
-        allowed = inList;
+        allowed = bundleIdsWellFormed && inList;
       } else if ([filterMode isEqualToString:@"blocklist"]) {
-        allowed = !inList;
+        allowed = bundleIdsWellFormed && !inList;
       } else {
         allowed = false;
       }
