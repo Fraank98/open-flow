@@ -9,7 +9,7 @@ import {
   type NativeContextResult,
   type ReadOptions,
 } from "../../src/main/ax-context-reader.js";
-import { CASES, axFragments, leaksScreenText } from "../fixtures/conversations/spike-corpus.js";
+import { CASES, axFragments, leaksScreenText, type ConversationCase } from "../fixtures/conversations/spike-corpus.js";
 
 function okResult(over: Partial<NativeContextResult> = {}): NativeContextResult {
   return {
@@ -39,6 +39,28 @@ function makeFakeNative(result: NativeContextResult, trusted = true) {
     isTrusted: () => trusted,
   };
   return { native, calls };
+}
+
+/** A logger that records every call as its serialized [msg, meta] pair, so
+ *  privacy tests can scan the exact bytes a real logger would receive. */
+function makeSpyLogger() {
+  const seen: string[] = [];
+  const logger = {
+    info: vi.fn(async (msg: string, meta?: Record<string, unknown>) => { seen.push(JSON.stringify([msg, meta])); }),
+    warn: vi.fn(async (msg: string, meta?: Record<string, unknown>) => { seen.push(JSON.stringify([msg, meta])); }),
+  };
+  return { logger, seen };
+}
+
+/** Fails unless at least one line was logged, and none of them leaks any
+ *  fragment (or name) of the given corpus cases (spec, privacy 2). */
+function assertNoLeak(seen: readonly string[], ...cases: readonly ConversationCase[]): void {
+  expect(seen.length).toBeGreaterThan(0);
+  for (const line of seen) {
+    for (const c of cases) {
+      expect(leaksScreenText(line, c.ax), line).toBe(false);
+    }
+  }
 }
 
 describe("AxContextReader.read", () => {
@@ -92,6 +114,16 @@ describe("AxContextReader.read", () => {
     expect(r.context.editableIsFocused).toBe(true);
   });
 
+  it("computes wrapperMs from the wrapper's own clock, alongside the native timings", () => {
+    const fake = makeFakeNative(okResult());
+    const clock = [100, 137];
+    const r = new AxContextReader({ native: fake.native, now: () => clock.shift() ?? 137 }).read();
+    if (!r.ok) throw new Error(r.reason);
+    // okResult()'s native timings are elementAtPositionMs:31, collectMs:23, totalMs:60;
+    // wrapperMs must be the wrapper's own 137-100=37, not a copy of any native field.
+    expect(r.context.timings).toEqual({ elementAtPositionMs: 31, collectMs: 23, totalMs: 60, wrapperMs: 37 });
+  });
+
   it("falls back to the richest level when the addon found no jump", () => {
     const fake = makeFakeNative(okResult({ chosenLevel: -1 }));
     const r = new AxContextReader({ native: fake.native }).read();
@@ -131,9 +163,10 @@ describe("AxContextReader.read", () => {
 });
 
 describe("AxContextReader — privacy", () => {
-  it("non passa mai al logger testo letto dallo schermo", () => {
-    const slack = CASES[0]!;   // slack-decisione
-    const mail = CASES[2]!;    // mail-preventivo (used as marker text)
+  const slack = CASES[0]!;   // slack-decisione
+  const mail = CASES[2]!;    // mail-preventivo (used as marker text)
+
+  it("non passa mai al logger testo letto dallo schermo (successo)", () => {
     const result = okResult({
       levels: [
         { depth: 0, chars: 17, fragments: ["Messaggio a Marta"] },
@@ -142,19 +175,70 @@ describe("AxContextReader — privacy", () => {
       chosenLevel: 1,
       webkitMarkerText: axFragments(mail.ax).join("\n"),
     });
-    const seen: string[] = [];
-    const logger = {
-      info: vi.fn(async (msg: string, meta?: Record<string, unknown>) => { seen.push(JSON.stringify([msg, meta])); }),
-      warn: vi.fn(async (msg: string, meta?: Record<string, unknown>) => { seen.push(JSON.stringify([msg, meta])); }),
-    };
+    const { logger, seen } = makeSpyLogger();
     const fake = makeFakeNative(result);
     const r = new AxContextReader({ native: fake.native, logger }).read();
     expect(r.ok).toBe(true);
-    expect(seen.length).toBeGreaterThan(0);
-    for (const line of seen) {
-      expect(leaksScreenText(line, slack.ax), line).toBe(false);
-      expect(leaksScreenText(line, mail.ax), line).toBe(false);
-    }
+    assertNoLeak(seen, slack, mail);
+  });
+
+  it("non passa mai al logger testo letto dallo schermo (not-trusted)", () => {
+    // Real corpus content sits in the native result to prove that even a
+    // native mock loaded with content leaks nothing when isTrusted() gates
+    // the call before the native reader is ever invoked.
+    const result = okResult({
+      levels: [{ depth: 7, chars: slack.ax.length, fragments: axFragments(slack.ax) }],
+      chosenLevel: 0,
+    });
+    const { logger, seen } = makeSpyLogger();
+    const fake = makeFakeNative(result, false);
+    const r = new AxContextReader({ native: fake.native, logger }).read();
+    expect(r.ok === false && r.reason).toBe("not-trusted");
+    assertNoLeak(seen, slack);
+  });
+
+  it("non passa mai al logger testo letto dallo schermo (timeout)", () => {
+    const result = okResult({
+      levels: [{ depth: 7, chars: slack.ax.length, fragments: axFragments(slack.ax) }],
+      chosenLevel: 0,
+    });
+    const { logger, seen } = makeSpyLogger();
+    const fake = makeFakeNative(result);
+    const clock = [0, 501];
+    const r = new AxContextReader({ native: fake.native, logger, now: () => clock.shift() ?? 501 }).read();
+    expect(r.ok === false && r.reason).toBe("timeout");
+    assertNoLeak(seen, slack);
+  });
+
+  it("non passa mai al logger testo letto dallo schermo (nativo fallito)", () => {
+    const result = okResult({
+      ok: false,
+      reason: "budget-exceeded",
+      levels: [{ depth: 7, chars: slack.ax.length, fragments: axFragments(slack.ax) }],
+      chosenLevel: -1,
+    });
+    const { logger, seen } = makeSpyLogger();
+    const fake = makeFakeNative(result);
+    const r = new AxContextReader({ native: fake.native, logger }).read();
+    expect(r.ok === false && r.reason).toBe("budget-exceeded");
+    assertNoLeak(seen, slack);
+  });
+
+  it("non passa mai al logger testo letto dallo schermo (no-text)", () => {
+    // The chosen level (0) normalizes to nothing; a second, unchosen level
+    // carries real corpus content, proving it never leaks via levelSummary.
+    const result = okResult({
+      levels: [
+        { depth: 0, chars: 3, fragments: ["   ", "⋄"] },
+        { depth: 7, chars: slack.ax.length, fragments: axFragments(slack.ax) },
+      ],
+      chosenLevel: 0,
+    });
+    const { logger, seen } = makeSpyLogger();
+    const fake = makeFakeNative(result);
+    const r = new AxContextReader({ native: fake.native, logger }).read();
+    expect(r.ok === false && r.reason).toBe("no-text");
+    assertNoLeak(seen, slack);
   });
 
   it("toLogMeta exposes counts, codes, bundleId and timings only", () => {
