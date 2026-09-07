@@ -14,6 +14,12 @@ export interface Preferences {
   /** User-defined preferred spellings normalized in the transcript and used to
    *  bias Whisper (proper nouns, product names, jargon). */
   dictionary: string[];
+  /** The name the user appears with in chats and mails ("Danilo", "Danilo
+   *  Franco"). The reply-suggestions parser compares it — normalized on case,
+   *  accents and whitespace, on the full string and on its first token — with
+   *  the speaker of each turn to tell the user's turns from the counterpart's.
+   *  Empty means "not configured": the feature cannot be enabled without it. */
+  userDisplayName: string;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -27,6 +33,7 @@ export const DEFAULT_PREFS: Preferences = {
   launchAtLogin: true,
   spokenPunctuation: false,
   dictionary: [],
+  userDisplayName: "",
 };
 
 export class PreferencesStore {
