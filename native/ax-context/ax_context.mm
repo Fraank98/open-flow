@@ -104,12 +104,16 @@ static bool isChromeRole(NSString* role) {
 }
 
 // Mouse location in AX coordinates (origin top-left, multi-monitor aware) —
-// no conversion needed.
-static CGPoint cursorPointAX(void) {
+// no conversion needed. Returns false (and leaves *outP untouched) when the
+// window server can't hand back an event — observed under load or without
+// window server access — so the caller treats it as "no-element" instead of
+// touching a NULL CGEventRef.
+static bool cursorPointAX(CGPoint* outP) {
   CGEventRef ev = CGEventCreate(NULL);
-  CGPoint p = CGEventGetLocation(ev);
+  if (!ev) return false;
+  *outP = CGEventGetLocation(ev);
   CFRelease(ev);
-  return p;
+  return true;
 }
 
 static double nowMs(void) {
@@ -121,30 +125,52 @@ static double nowMs(void) {
 struct Budget {
   NSUInteger maxTotalChars;
   double deadlineMs;
+  // Chars added to fragments across EVERY ancestor level collected so far in
+  // this call, not just the current one: maxTotalChars is a cap on what
+  // leaves the addon in total. Owned by ReadContextUnderCursor's stack frame,
+  // shared by pointer into every collectSubtree call of the whole climb so a
+  // fresh per-level Harvest can still see what prior levels already spent.
+  NSUInteger* totalCharsSoFar;
 };
 
 struct Harvest {
   NSMutableArray<NSString*>* fragments;  // in document order
-  NSUInteger chars;                      // sum of fragment lengths
+  NSUInteger chars;                      // sum of fragment lengths (this level only)
   int nodes;
-  bool budgetHit;                        // maxTotalChars or deadline crossed
+  bool budgetHit;   // maxTotalChars (cumulative) or deadline crossed — aborts the whole climb
+  bool truncated;   // hit kSubtreeMaxDepth/kSubtreeMaxNodes — this level's harvest may be
+                     // incomplete, but the climb continues; distinct from budgetHit so the
+                     // parser/log can tell a capped level from a complete one
 };
 
 // Depth-first walk of `el`'s subtree. For every non-chrome node reads
 // kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute (in this
 // order), trims whitespace, drops fragments shorter than kMinFragmentChars
 // and exact duplicates (`seen`), appends to h.fragments and adds the length
-// to h.chars. Chrome nodes contribute no text but their children are still
-// visited. Stops when depth > kSubtreeMaxDepth, h.nodes >= kSubtreeMaxNodes
-// (per-level hard stops, do not set budgetHit), or h.chars > b.maxTotalChars /
-// nowMs() > b.deadlineMs (sets budgetHit, which also short-circuits the rest
-// of the walk).
+// to h.chars and to *b.totalCharsSoFar. Chrome nodes contribute no text but
+// their children are still visited.
+//
+// Stops when depth > kSubtreeMaxDepth or h.nodes >= kSubtreeMaxNodes (sets
+// h.truncated; per-level hard stop, does not abort the climb), or when
+// *b.totalCharsSoFar reaches b.maxTotalChars / nowMs() > b.deadlineMs (sets
+// h.budgetHit, which also short-circuits the rest of this walk and aborts
+// the climb). A single fragment that would overrun the remaining budget is
+// truncated to the exact number of chars still available rather than
+// dropped whole or let through — the cap always holds for what actually
+// reaches JS, and hitting it always sets h.budgetHit so the result cannot
+// silently claim ok:true while having capped data.
 static void collectSubtree(AXUIElementRef el, int depth, Harvest& h, const Budget& b,
                             NSMutableSet<NSString*>* seen) {
   if (!el || h.budgetHit) return;
-  if (depth > kSubtreeMaxDepth) return;
-  if (h.nodes >= kSubtreeMaxNodes) return;
-  if (h.chars > b.maxTotalChars) {
+  if (depth > kSubtreeMaxDepth) {
+    h.truncated = true;
+    return;
+  }
+  if (h.nodes >= kSubtreeMaxNodes) {
+    h.truncated = true;
+    return;
+  }
+  if (*b.totalCharsSoFar >= b.maxTotalChars) {
     h.budgetHit = true;
     return;
   }
@@ -164,6 +190,7 @@ static void collectSubtree(AXUIElementRef el, int depth, Harvest& h, const Budge
       (__bridge NSString*)kAXDescriptionAttribute
     ];
     for (NSString* a in attrs) {
+      if (h.budgetHit) break;
       NSString* raw = stringAttr(el, (__bridge CFStringRef)a);
       if (!raw) continue;
       NSString* trimmed =
@@ -171,10 +198,30 @@ static void collectSubtree(AXUIElementRef el, int depth, Harvest& h, const Budge
       if (trimmed.length < kMinFragmentChars) continue;
       if ([seen containsObject:trimmed]) continue;
       [seen addObject:trimmed];
-      [h.fragments addObject:trimmed];
-      h.chars += trimmed.length;
+
+      NSUInteger available =
+          (b.maxTotalChars > *b.totalCharsSoFar) ? (b.maxTotalChars - *b.totalCharsSoFar) : 0;
+      if (available == 0) {
+        h.budgetHit = true;
+        break;
+      }
+      NSString* toAdd = trimmed;
+      bool hitCap = false;
+      if (trimmed.length > available) {
+        toAdd = [trimmed substringToIndex:available];
+        hitCap = true;
+      }
+      [h.fragments addObject:toAdd];
+      h.chars += toAdd.length;
+      *b.totalCharsSoFar += toAdd.length;
+      if (hitCap || *b.totalCharsSoFar >= b.maxTotalChars) {
+        h.budgetHit = true;
+        break;
+      }
     }
   }
+
+  if (h.budgetHit) return;  // capped mid-node: don't bother descending into children
 
   CFTypeRef kids = NULL;
   if (AXUIElementCopyAttributeValue(el, kAXChildrenAttribute, &kids) == kAXErrorSuccess && kids) {
@@ -238,6 +285,7 @@ struct LevelInfo {
   int depth;
   NSUInteger chars;
   NSMutableArray<NSString*>* fragments;
+  bool truncated;
 };
 
 static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
@@ -310,26 +358,43 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
   // ---- 2. Element at the cursor -------------------------------------------
   AXUIElementRef sysWide = AXUIElementCreateSystemWide();
   AXUIElementSetMessagingTimeout(sysWide, kSystemWideTimeoutSec);
-  CGPoint p = cursorPointAX();
+  CGPoint p;
+  bool haveCursor = cursorPointAX(&p);
   AXUIElementRef el = NULL;
-  AXError posErr = AXUIElementCopyElementAtPosition(sysWide, (float)p.x, (float)p.y, &el);
+  AXError posErr = kAXErrorFailure;
+  if (haveCursor) {
+    posErr = AXUIElementCopyElementAtPosition(sysWide, (float)p.x, (float)p.y, &el);
+  }
   elementAtPositionMs = nowMs() - t0;
 
-  if (posErr != kAXErrorSuccess || !el) {
+  if (!haveCursor || posErr != kAXErrorSuccess || !el) {
     ok = false;
     reason = "no-element";
   } else {
     // ---- 3. pid + bundle id (the only things read before the app filter) --
-    AXUIElementGetPid(el, &pid);
-    NSRunningApplication* app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    // A pid we can't resolve means an app we can't identify — fail closed
+    // (treated the same as app-not-allowed) rather than falling through with
+    // bundleId "" and an empty allowlist/blocklist making the decision by
+    // accident.
+    bool pidOk = (AXUIElementGetPid(el, &pid) == kAXErrorSuccess);
+    NSRunningApplication* app =
+        pidOk ? [NSRunningApplication runningApplicationWithProcessIdentifier:pid] : nil;
     bundleId = app.bundleIdentifier ?: @"";
 
     // ---- 4. App filter, before any harvest of the tree (privacy) ----------
-    bool allowed = true;
-    if (filterMode) {
+    // Fails closed: an unresolved pid, or a filter mode that isn't exactly
+    // "allowlist"/"blocklist" (typo, future value, empty string), denies
+    // collection instead of silently letting it through.
+    bool allowed = pidOk;
+    if (allowed && filterMode) {
       bool inList = filterBundleIds && [filterBundleIds containsObject:bundleId];
-      if ([filterMode isEqualToString:@"allowlist"] && !inList) allowed = false;
-      if ([filterMode isEqualToString:@"blocklist"] && inList) allowed = false;
+      if ([filterMode isEqualToString:@"allowlist"]) {
+        allowed = inList;
+      } else if ([filterMode isEqualToString:@"blocklist"]) {
+        allowed = !inList;
+      } else {
+        allowed = false;
+      }
     }
 
     if (!allowed) {
@@ -363,7 +428,8 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
         AXUIElementSetMessagingTimeout(editable, kElementTimeoutSec);
 
         // ---- 7. Climb one ancestor at a time, watching for the jump -------
-        Budget budget = {maxTotalChars, deadlineMs};
+        NSUInteger totalCharsSoFar = 0;  // shared across every level of this climb
+        Budget budget = {maxTotalChars, deadlineMs, &totalCharsSoFar};
         bool budgetExceeded = false;
 
         NSMutableSet<NSString*>* seen0 = [NSMutableSet set];
@@ -372,10 +438,11 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
         h0.chars = 0;
         h0.nodes = 0;
         h0.budgetHit = false;
+        h0.truncated = false;
         double cs0 = nowMs();
         collectSubtree(editable, 0, h0, budget, seen0);
         collectMs += nowMs() - cs0;
-        levels.push_back({0, h0.chars, h0.fragments});
+        levels.push_back({0, h0.chars, h0.fragments, h0.truncated});
         if (h0.budgetHit) budgetExceeded = true;
 
         AXUIElementRef current = editable;  // borrowed; owned by `editable` below
@@ -398,10 +465,11 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
           h.chars = 0;
           h.nodes = 0;
           h.budgetHit = false;
+          h.truncated = false;
           double cs = nowMs();
           collectSubtree(current, 0, h, budget, seen);
           collectMs += nowMs() - cs;
-          levels.push_back({(int)depth, h.chars, h.fragments});
+          levels.push_back({(int)depth, h.chars, h.fragments, h.truncated});
 
           if (h.budgetHit) {
             budgetExceeded = true;
@@ -476,6 +544,7 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
       frags.Set(fi++, Napi::String::New(env, f.UTF8String ?: ""));
     }
     lvl.Set("fragments", frags);
+    lvl.Set("truncated", Napi::Boolean::New(env, levels[i].truncated));
     levelsArr.Set((uint32_t)i, lvl);
   }
   result.Set("levels", levelsArr);
