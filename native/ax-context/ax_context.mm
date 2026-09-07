@@ -155,10 +155,17 @@ struct Harvest {
 // *b.totalCharsSoFar reaches b.maxTotalChars / nowMs() > b.deadlineMs (sets
 // h.budgetHit, which also short-circuits the rest of this walk and aborts
 // the climb). A single fragment that would overrun the remaining budget is
-// truncated to the exact number of chars still available rather than
-// dropped whole or let through — the cap always holds for what actually
-// reaches JS, and hitting it always sets h.budgetHit so the result cannot
-// silently claim ok:true while having capped data.
+// truncated (at a composed-character-sequence boundary, never mid surrogate
+// pair or combining cluster) to the exact number of chars still available,
+// rather than dropped whole or let through, and that always sets
+// h.budgetHit — the sum of every levels[].fragments this call returns can
+// never exceed maxTotalChars, and a truncated result never claims ok:true.
+// (webkitMarkerText, on ok:true, is a separate safety-net field capped
+// independently at maxTotalChars and is NOT counted against this budget —
+// see step 9 in ReadContextUnderCursor.) Landing exactly on the cap with a
+// whole, untruncated fragment does not by itself set h.budgetHit — nothing
+// was lost, so it isn't reported as exceeded; if content beyond it exists,
+// the very next node's entry check catches that honestly instead.
 static void collectSubtree(AXUIElementRef el, int depth, Harvest& h, const Budget& b,
                             NSMutableSet<NSString*>* seen) {
   if (!el || h.budgetHit) return;
@@ -202,19 +209,33 @@ static void collectSubtree(AXUIElementRef el, int depth, Harvest& h, const Budge
       NSUInteger available =
           (b.maxTotalChars > *b.totalCharsSoFar) ? (b.maxTotalChars - *b.totalCharsSoFar) : 0;
       if (available == 0) {
-        h.budgetHit = true;
+        h.budgetHit = true;  // a whole candidate fragment had to be dropped: real loss
         break;
       }
       NSString* toAdd = trimmed;
       bool hitCap = false;
       if (trimmed.length > available) {
-        toAdd = [trimmed substringToIndex:available];
+        // Truncate at a composed-character-sequence boundary, not a raw
+        // UTF-16 index: `available` may fall inside a surrogate pair (an
+        // emoji, or anything outside the BMP) or a combining cluster, and a
+        // split surrogate makes -UTF8String's behavior unspecified — it can
+        // return NULL and silently drop the whole fragment downstream.
+        NSUInteger cut = available;
+        NSRange seq = [trimmed rangeOfComposedCharacterSequenceAtIndex:cut - 1];
+        if (NSMaxRange(seq) > cut) cut = seq.location;
+        toAdd = cut > 0 ? [trimmed substringToIndex:cut] : nil;
         hitCap = true;
+      }
+      if (toAdd.length == 0) {
+        h.budgetHit = true;  // backed off to nothing: no room even for one whole cluster
+        break;
       }
       [h.fragments addObject:toAdd];
       h.chars += toAdd.length;
       *b.totalCharsSoFar += toAdd.length;
-      if (hitCap || *b.totalCharsSoFar >= b.maxTotalChars) {
+      if (hitCap) {
+        // Only an actual truncation is data loss. Landing exactly on the cap
+        // with a whole fragment is not — see the comment above collectSubtree.
         h.budgetHit = true;
         break;
       }
@@ -300,6 +321,11 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
   NSUInteger jumpMinChars = kDefaultJumpMinChars;
   NSString* filterMode = nil;
   NSMutableSet<NSString*>* filterBundleIds = nil;
+  // True as soon as the caller included a non-null bundleIdFilter value at
+  // all, even one we can't fully interpret (not an object, missing/non-string
+  // mode). A gate we can't decide from must deny, not fall through to "no
+  // filter configured".
+  bool filterPresent = false;
 
   if (info.Length() > 0 && info[0].IsObject()) {
     Napi::Object opts = info[0].As<Napi::Object>();
@@ -318,22 +344,32 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
     if (opts.Has("jumpMinChars") && opts.Get("jumpMinChars").IsNumber()) {
       jumpMinChars = (NSUInteger)opts.Get("jumpMinChars").As<Napi::Number>().Uint32Value();
     }
-    if (opts.Has("bundleIdFilter") && opts.Get("bundleIdFilter").IsObject()) {
-      Napi::Object filter = opts.Get("bundleIdFilter").As<Napi::Object>();
-      if (filter.Has("mode") && filter.Get("mode").IsString()) {
-        filterMode = [NSString
-            stringWithUTF8String:filter.Get("mode").As<Napi::String>().Utf8Value().c_str()];
-      }
-      if (filter.Has("bundleIds") && filter.Get("bundleIds").IsArray()) {
-        Napi::Array arr = filter.Get("bundleIds").As<Napi::Array>();
-        filterBundleIds = [NSMutableSet setWithCapacity:arr.Length()];
-        for (uint32_t i = 0; i < arr.Length(); i++) {
-          Napi::Value v = arr.Get(i);
-          if (v.IsString()) {
-            [filterBundleIds
-                addObject:[NSString stringWithUTF8String:v.As<Napi::String>().Utf8Value().c_str()]];
+    if (opts.Has("bundleIdFilter")) {
+      Napi::Value filterVal = opts.Get("bundleIdFilter");
+      if (!filterVal.IsUndefined() && !filterVal.IsNull()) {
+        filterPresent = true;  // a filter was requested, whether or not we can read it below
+        if (filterVal.IsObject()) {
+          Napi::Object filter = filterVal.As<Napi::Object>();
+          if (filter.Has("mode") && filter.Get("mode").IsString()) {
+            filterMode = [NSString
+                stringWithUTF8String:filter.Get("mode").As<Napi::String>().Utf8Value().c_str()];
+          }
+          if (filter.Has("bundleIds") && filter.Get("bundleIds").IsArray()) {
+            Napi::Array arr = filter.Get("bundleIds").As<Napi::Array>();
+            filterBundleIds = [NSMutableSet setWithCapacity:arr.Length()];
+            for (uint32_t i = 0; i < arr.Length(); i++) {
+              Napi::Value v = arr.Get(i);
+              if (v.IsString()) {
+                [filterBundleIds addObject:[NSString stringWithUTF8String:v.As<Napi::String>()
+                                                                                .Utf8Value()
+                                                                                .c_str()]];
+              }
+            }
           }
         }
+        // filterVal not an object, or "mode" missing/non-string: filterMode
+        // stays nil. filterPresent is already true, so the gate below still
+        // denies — it does not silently behave as "no filter".
       }
     }
   }
@@ -372,21 +408,27 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
     reason = "no-element";
   } else {
     // ---- 3. pid + bundle id (the only things read before the app filter) --
-    // A pid we can't resolve means an app we can't identify — fail closed
-    // (treated the same as app-not-allowed) rather than falling through with
-    // bundleId "" and an empty allowlist/blocklist making the decision by
-    // accident.
     bool pidOk = (AXUIElementGetPid(el, &pid) == kAXErrorSuccess);
     NSRunningApplication* app =
         pidOk ? [NSRunningApplication runningApplicationWithProcessIdentifier:pid] : nil;
     bundleId = app.bundleIdentifier ?: @"";
 
     // ---- 4. App filter, before any harvest of the tree (privacy) ----------
-    // Fails closed: an unresolved pid, or a filter mode that isn't exactly
-    // "allowlist"/"blocklist" (typo, future value, empty string), denies
-    // collection instead of silently letting it through.
-    bool allowed = pidOk;
-    if (allowed && filterMode) {
+    // Fails closed, unconditionally: the gate denies whenever it cannot
+    // reach a positive decision, whether or not a filter was configured.
+    //   - pid unresolved, or resolved but not identifiable as a running app
+    //     with a bundle id (bundleId ""): can't be verified, so it's denied
+    //     even with no filter configured — a filter can't clear an app it
+    //     was never told about (blocklist) or admit one it can't recognize
+    //     (allowlist), and absent any filter we still don't collect from an
+    //     app we can't name.
+    //   - a filter was present (filterPresent) but its "mode" isn't exactly
+    //     "allowlist" or "blocklist" (missing, non-string, unrecognized
+    //     value, or the whole bundleIdFilter wasn't even an object): denied,
+    //     not treated as "no filter".
+    bool appIdentified = pidOk && bundleId.length > 0;
+    bool allowed = appIdentified;
+    if (allowed && filterPresent) {
       bool inList = filterBundleIds && [filterBundleIds containsObject:bundleId];
       if ([filterMode isEqualToString:@"allowlist"]) {
         allowed = inList;
