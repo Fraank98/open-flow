@@ -88,7 +88,14 @@ const REASON_KEYS = new Set(["decline", "reject_offer"]);
 // — the exact failure mode round 1 fixed for "fai sapere"/"puoi"/"scegli",
 // now recurring for "verifichi" for the same structural reason (found by
 // review).
-const INSTRUCTION_ECHO = /(?:^|[.!?]\s+)verifichi\b[\s\S]{0,60}\bfai sapere\b|\brispondi in senso (?:affermativo|negativo)\b/iu;
+// Widened from "(?:^|[.!?]\s+)" (fix round 4, review): "^" only fires at the
+// very start of the whole string, so a list prefix ("- Verifichi…") or a
+// preamble colon ("Ti scrivo: verifichi…") that cleanVariantText does not
+// strip defeated the anchor entirely and let the instruction echo through.
+// The added alternatives are all themselves anchored to the string start
+// (via their own leading "^"), so they only recognize genuine list/ordinal
+// prefixes, not "verifichi" reappearing after a "-"/digit mid-reply.
+const INSTRUCTION_ECHO = /(?:^|[.!?:]\s*|^[-*•]\s*|^\d+\.\s*)verifichi\b[\s\S]{0,60}\bfai sapere\b|\brispondi in senso (?:affermativo|negativo)\b/iu;
 // Literal leak of the prompt's own example marker phrase ("nello spirito
 // di…"); isCannedExampleCopy below catches the subtler case where the model
 // reproduces the example's CONTENT without naming the marker.

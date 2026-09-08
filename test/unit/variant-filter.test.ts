@@ -356,3 +356,79 @@ describe("Fix round 3 (review)", () => {
     expect(r.dropped).toEqual([{ key: "defer", rule: "near-duplicate" }]);
   });
 });
+
+/**
+ * Fix round 4 (review): two Minor/Important findings, both in the number-
+ * anchoring safety net.
+ *
+ * (1) number-words.ts: a comma inside a compound numeral (round 3's
+ * SOFT_BARRIER) also fired when the comma separated two DISTINCT numbers
+ * spoken as an enumeration or a negotiated range ("il budget? mille, duemila
+ * al massimo" — haggling over a budget), fusing them into one wrong
+ * whitelist value and breaking unanchored-number in both directions: an
+ * invented number got through, and a genuine one got rejected. Covered at
+ * the unit level in number-words.test.ts; covered here at the filter level
+ * with both directions of the damage.
+ *
+ * (2) variant-filter.ts: round 3 anchored the INSTRUCTION_ECHO "verifichi"
+ * match to the start of a sentence to stop it firing on ordinary
+ * second-person Italian mid-sentence, but the anchor `^` only fires right at
+ * the start of the whole string — a list prefix or a "Ti scrivo:" preamble
+ * that cleanVariantText does not strip defeats it, letting an instruction
+ * echo through as if it were a real reply.
+ */
+describe("Fix round 4 (review)", () => {
+  it("unanchored-number: a comma-separated range in the transcript no longer fuses into one wrong whitelist value", () => {
+    const budgetCtx = {
+      ...CTX,
+      lastMessage: "il budget? mille, duemila al massimo",
+      transcript: "INTERLOCUTORE (Marta): il budget? mille, duemila al massimo",
+    };
+    // Maglia aperta (pre-fix): the fused whitelist {3000} let an invented
+    // "tremila" through.
+    expect(
+      run([V("accept_offer", "Per me vanno bene tremila euro, procediamo pure così."), GOOD_B, GOOD_C], budgetCtx).dropped,
+    ).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    // Maglia stretta (pre-fix): the same fused whitelist rejected the
+    // genuine "duemila" the counterpart actually said.
+    expect(
+      run([V("accept_offer", "Con duemila euro riesco a chiudere tutto entro venerdì."), GOOD_B, GOOD_C], budgetCtx).dropped,
+    ).toEqual([]);
+  });
+
+  it("instruction-echo: the anchor also catches 'verifichi' after a list-prefix or a preamble colon cleanVariantText does not strip", () => {
+    for (const t of [
+      "- Verifichi la situazione. Fai sapere a breve come procedere.",
+      "Ti scrivo: verifichi la situazione e fai sapere a breve come procedere.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    }
+    // Already-correct pre-fix (the guillemets are stripped by
+    // cleanVariantText before this check runs, and ". " was already
+    // anchored) — the widened anchor must not change these.
+    expect(
+      run([V("accept", "«Verifichi la situazione. Fai sapere a breve come procedere.»"), GOOD_B, GOOD_C]).dropped,
+    ).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(
+      run([V("accept", "Ok. Verifichi la situazione; fai sapere a breve come procedere."), GOOD_B, GOOD_C]).dropped,
+    ).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    // Round 3's legitimate mid-sentence 'verifichi' replies stay kept: the
+    // widened anchor is still anchored (^ / after sentence punctuation),
+    // not a bare search for "verifichi" anywhere.
+    for (const t of [
+      "Preferisco che la verifichi Marta. Fai sapere anche a Paolo, grazie.",
+      "Non serve che verifichi io. Fai sapere tu a Paolo come procedere.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+    // Round 1's legitimate second-person replies stay kept too.
+    for (const t of [
+      "Puoi contare su di me, la review la faccio oggi pomeriggio.",
+      "Puoi girarla a Paolo, io questa settimana non ce la faccio.",
+      "Scegli tu come preferisci, per me vanno bene entrambe.",
+      "Fai sapere a Paolo che la review la faccio io.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+  });
+});

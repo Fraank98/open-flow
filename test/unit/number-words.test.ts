@@ -144,3 +144,44 @@ describe("parseNumberWords — gratitude idioms are stripped before the percent 
     expect(parseNumberWords("Il novanta per cento del lavoro è già in review.")).toEqual([90]);
   });
 });
+
+/**
+ * Fix round 4 (review): round 3's SOFT_BARRIER-joins-when-magnitude-linked
+ * rule also fired when the comma separated two DISTINCT numbers spoken as an
+ * enumeration or a negotiated range ("mille, duemila al massimo" — haggling
+ * over a budget), fusing them into one wrong value. Inside a genuine compound
+ * numeral written with a comma the group after the comma is always strictly
+ * smaller than the group before it (1000, 200 — never 1000, 2000); in an
+ * enumeration/range the second number is typically not smaller. That size
+ * comparison — evaluate(nextSeg) < evaluate(run) — is the extra condition
+ * added to the SOFT_BARRIER branch only (the "e"/"and" connector branch is
+ * unaffected: it always glues, as before).
+ */
+describe("parseNumberWords — a comma does not fuse an enumeration or a spoken range", () => {
+  it("keeps two distinct numbers separate when the group after the comma is not smaller", () => {
+    expect(parseNumberWords("Il budget e' mille, duemila al massimo.")).toEqual([1000, 2000]);
+    expect(parseNumberWords("Facciamo cento, centocinquanta euro e chiudiamo.")).toEqual([100, 150]);
+    expect(parseNumberWords("Costa ottocento, novecento euro al massimo.")).toEqual([800, 900]);
+    expect(parseNumberWords("te ne servono cento, duecento?")).toEqual([100, 200]);
+    expect(parseNumberWords("Facciamo cinquanta, cento euro.")).toEqual([50, 100]);
+  });
+  it("still fuses when the group after the comma is strictly smaller, indistinguishable from a genuine compound numeral (accepted)", () => {
+    expect(parseNumberWords("Costa mille, trecento sono di spedizione.")).toEqual([1300]);
+    expect(parseNumberWords("Sono duemila, ventiquattro")).toEqual([2024]);
+  });
+  it("does not regress round 3's magnitude-linked comma fusions and boundary cases", () => {
+    expect(parseNumberWords("duemila, trecento")).toEqual([2300]);
+    expect(parseNumberWords("mille, cinquecento")).toEqual([1500]);
+    expect(parseNumberWords("quattro mila, ottocento cinquanta")).toEqual([4850]);
+    expect(parseNumberWords("centomila, duecento euro")).toEqual([100200]);
+    expect(parseNumberWords("one thousand, two hundred pounds")).toEqual([1200]);
+    expect(parseNumberWords("twenty-five thousand, eight hundred and fifty")).toEqual([25850]);
+    expect(parseNumberWords("un milione, duecentomila euro")).toEqual([1200000]);
+    expect(parseNumberWords("due, tre giorni")).toEqual([2, 3]);
+    expect(parseNumberWords("tre, quattro settimane")).toEqual([3, 4]);
+    expect(parseNumberWords("venti. Trenta")).toEqual([20, 30]);
+    expect(parseNumberWords("Il novanta per cento, tre giorni al massimo e chiudo.")).toEqual([90, 3]);
+    expect(parseNumberWords("Facciamo mille, grazie. Ci penso io alla consegna.")).toEqual([1000]);
+    expect(parseNumberWords("Va bene al cento per cento.")).toEqual([]);
+  });
+});

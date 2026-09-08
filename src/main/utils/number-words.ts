@@ -199,7 +199,15 @@ export function parseNumberWords(text: string): number[] {
     // still reads as two separate counts, not 23 (fix round 3, review).
     if ((CONNECTORS.has(t) || t === SOFT_BARRIER) && runTokens.length > 0 && next !== undefined) {
       const nextSeg = segment(next);
-      if (nextSeg !== null && hasMagnitudeLink(run, nextSeg)) continue;
+      // For the comma specifically, magnitude-linked is not enough: it is
+      // also true when the comma separates two DISTINCT numbers spoken as an
+      // enumeration or a negotiated range ("mille, duemila al massimo"), and
+      // that must NOT fuse. Inside a genuine compound numeral written with a
+      // comma the group after the comma is always strictly smaller than the
+      // one before it (1000, 200 — never 1000, 2000); a range/enumeration's
+      // second number typically is not smaller. The "e"/"and" connector
+      // never needs this extra check — it always glues (fix round 4, review).
+      if (nextSeg !== null && hasMagnitudeLink(run, nextSeg) && (t !== SOFT_BARRIER || evaluate(nextSeg) < evaluate(run))) continue;
     }
     flush();
   }
