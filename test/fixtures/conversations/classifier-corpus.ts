@@ -15,6 +15,14 @@ export interface ClassifierCase {
     readonly kind?: "generic" | "alternative" | "offer";
     readonly language: "it" | "en";
   };
+  /**
+   * True when the hand annotation itself is contestable (spec review, fix
+   * round 1): the case should stay in the corpus for eyeballing, but must be
+   * EXCLUDED from every threshold-metric denominator in the bench tool,
+   * because a case that doesn't reliably discriminate right from wrong
+   * cannot be allowed to move a release decision either way.
+   */
+  readonly ambiguous?: true;
 }
 
 const T = (counterpart: string, lastMessage: string, prior: string[] = []): Pick<ClassifierCase, "counterpart" | "lastMessage" | "transcript"> => ({
@@ -26,7 +34,14 @@ const T = (counterpart: string, lastMessage: string, prior: string[] = []): Pick
 export const CLASSIFIER_CASES: readonly ClassifierCase[] = [
   // ── rispondibili con una decisione ──
   { id: "ans-review-generic", ...T("Marta", "ciao, la PR sul login è ferma da due giorni, la review la fai tu? venerdì rilasciamo"), expected: { answerable: true, kind: "generic", language: "it" } },
-  { id: "ans-help-generic", ...T("Fulvio", "raga il build di staging è rotto da stamattina, errore sul lockfile. qualcuno ci ha già messo mano?"), expected: { answerable: true, kind: "generic", language: "it" } },
+  // Marked ambiguous (spec review, fix round 1): "qualcuno ci ha già messo
+  // mano?" literally asks for a FACT (has anyone already worked on it), not
+  // a decision — structurally closer to info-where/info-time than to
+  // ans-review-generic. A blind annotator could reasonably call this
+  // `false`, and Gemma 4 E4B does exactly that. Left at `answerable: true`
+  // on purpose (relabeling would not fix the fact that the case doesn't
+  // discriminate); excluded from every threshold-metric denominator instead.
+  { id: "ans-help-generic", ...T("Fulvio", "raga il build di staging è rotto da stamattina, errore sul lockfile. qualcuno ci ha già messo mano?"), expected: { answerable: true, kind: "generic", language: "it" }, ambiguous: true },
   { id: "ans-meeting-generic", ...T("Luca", "ti va di fare un punto domani mattina sul rilascio? mezz'ora al massimo"), expected: { answerable: true, kind: "generic", language: "it" } },
   { id: "ans-day-alternative", ...T("Giulia Rossi", "Riusciamo a spostare il sopralluogo a venerdì stessa ora, o preferisce la settimana prossima?", ["INTERLOCUTORE (Giulia Rossi): Buongiorno, confermo il sopralluogo per giovedì alle 9."]), expected: { answerable: true, kind: "alternative", language: "it" } },
   { id: "ans-who-alternative", ...T("Marta", "la review del login la fai tu o la giro a Paolo? te lo chiedo perché venerdì rilasciamo"), expected: { answerable: true, kind: "alternative", language: "it" } },

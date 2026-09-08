@@ -60,6 +60,17 @@ describe("ReplyChatClient.completeJson", () => {
     await expect(p).rejects.not.toThrow("ZQXV");
   });
 
+  it("throws 'reply LLM invalid JSON' when the HTTP response body itself is not JSON, without quoting it (fix round 1)", async () => {
+    // Distinct from the previous test: here res.json() itself fails (a
+    // malformed envelope), not JSON.parse() on the inner `content` string.
+    const fetchImpl = fetchReturning(200, "NOT-EVEN-JSON {{{ RQPL-BODY-TEXT");
+    const c = new ReplyChatClient({ endpoint: "http://x", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = c.completeJson({ prompt: "P", schema: {}, sampling: {}, maxTokens: 8, timeoutMs: 1000 });
+    await expect(p).rejects.toBeInstanceOf(ReplyLLMError);
+    await expect(p).rejects.toThrow("reply LLM invalid JSON");
+    await expect(p).rejects.not.toThrow("RQPL");
+  });
+
   it("throws 'reply LLM empty content' when the model returned nothing (thinking swallowed the budget)", async () => {
     const fetchImpl = fetchReturning(200, { choices: [{ message: { content: "", reasoning_content: "thinking…" } }] });
     const c = new ReplyChatClient({ endpoint: "http://x", fetchImpl: fetchImpl as unknown as typeof fetch });

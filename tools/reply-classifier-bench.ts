@@ -34,6 +34,10 @@ interface BenchCase {
   readonly expectedAnswerable: boolean;
   readonly expectedKind?: Classification["kind"];
   readonly expectedLanguage: "it" | "en";
+  /** Fix round 1: an ambiguous ground-truth label (fixture's own `ambiguous`
+   *  flag) is still classified and shown per-case, but must never move a
+   *  threshold metric — see the exclusion in main() below. */
+  readonly ambiguous: boolean;
 }
 
 function fromClassifierCase(c: ClassifierCase): BenchCase {
@@ -45,6 +49,7 @@ function fromClassifierCase(c: ClassifierCase): BenchCase {
     expectedAnswerable: c.expected.answerable,
     expectedKind: c.expected.kind,
     expectedLanguage: c.expected.language,
+    ambiguous: c.ambiguous === true,
   };
 }
 
@@ -78,6 +83,7 @@ function buildSpikeCases(): BenchCase[] {
       expectedAnswerable: true,
       expectedKind: exp.kind,
       expectedLanguage: exp.language,
+      ambiguous: false,
     });
   }
   return out;
@@ -200,21 +206,43 @@ async function main(): Promise<number> {
     }
 
     let answerableMatches = 0;
+    let answerableDenominator = 0;
     let infoFalsePositives = 0;
     let infoCaseCount = 0;
     let truePositiveExpected = 0;
     let truePositiveFalseNegatives = 0;
     let kindMatches = 0;
-    let kindDenominator = 0;
     let languageMatches = 0;
-    let languageDenominator = 0;
+    // kind and language accuracy are DELIBERATELY measured over the exact
+    // same population (fix round 1, review point 2): true positives, i.e.
+    // cases the fixture expects answerable with a kind (which is every
+    // expectedAnswerable:true case, non-ambiguous) AND that the classifier
+    // itself accepted as answerable. Using one shared denominator keeps the
+    // two lines directly comparable instead of silently mixing in info-*
+    // false positives (which have no expected kind to begin with) into only
+    // one of the two metrics.
+    let truePositiveDenominator = 0;
     let nonDeterministicCases = 0;
     const allDurations: number[] = [];
+    const ambiguousIds: string[] = [];
 
     for (const c of cases) {
       const primary = primaryByCase.get(c.id)!; // populated above for every case
       const results = resultsByCase.get(c.id)!; // same
 
+      // Timing and determinism describe the model's behavior, not whether it
+      // matched the (contestable) label, so they are computed over every
+      // case regardless of `ambiguous`.
+      for (const r of results) allDurations.push(r.durationMs);
+      const keys = new Set(results.map(resultKey));
+      if (keys.size > 1) nonDeterministicCases += 1;
+
+      if (c.ambiguous) {
+        ambiguousIds.push(c.id);
+        continue; // excluded from every threshold-metric denominator below
+      }
+
+      answerableDenominator += 1;
       if (actualAnswerable(primary) === c.expectedAnswerable) answerableMatches += 1;
 
       if (c.id.startsWith("info-")) {
@@ -227,30 +255,25 @@ async function main(): Promise<number> {
         if (actualAnswerable(primary) !== true) truePositiveFalseNegatives += 1;
       }
 
-      if (primary.ok) {
-        languageDenominator += 1;
+      if (c.expectedKind !== undefined && primary.ok) {
+        truePositiveDenominator += 1;
+        if (primary.classification.kind === c.expectedKind) kindMatches += 1;
         if (primary.classification.language === c.expectedLanguage) languageMatches += 1;
-        if (c.expectedKind !== undefined) {
-          kindDenominator += 1;
-          if (primary.classification.kind === c.expectedKind) kindMatches += 1;
-        }
       }
-
-      for (const r of results) allDurations.push(r.durationMs);
-
-      const keys = new Set(results.map(resultKey));
-      if (keys.size > 1) nonDeterministicCases += 1;
     }
 
     allDurations.sort((a, b) => a - b);
     completionTokenSamples.sort((a, b) => a - b);
 
     console.log(`modello: ${values.model}   casi: ${cases.length}   ripetizioni: ${repeats}`);
-    console.log(`accuratezza answerable: ${answerableMatches}/${cases.length} (${pct(answerableMatches, cases.length)})`);
+    if (ambiguousIds.length > 0) {
+      console.log(`casi ambigui esclusi dai denominatori: ${ambiguousIds.join(", ")} (${ambiguousIds.length})`);
+    }
+    console.log(`accuratezza answerable: ${answerableMatches}/${answerableDenominator} (${pct(answerableMatches, answerableDenominator)})`);
     console.log(`falsi positivi su solo-informazione (answerable=true su casi info-*): ${infoFalsePositives}/${infoCaseCount} (${pct(infoFalsePositives, infoCaseCount)})`);
     console.log(`falsi negativi su rispondibili: ${truePositiveFalseNegatives}/${truePositiveExpected}`);
-    console.log(`accuratezza kind sui rispondibili classificati true: ${kindMatches}/${kindDenominator}`);
-    console.log(`accuratezza language: ${languageMatches}/${languageDenominator}`);
+    console.log(`accuratezza kind sui rispondibili classificati true: ${kindMatches}/${truePositiveDenominator}`);
+    console.log(`accuratezza language sui rispondibili classificati true: ${languageMatches}/${truePositiveDenominator}`);
     console.log(
       `latenza p50: ${percentile(allDurations, 50)} ms   p95: ${percentile(allDurations, 95)} ms   completion_tokens p50: ${percentile(completionTokenSamples, 50)}`,
     );
