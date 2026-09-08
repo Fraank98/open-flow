@@ -129,10 +129,12 @@ copy_llama_libs() {
   # build_llama for why sharing one directory is unsafe). The set is
   # tag-dependent and grew at v0.4.0: alongside libllama and its private
   # libggml/-base/-cpu/-blas/-metal, upstream now also ships libmtmd
-  # (multimodal) and turns what used to be static code into libllama-common
-  # and libllama-server-impl. The `libllama*` glob covers the last two; the
-  # authoritative list is whatever `otool -L` reports on the built binaries,
-  # so check it after any tag bump rather than trusting this comment.
+  # (multimodal) and turns what used to be static code into libllama-common,
+  # libllama-server-impl and libllama-cli-impl (the last one is a build
+  # artifact of llama-cli, which isn't packaged, but it's harmless to copy).
+  # The `libllama*` glob covers all three; the authoritative list is whatever
+  # `otool -L` reports on the built binaries, so check it after any tag bump
+  # rather than trusting this comment.
   #
   # Unlike whisper.cpp's build (which places every dylib under build/bin/),
   # b4404's dylibs land scattered across the build tree: build/src/,
