@@ -40,7 +40,20 @@ build_whisper() {
   fi
   # GGML_NATIVE=OFF disables -mcpu=native+nodotprod+noi8mm+nosve which Apple
   # clang 17 doesn't accept. Metal GPU acceleration is unaffected.
-  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
+  #
+  # CMAKE_BUILD_WITH_INSTALL_RPATH + CMAKE_INSTALL_RPATH: without this, cmake
+  # bakes the *build-tree* absolute path (this machine's build-tmp/) into
+  # whisper-cli/whisper-server's LC_RPATH — same defect as llama-server had
+  # (see the rpath comment in build_llama). whisper-server is the fallback
+  # transcription path (used only if the native streaming addon fails to
+  # init, src/main/index.ts) and its dylibs are already shipped correctly to
+  # Contents/Resources/lib/ — it was just missing the relative rpath to find
+  # them there. Two entries cover both places the binary runs from:
+  #   @executable_path/lib       dev:      resources/bin/{whisper-server,lib/}
+  #   @executable_path/../lib    packaged: Contents/Resources/{bin/whisper-server,lib/}
+  # Unlike llama, whisper's dylibs stay in the existing resources/bin/lib/ —
+  # no new directory, no filter change, they already live there.
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib;@executable_path/../lib" >/dev/null
   # Targets are named whisper-cli / whisper-server from v1.7.2 onward (they
   # were "main" / "server" in v1.7.1).
   cmake --build "$src/build" -j --target whisper-cli whisper-server
