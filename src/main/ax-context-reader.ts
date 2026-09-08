@@ -1,6 +1,11 @@
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { Logger } from "./logger.js";
+// The plan's Global Constraints forbid the reader importing the parser, to
+// keep the layers independent. The spec is the authority here and does not:
+// this reuses the parser's exact fragment-splitting regex instead of keeping
+// a byte-for-byte duplicate in this file (final review, correction 6).
+import { normalizeFragments, SENTENCE_MIN } from "./utils/conversation-parser.js";
 
 export type NativeReason =
   | "no-element" | "no-editable" | "no-text" | "budget-exceeded" | "ax-error" | "app-not-allowed";
@@ -16,6 +21,12 @@ export interface ReadOptions {
   timeBudgetMs: number;
   jumpRatio: number;
   jumpMinChars: number;
+  /** Enables the WebKit text-marker safety net in the addon (and, as a
+   *  consequence, the marker-line split below). Default false: the marker
+   *  path was never exercised by any build in three rounds of fixes, and it
+   *  carries privacy risk (spec, privacy 5 — see the addon's step 9) until
+   *  someone deliberately measures its benefit (final review, correction 4). */
+  textMarkers: boolean;
   /** Checked by the addon BEFORE any harvest (spec, privacy 4). */
   bundleIdFilter?: BundleIdFilter;
 }
@@ -23,16 +34,18 @@ export interface ReadOptions {
 /** Spec §1 budgets: depth 8 covers the measured jump at level 7 with one level
  *  of margin; 16 000 chars is twice the largest measured level (8 291); 300 ms
  *  is about twice the worst measured total (49 + 98 ms); 10× / 400 chars sit
- *  between the measured pre-jump (20-93 chars) and post-jump (1 454-8 291, 40-200×). */
+ *  between the measured pre-jump (20-93 chars) and post-jump (1 454-8 291, 40-200×).
+ *  textMarkers is off: see the field doc above. */
 export const DEFAULT_READ_OPTIONS: Readonly<ReadOptions> = {
   maxDepth: 8,
   maxTotalChars: 16_000,
   timeBudgetMs: 300,
   jumpRatio: 10,
   jumpMinChars: 400,
+  textMarkers: false,
 };
 
-export interface NativeLevel { depth: number; chars: number; fragments: string[] }
+export interface NativeLevel { depth: number; chars: number; fragments: string[]; truncated: boolean }
 
 export interface NativeContextResult {
   ok: boolean;
@@ -59,7 +72,11 @@ export interface AxContextNative {
   isTrusted(): boolean;
 }
 
-export interface LevelSummary { depth: number; chars: number; n: number }
+/** truncated: true when the addon hit kSubtreeMaxNodes collecting this level
+ *  (a per-level cap on harvested nodes) — the level's chars/fragments may be
+ *  incomplete. Without this, a capped level and a complete one look alike,
+ *  which is exactly what the jump ratio compares (final review, correction 5). */
+export interface LevelSummary { depth: number; chars: number; n: number; truncated: boolean }
 
 export interface RawContext {
   pid: number;
@@ -70,6 +87,11 @@ export interface RawContext {
   levelSummary: LevelSummary[];
   /** Normalized fragments of the chosen level (richest level when no jump). */
   fragments: string[];
+  /** WebKit marker-text diagnostics — counts only (spec, privacy 2). null
+   *  when the addon didn't return a marker (textMarkers off, no jump, or a
+   *  non-WebKit app). fragmentsTouched counts pre-split fragments that the
+   *  marker lines actually replaced (final review, correction 8). */
+  markerText: { chars: number; fragmentsTouched: number } | null;
   timings: { elementAtPositionMs: number; collectMs: number; totalMs: number; wrapperMs: number };
 }
 
@@ -119,25 +141,6 @@ function loadNativeAddon(appRoot: string, isPackaged: boolean): AxContextNative 
   );
 }
 
-const FRAGMENT_SPLIT = /\s*⋄\s*|\r?\n/u;
-
-/** Splits on the " ⋄ " separator and on newlines, trims, collapses internal
- *  whitespace, drops empties and exact duplicates; order preserved. */
-export function normalizeNativeFragments(fragments: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of fragments) {
-    for (const piece of raw.split(FRAGMENT_SPLIT)) {
-      const cleaned = piece.trim().replace(/\s+/gu, " ");
-      if (cleaned.length === 0) continue;
-      if (seen.has(cleaned)) continue;
-      seen.add(cleaned);
-      out.push(cleaned);
-    }
-  }
-  return out;
-}
-
 /** Fragments of the chosen level, or of the level with the most chars when
  *  the addon found no jump (chosenLevel === -1). Empty when there are no levels. */
 export function pickFragments(result: NativeContextResult): string[] {
@@ -153,36 +156,105 @@ export function pickFragments(result: NativeContextResult): string[] {
   return richest.fragments;
 }
 
+/**
+ * Parses a CLI numeric argument, throwing instead of returning `NaN` when it
+ * isn't one. `Number("")`/`Number("abc")` degrade silently: in the probe
+ * (final review, correction 8) a non-numeric `--delay` skipped the countdown
+ * (`NaN > 0` is false, so the loop never ran) and a non-numeric `--budget`
+ * slipped past `buildTranscript`'s minimum-budget guard (`NaN < 100` is also
+ * false) instead of failing with a clear message. */
+export function parseFiniteNumber(raw: string, label: string): number {
+  // Number("") is 0 and Number("  ") is also 0 — neither is a number the
+  // caller actually typed, so an empty/blank argument is rejected too, same
+  // as any other non-numeric one.
+  const n = raw.trim().length === 0 ? NaN : Number(raw);
+  if (!Number.isFinite(n)) throw new RangeError(`${label} deve essere un numero finito, ricevuto: ${JSON.stringify(raw)}`);
+  return n;
+}
+
 const MARKER_SPLIT_MIN_CHARS = 120;
+
+/** A line produced by the marker split that, on its own, would be shorter
+ *  than the parser's survival floor (SENTENCE_MIN, imported so the two never
+ *  drift apart) is glued onto the piece being accumulated instead of being
+ *  emitted as its own fragment — otherwise `keepContentful` drops it outright
+ *  (final review, correction 1: this is exactly how a trailing question like
+ *  "Le va bene giovedì o venerdì?" was disappearing on Mail bodies, since the
+ *  AX tree's single long fragment got re-split into one short, unattributed
+ *  piece per marker line and the short ones never survived phase 2). A line
+ *  long enough to stand on its own always starts a new piece. */
+function mergeShortLines(lines: readonly string[]): string[] {
+  const merged: string[] = [];
+  for (const line of lines) {
+    if (line.length < SENTENCE_MIN && merged.length > 0) {
+      merged[merged.length - 1] = `${merged[merged.length - 1]} ${line}`;
+    } else {
+      merged.push(line);
+    }
+  }
+  return merged;
+}
+
+export interface MarkerSplitResult {
+  fragments: string[];
+  /** Count of pre-split fragments the marker lines actually replaced. */
+  touched: number;
+}
 
 /**
  * WebKit safety net (spec §1.7): the AX tree loses paragraph breaks, the text
  * markers keep them. For every fragment of at least 120 chars, if a run of
  * two or more consecutive marker lines, joined by single spaces, equals the
- * fragment exactly, the fragment is replaced by those lines. Never adds text
- * from the marker string that is not already in the fragment: the marker
- * text has no scope (spike 1) and must not become a content source.
+ * fragment exactly, the fragment is replaced by those lines (short lines
+ * merged into the preceding one, see `mergeShortLines`). Never adds text from
+ * the marker string that is not already in the fragment: the marker text has
+ * no scope (spike 1) and must not become a content source.
  */
-export function splitByMarkerLines(fragments: readonly string[], markerText: string | undefined): string[] {
-  if (markerText === undefined) return [...fragments];
+export function splitByMarkerLinesDetailed(
+  fragments: readonly string[],
+  markerText: string | undefined,
+): MarkerSplitResult {
+  if (markerText === undefined) return { fragments: [...fragments], touched: 0 };
   const markerLines = markerText.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.length > 0);
-  if (markerLines.length < 2) return [...fragments];
+  if (markerLines.length < 2) return { fragments: [...fragments], touched: 0 };
 
-  return fragments.flatMap((fragment) => {
+  let touched = 0;
+  const out = fragments.flatMap((fragment) => {
     if (fragment.length < MARKER_SPLIT_MIN_CHARS) return [fragment];
     const replacement = findCoveringRun(fragment, markerLines);
-    return replacement ?? [fragment];
+    if (!replacement) return [fragment];
+    touched += 1;
+    return mergeShortLines(replacement);
   });
+  return { fragments: out, touched };
 }
 
-/** Looks for a contiguous run of `lines` (length >= 2) whose single-space
- *  join equals `fragment` exactly; returns that run, or null if none match. */
+export function splitByMarkerLines(fragments: readonly string[], markerText: string | undefined): string[] {
+  return splitByMarkerLinesDetailed(fragments, markerText).fragments;
+}
+
+/**
+ * Looks for a contiguous run of `lines` (length >= 2) whose single-space join
+ * equals `fragment` exactly; returns that run, or null if none match.
+ *
+ * Two guards keep this from being quadratic in practice (final review,
+ * correction 2: 833 ms measured on 300 marker lines / ~18k chars with 20 long
+ * fragments, 6.3 s on 600 lines — and unmeasured by the outer timeout, which
+ * is read before this ever runs): a start line that isn't itself a prefix of
+ * `fragment` cannot begin a matching run, so it is skipped without joining
+ * anything; and the accumulated run is built incrementally and abandoned the
+ * moment it is at least as long as `fragment`, instead of re-joining a
+ * growing slice from scratch on every inner step.
+ */
 function findCoveringRun(fragment: string, lines: readonly string[]): string[] | null {
   for (let start = 0; start < lines.length; start++) {
+    if (!fragment.startsWith(lines[start]!)) continue;
+    let acc = lines[start]!;
     for (let end = start + 1; end < lines.length; end++) {
-      // Slice is non-empty by construction (end > start >= 0, within bounds).
-      const run = lines.slice(start, end + 1);
-      if (run.join(" ") === fragment) return run;
+      if (acc.length >= fragment.length) break; // can only grow past fragment.length now
+      acc = `${acc} ${lines[end]}`;
+      if (acc.length > fragment.length) break; // overshot: this run cannot match
+      if (acc === fragment) return lines.slice(start, end + 1);
     }
   }
   return null;
@@ -259,7 +331,7 @@ export class AxContextReader {
     const t0 = this.now();
     const native = this.native.readContextUnderCursor(opts);
     const wrapperMs = this.now() - t0;
-    const levelSummary = native.levels.map((l) => ({ depth: l.depth, chars: l.chars, n: l.fragments.length }));
+    const levelSummary = native.levels.map((l) => ({ depth: l.depth, chars: l.chars, n: l.fragments.length, truncated: l.truncated }));
 
     if (wrapperMs > this.timeoutMs) {
       const r: ReadContextResult = { ok: false, reason: "timeout", pid: native.pid, bundleId: native.bundleId, levelSummary };
@@ -279,7 +351,9 @@ export class AxContextReader {
       return r;
     }
 
-    const fragments = splitByMarkerLines(normalizeNativeFragments(pickFragments(native)), native.webkitMarkerText);
+    const preSplit = normalizeFragments(pickFragments(native));
+    const split = splitByMarkerLinesDetailed(preSplit, native.webkitMarkerText);
+    const fragments = split.fragments;
 
     if (fragments.length === 0) {
       const r: ReadContextResult = { ok: false, reason: "no-text", pid: native.pid, bundleId: native.bundleId, levelSummary };
@@ -297,6 +371,9 @@ export class AxContextReader {
         chosenLevel: native.chosenLevel,
         levelSummary,
         fragments,
+        markerText: native.webkitMarkerText === undefined
+          ? null
+          : { chars: native.webkitMarkerText.length, fragmentsTouched: split.touched },
         timings: { ...native.timings, wrapperMs },
       },
     };
