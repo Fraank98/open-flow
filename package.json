@@ -23,7 +23,8 @@
     "dev": "npm run build && electron dist/main/index.js",
     "package": "npm run build && electron-builder --mac dmg --arm64",
     "rebuild-native": "electron-rebuild -f --arch arm64",
-    "ax-probe": "tsc --project tsconfig.tools.json && electron dist-tools/tools/ax-context-probe.js"
+    "ax-probe": "tsc --project tsconfig.tools.json && electron dist-tools/tools/ax-context-probe.js",
+    "reply-bench": "tsx tools/reply-classifier-bench.ts"
   },
   "engines": {
     "node": ">=20"
