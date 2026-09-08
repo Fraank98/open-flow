@@ -35,7 +35,14 @@ need otool xcode-select
 # own build-tmp/ absolute path, or a binary left over from a different
 # LLAMA_TAG/WHISPER_TAG checkout) rebuilds instead of being waved through by
 # a bare `-x` check.
-rpath_ok() { otool -l "$1" 2>/dev/null | grep -q "path $2"; }
+# True when $1 carries EXACTLY the rpath $2. The match must be whole-line:
+# `grep -q "path @executable_path/../lib"` also matches `../lib-llama`, which
+# would let a llama binary satisfy the whisper guard.
+rpath_ok() {
+  otool -l "$1" 2>/dev/null \
+    | awk '/LC_RPATH/ { want = 1; next } want && $1 == "path" { print $2; want = 0 }' \
+    | grep -qxF "$2"
+}
 
 build_whisper() {
   if [[ -x "$BIN_DIR/whisper-cli" && -x "$BIN_DIR/whisper-server" ]] \
