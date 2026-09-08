@@ -68,8 +68,49 @@ function hasMagnitudeLink(run: readonly number[], nextSeg: readonly number[]): b
   return run.some((v) => v >= 100) || nextSeg.some((v) => v >= 100);
 }
 
+/**
+ * "cento per cento" ("a hundred percent", idiomatic for "totally") is not
+ * two literal hundreds, and "<n> per cento" ("n percent") is one quantity
+ * (n) plus a percent suffix, not n and a separate literal 100. Without this,
+ * "novanta per cento" parsed as [90, 100], and a 100 nobody said made an
+ * otherwise-grounded reply fail the filter's number-anchoring check (found
+ * by review, live case: "Il novanta per cento del lavoro è già in review"
+ * against a context that only ever said "90%").
+ */
+function stripPercentIdioms(tokens: readonly string[]): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    if (tokens[i] === "cento" && tokens[i + 1] === "per" && tokens[i + 2] === "cento") { i += 3; continue; }
+    if (tokens[i] === "per" && tokens[i + 1] === "cento") { i += 2; continue; }
+    out.push(tokens[i]!); // i < tokens.length (while guard)
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * "mille grazie" / "grazie mille" (both orders are idiomatic Italian) and
+ * "un milione di grazie" are thank-you idioms, not a count of anything
+ * (found by review: parsed as literal 1000/1,000,000 and tripped the
+ * filter's number-anchoring check on ordinary gratitude).
+ */
+function stripGratitudeIdioms(tokens: readonly string[]): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    if (tokens[i] === "mille" && tokens[i + 1] === "grazie") { i += 2; continue; }
+    if (tokens[i] === "grazie" && tokens[i + 1] === "mille") { i += 2; continue; }
+    if ((tokens[i] === "milione" || tokens[i] === "milioni") && tokens[i + 1] === "di" && tokens[i + 2] === "grazie") { i += 3; continue; }
+    out.push(tokens[i]!); // i < tokens.length (while guard)
+    i += 1;
+  }
+  return out;
+}
+
 export function parseNumberWords(text: string): number[] {
-  const tokens = normalize(text).split(/[^\p{L}]+/u).filter((t) => t.length > 0);
+  const rawTokens = normalize(text).split(/[^\p{L}]+/u).filter((t) => t.length > 0);
+  const tokens = stripGratitudeIdioms(stripPercentIdioms(rawTokens));
   const numbers: number[] = [];
   let run: number[] = [];
   let runTokens: string[] = [];

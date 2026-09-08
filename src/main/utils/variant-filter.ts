@@ -53,12 +53,22 @@ const INVENTED_COMMITMENT = /\b(sono in riunione|ho una riunione|sono in ferie|s
 // Accent-insensitive: "\b" is ASCII-only in JS even under the "u" flag, so a
 // trailing "\b" right after an accented vowel ("perché", "poiché") never
 // matches — the match text is accent-stripped first (see hasInventedReason).
-const CAUSAL = /\b(perche|in quanto|dato che|poiche|siccome|a causa d[iel]|because|since|as i)\b/iu;
+// "a causa d[iel]" (a single char after "d") only ever matches the 2-letter
+// forms "di"/"de"/"dl": "del"/"della"/"dei"/"degli" are 3+ letters, so the
+// trailing \b — mid-word, between two letters — never fires and "a causa
+// del …" was silently never treated as causal at all (found by review).
+const CAUSAL = /\b(perche|in quanto|dato che|poiche|siccome|a causa (?:di|del|dell[ae]|dello|dei|degli)|because|since|as i)\b/iu;
 const REASON_KEYS = new Set(["decline", "reject_offer"]);
 // A model that runs out of things to say sometimes echoes the second-person
-// instruction it was given ("Verifichi e fai sapere…") instead of writing a
-// first-person reply.
-const INSTRUCTION_ECHO = /^\s*(?:verifichi|puoi|non puoi|fai sapere|scegli|rispondi in senso)\b/iu;
+// INSTRUCTION it was given ("Verifichi e fai sapere…", "Rispondi in senso
+// affermativo…") instead of writing a first-person reply. The original
+// version matched any sentence merely opening with "puoi"/"scegli"/"fai
+// sapere" — ordinary, extremely common Italian for a reply addressed TO the
+// counterpart ("Puoi contare su di me", "Fai sapere a Paolo…") — which made
+// the feature mute (found by review: 4 legitimate replies all dropped).
+// Narrowed to the two specific instruction-shaped phrasings actually
+// observed, which are not something a person says to another person.
+const INSTRUCTION_ECHO = /\bverifichi\b[^.!?]{0,60}\bfai sapere\b|\brispondi in senso (?:affermativo|negativo)\b/iu;
 // Literal leak of the prompt's own example marker phrase ("nello spirito
 // di…"); isCannedExampleCopy below catches the subtler case where the model
 // reproduces the example's CONTENT without naming the marker.
@@ -91,7 +101,13 @@ export function jaccardWords(a: string, b: string): number {
 }
 
 export function cleanVariantText(text: string): string {
-  let t = text.replace(/[*_]/gu, "").replace(/\s+/gu, " ").trim();
+  // Typographic apostrophes (U+2018/U+2019), which models emit routinely,
+  // defeat every regex written with a plain ASCII "'" (DONE_ACTION's
+  // "i've", INVENTED_COMMITMENT's "i'm", …) if left unnormalized — found by
+  // review: "I’ve already sent…" and "I’m in a meeting…" (curly apostrophe)
+  // both slipped through. Normalizing once here, rather than patching every
+  // regex, closes the whole family of apostrophe-variant escapes at once.
+  let t = text.replace(/[‘’]/gu, "'").replace(/[*_]/gu, "").replace(/\s+/gu, " ").trim();
   t = t.replace(LABEL_PREFIX, "").trim();
   const pairs: Array<[string, string]> = [['"', '"'], ["'", "'"], ["«", "»"], ["“", "”"]];
   for (const [open, close] of pairs) {
@@ -123,12 +139,19 @@ function digitTokens(s: string): string[] {
   return (s.replace(/(?<=\d)[.,](?=\d{3}\b)/gu, "").match(/\d+/gu) ?? []).filter((d) => Number(d) !== 0);
 }
 
+/**
+ * Exact membership, not substring: `.includes()` on the raw digit strings
+ * let "48"/"5"/"85"/"8" all match inside "4850" as if they'd been said in
+ * the conversation, which defeats the whole point of this rule (found by
+ * review — "48 ore", "5 giorni", "otto giorni" all read as anchored against
+ * a context that only ever said "4.850"). A number is anchored only if it
+ * equals — as a value, digits or words agreeing — one the context actually
+ * stated.
+ */
 function hasUnanchoredNumber(text: string, transcript: string): boolean {
-  const ctxDigits = digitTokens(transcript);
-  const ctxWordNumbers = new Set(parseNumberWords(transcript));
-  const anchored = (value: string): boolean => ctxDigits.some((c) => c.includes(value)) || ctxWordNumbers.has(Number(value));
-  for (const d of digitTokens(text)) if (!anchored(d)) return true;
-  for (const n of parseNumberWords(text)) if (!anchored(String(n))) return true;
+  const ctxValues = new Set<number>([...digitTokens(transcript).map(Number), ...parseNumberWords(transcript)]);
+  for (const d of digitTokens(text)) if (!ctxValues.has(Number(d))) return true;
+  for (const n of parseNumberWords(text)) if (!ctxValues.has(n)) return true;
   return false;
 }
 

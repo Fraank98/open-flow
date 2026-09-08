@@ -42,3 +42,29 @@ describe("parseNumberWords — English", () => {
     expect(parseNumberWords("one thousand")).toEqual([1000]);
   });
 });
+
+/**
+ * Fix round 1 (review): "cento"/"mille"/"milione" show up in idioms that
+ * carry no quantity at all — a percent suffix or a thank-you turn of
+ * phrase — and were previously read as literal hundreds/thousands/millions,
+ * which then made the variant filter's number-anchoring rule reject
+ * perfectly grounded replies (live case: "novanta per cento" against a
+ * context that only ever said "90%").
+ */
+describe("parseNumberWords — idiomatic non-quantitative uses", () => {
+  it("'<n> per cento' is the number alone, not the number plus a literal 100", () => {
+    expect(parseNumberWords("Il novanta per cento del lavoro è già in review.")).toEqual([90]);
+  });
+  it("'cento per cento' (idiomatic for 'totally') carries no quantity", () => {
+    expect(parseNumberWords("Va bene al cento per cento.")).toEqual([]);
+  });
+  it("'mille grazie'/'grazie mille' (both orders) and 'un milione di grazie' are gratitude, not counts", () => {
+    expect(parseNumberWords("mille grazie per la segnalazione")).toEqual([]);
+    expect(parseNumberWords("grazie mille per la segnalazione")).toEqual([]);
+    expect(parseNumberWords("un milione di grazie")).toEqual([]);
+  });
+  it("does not eat a genuine count next to 'per' or 'grazie' out of context", () => {
+    expect(parseNumberWords("cento euro per la cena")).toEqual([100]);
+    expect(parseNumberWords("mille euro di danni")).toEqual([1000]);
+  });
+});

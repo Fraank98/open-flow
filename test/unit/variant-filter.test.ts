@@ -203,3 +203,67 @@ describe("filterVariants — privacy", () => {
     for (const d of toLogMeta(r).dropped) expect(Object.keys(d).sort()).toEqual(["key", "rule"]);
   });
 });
+
+/**
+ * Fix round 1 (review, verified by running the real modules): two Critical
+ * findings (numbers anchored by substring; a typographic apostrophe
+ * disabling done-action/invented-reason) and three Important ones (a dead
+ * causal alternative; instruction-echo muting the feature; idiomatic
+ * numbers). See task-4-report.md §Fix round 1 for the before/after proof.
+ */
+describe("Fix round 1 (review)", () => {
+  const quote = {
+    ...CTX,
+    lastMessage: "Il totale è 4.850 euro IVA esclusa, con inizio lavori entro tre settimane.",
+    transcript: "OGGETTO: Preventivo\nINTERLOCUTORE (Francesca Bianchi): Il totale è 4.850 euro IVA esclusa, con inizio lavori entro tre settimane.",
+    counterpart: "Francesca",
+  };
+
+  it("Critical 1 — unanchored-number: a substring of an anchored number is not itself anchored", () => {
+    // "4.850" contains "850", "485", "48", "8", "5" as substrings, and word
+    // numerals for some of them, but none of these was ever said.
+    for (const bad of ["850 euro", "485 euro", "48 ore", "5 giorni", "85 euro", "8 giorni", "otto giorni", "cinque giorni"]) {
+      expect(run([V("accept_offer", `Confermo, direi ${bad} circa.`), GOOD_B, GOOD_C], quote).dropped, bad).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    }
+  });
+
+  it("Critical 2 — done-action and invented-reason fire through a typographic apostrophe (U+2019)", () => {
+    expect(run([V("accept", "I’ve already sent the payment yesterday."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "done-action" }]);
+    expect(run([V("accept", "I’m in a meeting all afternoon."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "invented-reason" }]);
+  });
+
+  it("Important — 'a causa del …' is recognized as causal, and grounds it against the context like 'perché'", () => {
+    const invented = "Non riesco a prenderla, a causa del blocco totale del mio sprint interno.";
+    expect(run([V("decline", invented), GOOD_A, GOOD_C]).dropped).toEqual([{ key: "decline", rule: "invented-reason" }]);
+  });
+
+  it("Important — instruction-echo no longer drops ordinary second-person replies", () => {
+    for (const t of [
+      "Puoi contare su di me, la review la faccio oggi pomeriggio.",
+      "Puoi girarla a Paolo, io questa settimana non ce la faccio.",
+      "Scegli tu come preferisci, per me vanno bene entrambe.",
+      "Fai sapere a Paolo che la review la faccio io.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+    // The two instruction-shaped phrasings it exists to catch still fire.
+    expect(run([V("accept", "Verifichi e fai sapere a breve se riesci a occupartene."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(run([V("accept", "Rispondi in senso affermativo alla richiesta della review."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+  });
+
+  it("Important — idiomatic 'per cento'/'grazie' numbers don't trip unanchored-number", () => {
+    const pctCtx = { ...CTX, lastMessage: "siamo al 90%?", transcript: "INTERLOCUTORE (Marta): siamo al 90%?" };
+    expect(run([V("accept", "Il novanta per cento del lavoro è già in review."), GOOD_B, GOOD_C], pctCtx).dropped).toEqual([]);
+    expect(run([V("accept", "Grazie mille per la segnalazione, la guardo subito."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  it("legitimate — signature: a formal closing with no name is not a signature", () => {
+    expect(run([V("accept", "Confermo la revisione per venerdì. Cordiali saluti."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  it("legitimate — question-echo: a realistic reply that reuses some of the question's words is kept", () => {
+    const realistic = "La review della PR sul login la faccio io, non serve girarla a Paolo.";
+    expect(jaccardWords(realistic, CTX.lastMessage)).toBeLessThanOrEqual(0.6);
+    expect(run([V("accept", realistic), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+});
