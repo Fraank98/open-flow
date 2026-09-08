@@ -7,6 +7,7 @@
 // JS API:
 //   const ax = require('./build/Release/ax_context.node');
 //   ax.readContextUnderCursor({ maxDepth, maxTotalChars, timeBudgetMs, jumpRatio, jumpMinChars,
+//                               textMarkers?: boolean (default false),
 //                               bundleIdFilter?: { mode: "allowlist"|"blocklist", bundleIds: string[] } })
 //     → NativeContextResult (see src/main/ax-context-reader.ts)
 //   ax.activateApp(pid)  → boolean
@@ -47,6 +48,13 @@ static const NSUInteger kDefaultMaxTotalChars = 16000;
 static const double kDefaultTimeBudgetMs = 300;
 static const double kDefaultJumpRatio = 10;
 static const NSUInteger kDefaultJumpMinChars = 400;
+// Off by default: the marker path was never exercised by any build in three
+// rounds of fixes (final review, correction 4), and AXStartTextMarker /
+// AXEndTextMarker are document-scoped in WebKit/Chromium — calling them on
+// the chosen ancestor does not confine them to it (final review, correction
+// 3; this is why it is gated behind an explicit opt-in rather than fixed to
+// be scoped, which the AX API does not allow).
+static const bool kDefaultTextMarkers = false;
 
 #pragma mark - Small helpers
 
@@ -160,8 +168,10 @@ struct Harvest {
 // rather than dropped whole or let through, and that always sets
 // h.budgetHit — the sum of every levels[].fragments this call returns can
 // never exceed maxTotalChars, and a truncated result never claims ok:true.
-// (webkitMarkerText, on ok:true, is a separate safety-net field capped
-// independently at maxTotalChars and is NOT counted against this budget —
+// (webkitMarkerText, on ok:true and only when the caller opts into
+// `textMarkers`, is an additional safety-net field fetched after the climb;
+// it is capped to what remains of maxTotalChars — not a separate budget of
+// its own — and its length is folded back into totalCharsSoFar once fetched:
 // see step 9 in ReadContextUnderCursor.) Landing exactly on the cap with a
 // whole, untruncated fragment does not by itself set h.budgetHit — nothing
 // was lost. Whether it stays unset depends on what's visited next: the
@@ -292,7 +302,21 @@ static NSString* textMarkerString(AXUIElementRef el, NSUInteger maxChars) {
             str) {
           if (CFGetTypeID(str) == CFStringGetTypeID()) {
             NSString* full = (__bridge NSString*)str;
-            result = full.length <= maxChars ? [full copy] : [full substringToIndex:maxChars];
+            if (full.length <= maxChars) {
+              result = [full copy];
+            } else {
+              // Truncate at a composed-character-sequence boundary, not a raw
+              // UTF-16 index: `maxChars` may fall inside a surrogate pair or a
+              // combining cluster, and a split surrogate makes -UTF8String's
+              // behavior unspecified — it can return NULL and silently drop
+              // the whole field downstream (same fix as collectSubtree above).
+              NSUInteger cut = maxChars;
+              if (cut > 0) {
+                NSRange seq = [full rangeOfComposedCharacterSequenceAtIndex:cut - 1];
+                if (NSMaxRange(seq) > cut) cut = seq.location;
+              }
+              result = cut > 0 ? [full substringToIndex:cut] : nil;
+            }
           }
           CFRelease(str);
         }
@@ -325,6 +349,7 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
   double timeBudgetMs = kDefaultTimeBudgetMs;
   double jumpRatio = kDefaultJumpRatio;
   NSUInteger jumpMinChars = kDefaultJumpMinChars;
+  bool textMarkers = kDefaultTextMarkers;
   NSString* filterMode = nil;
   NSMutableSet<NSString*>* filterBundleIds = nil;
   // True as soon as the caller included a bundleIdFilter key at all, even
@@ -360,6 +385,9 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
     if (opts.Has("jumpMinChars") && opts.Get("jumpMinChars").IsNumber()) {
       jumpMinChars = (NSUInteger)opts.Get("jumpMinChars").As<Napi::Number>().Uint32Value();
     }
+    if (opts.Has("textMarkers") && opts.Get("textMarkers").IsBoolean()) {
+      textMarkers = opts.Get("textMarkers").As<Napi::Boolean>().Value();
+    }
     if (opts.Has("bundleIdFilter")) {
       Napi::Value filterVal = opts.Get("bundleIdFilter");
       if (!filterVal.IsUndefined()) {
@@ -380,8 +408,9 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
                 allStrings = false;  // one non-string element makes the whole list malformed
                 break;
               }
-              [ids addObject:[NSString
-                                  stringWithUTF8String:v.As<Napi::String>().Utf8Value().c_str()]];
+              NSString* idStr = [NSString
+                  stringWithUTF8String:v.As<Napi::String>().Utf8Value().c_str()];
+              if (idStr) [ids addObject:idStr];  // stringWithUTF8String: can return nil on invalid UTF-8
             }
             if (allStrings) {
               filterBundleIds = ids;  // may legitimately be empty — that's "block/allow nothing"
@@ -571,11 +600,33 @@ static Napi::Value ReadContextUnderCursor(const Napi::CallbackInfo& info) {
           if (!anyText) {
             ok = false;
             reason = "no-text";
-          } else if (chosenLevel >= 0) {
+          } else if (chosenLevel >= 0 && textMarkers) {
             // ---- 9. WebKit text-marker safety net, chosen ancestor first --
-            webkitMarkerText = textMarkerString(chosenAncestor, maxTotalChars);
+            // maxChars is capped to the harvested level's own chars: beyond
+            // that many chars the marker text cannot possibly join into an
+            // exact match for any fragment of that level (findCoveringRun
+            // requires an exact join), and further capped to what remains of
+            // the cumulative budget so this step cannot, by itself, push the
+            // total past maxTotalChars — it used to be capped separately at
+            // the full maxTotalChars and not counted at all, so a single read
+            // could leave the addon with up to double the declared budget
+            // (final review, correction 3). Once fetched, its length is
+            // added to totalCharsSoFar so it is accounted for like any other
+            // harvested text, even though no further collectSubtree call in
+            // this read will see the updated total.
+            NSUInteger chosenLevelChars =
+                ((size_t)chosenLevel < levels.size()) ? levels[(size_t)chosenLevel].chars : 0;
+            NSUInteger remaining =
+                (maxTotalChars > totalCharsSoFar) ? (maxTotalChars - totalCharsSoFar) : 0;
+            webkitMarkerText = textMarkerString(chosenAncestor, MIN(chosenLevelChars, remaining));
             if (webkitMarkerText.length == 0) {
-              webkitMarkerText = textMarkerString(editable, maxTotalChars);
+              NSUInteger level0Chars = levels.empty() ? 0 : levels[0].chars;
+              NSUInteger remaining0 =
+                  (maxTotalChars > totalCharsSoFar) ? (maxTotalChars - totalCharsSoFar) : 0;
+              webkitMarkerText = textMarkerString(editable, MIN(level0Chars, remaining0));
+            }
+            if (webkitMarkerText.length > 0) {
+              totalCharsSoFar += webkitMarkerText.length;
             }
           }
         }
