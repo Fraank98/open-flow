@@ -66,5 +66,30 @@ describe("parseNumberWords — idiomatic non-quantitative uses", () => {
   it("does not eat a genuine count next to 'per' or 'grazie' out of context", () => {
     expect(parseNumberWords("cento euro per la cena")).toEqual([100]);
     expect(parseNumberWords("mille euro di danni")).toEqual([1000]);
+    // Fix round 2 (review): "per cento" was stripped unconditionally, even
+    // when "cento" itself was the genuine count and "per" merely a
+    // preposition ("te lo faccio per cento euro" = "I'll do it for a
+    // hundred euros", not a percentage) — an invented amount then slipped
+    // past the variant filter's number-anchoring check.
+    expect(parseNumberWords("Te lo faccio per cento euro, se ti va bene procediamo.")).toEqual([100]);
+    expect(parseNumberWords("Lo consegno per cento clienti entro la settimana prossima.")).toEqual([100]);
+  });
+});
+
+/**
+ * Fix round 2 (review): punctuation was not a token boundary, so removing an
+ * idiom's tokens could weld the numerals on either side of it together
+ * ("novanta" + "tre" → wrongly evaluated as 93), and stripping "mille" next
+ * to "grazie" across a sentence break ate a genuine count that merely
+ * happened to sit near a thank-you in a different sentence.
+ */
+describe("parseNumberWords — punctuation is a token boundary", () => {
+  it("does not eat a genuine count separated from 'grazie' by sentence punctuation", () => {
+    expect(parseNumberWords("Facciamo mille, grazie. Ci penso io alla consegna.")).toEqual([1000]);
+    expect(parseNumberWords("Ti mando mille. Grazie! Ci penso io alla consegna.")).toEqual([1000]);
+    expect(parseNumberWords("Ti mando mille euro appena posso, tranquilla.")).toEqual([1000]);
+  });
+  it("does not weld the numerals on either side of a removed percent idiom into one number", () => {
+    expect(parseNumberWords("Il novanta per cento, tre giorni al massimo e chiudo.")).toEqual([90, 3]);
   });
 });

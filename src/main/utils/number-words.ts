@@ -9,6 +9,18 @@
  * "ventuno" → vent+uno). Consecutive numeral tokens, optionally joined by
  * "e"/"and", form one number. A run made of a single ambiguous token
  * (un/uno/una/one — articles; sei — "you are") is dropped.
+ *
+ * Digit runs are tokenized too, but are never numeral tokens themselves
+ * (`segment()` rejects them same as any other non-vocabulary word, so they
+ * still break a run the way they did when they used to vanish between
+ * separators) — they only serve as "a numeral sits right before this point"
+ * signal for the percent-idiom guard below. A separator that carries
+ * sentence punctuation (`.,;:!?…`) becomes an explicit BARRIER token instead
+ * of vanishing silently: this is what stops idiom-stripping from welding the
+ * numerals on either side of the idiom together, and what stops a genuine
+ * count from being read as part of a thank-you idiom two sentences away
+ * (fix round 2, review). Plain separators (spaces, hyphens, apostrophes)
+ * still vanish with no token at all, exactly as before.
  */
 const IT: Record<string, number> = {
   zero: 0, uno: 1, due: 2, tre: 3, quattro: 4, cinque: 5, sei: 6, sette: 7, otto: 8, nove: 9, dieci: 10,
@@ -32,6 +44,20 @@ function normalize(s: string): string {
   return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
+const BARRIER = "\u0000";
+const SENTENCE_PUNCT = /[.,;:!?…]/u;
+
+/** Letter runs and digit runs as tokens; a BARRIER token per punctuation
+ *  separator; plain separators (space/hyphen/apostrophe/…) produce nothing. */
+function tokenize(s: string): string[] {
+  const out: string[] = [];
+  for (const m of s.matchAll(/(\p{L}+)|(\p{N}+)|([^\p{L}\p{N}]+)/gu)) {
+    if (m[1] !== undefined || m[2] !== undefined) out.push(m[1] ?? m[2]!);
+    else if (SENTENCE_PUNCT.test(m[3]!)) out.push(BARRIER);
+  }
+  return out;
+}
+
 /** Greedy longest-prefix segmentation; null when the token is not fully numeral. */
 function segment(token: string): number[] | null {
   const out: number[] = [];
@@ -43,6 +69,14 @@ function segment(token: string): number[] | null {
     rest = rest.slice(piece.length);
   }
   return out;
+}
+
+/** A digit run (never itself parsed as a vocabulary numeral) or a token that
+ *  segments completely — i.e. a numeral just emitted, for the "<per> <cento>
+ *  is a percent suffix only right after a numeral" guard below. */
+function isNumeralToken(token: string | undefined): boolean {
+  if (token === undefined) return false;
+  return /^\p{N}+$/u.test(token) || segment(token) !== null;
 }
 
 function evaluate(pieces: readonly number[]): number {
@@ -76,13 +110,22 @@ function hasMagnitudeLink(run: readonly number[], nextSeg: readonly number[]): b
  * otherwise-grounded reply fail the filter's number-anchoring check (found
  * by review, live case: "Il novanta per cento del lavoro è già in review"
  * against a context that only ever said "90%").
+ *
+ * "<per> <cento>" is only ever a percent suffix right after a numeral
+ * (digit or word) already emitted — otherwise "cento" is the genuine count
+ * and "per" a plain preposition ("per cento euro" = "for a hundred euros"),
+ * and both tokens are left alone (found by review: an unconditional strip
+ * let an invented price slip past the filter's number-anchoring check).
+ * Removed groups are replaced by a BARRIER, not deleted outright, so they
+ * cannot weld the numerals on either side of the idiom into one number
+ * (found by review, live case: "novanta per cento, tre giorni" read as 93).
  */
 function stripPercentIdioms(tokens: readonly string[]): string[] {
   const out: string[] = [];
   let i = 0;
   while (i < tokens.length) {
-    if (tokens[i] === "cento" && tokens[i + 1] === "per" && tokens[i + 2] === "cento") { i += 3; continue; }
-    if (tokens[i] === "per" && tokens[i + 1] === "cento") { i += 2; continue; }
+    if (tokens[i] === "cento" && tokens[i + 1] === "per" && tokens[i + 2] === "cento") { out.push(BARRIER); i += 3; continue; }
+    if (tokens[i] === "per" && tokens[i + 1] === "cento" && isNumeralToken(out[out.length - 1])) { out.push(BARRIER); i += 2; continue; }
     out.push(tokens[i]!); // i < tokens.length (while guard)
     i += 1;
   }
@@ -93,15 +136,19 @@ function stripPercentIdioms(tokens: readonly string[]): string[] {
  * "mille grazie" / "grazie mille" (both orders are idiomatic Italian) and
  * "un milione di grazie" are thank-you idioms, not a count of anything
  * (found by review: parsed as literal 1000/1,000,000 and tripped the
- * filter's number-anchoring check on ordinary gratitude).
+ * filter's number-anchoring check on ordinary gratitude). Removed groups are
+ * replaced by a BARRIER, not deleted outright (see stripPercentIdioms):
+ * without it, a genuine count followed by an unrelated "grazie" in the next
+ * sentence ("Facciamo mille, grazie. Ci penso io...") was eaten too, because
+ * nothing marked the sentence break between them (found by review).
  */
 function stripGratitudeIdioms(tokens: readonly string[]): string[] {
   const out: string[] = [];
   let i = 0;
   while (i < tokens.length) {
-    if (tokens[i] === "mille" && tokens[i + 1] === "grazie") { i += 2; continue; }
-    if (tokens[i] === "grazie" && tokens[i + 1] === "mille") { i += 2; continue; }
-    if ((tokens[i] === "milione" || tokens[i] === "milioni") && tokens[i + 1] === "di" && tokens[i + 2] === "grazie") { i += 3; continue; }
+    if (tokens[i] === "mille" && tokens[i + 1] === "grazie") { out.push(BARRIER); i += 2; continue; }
+    if (tokens[i] === "grazie" && tokens[i + 1] === "mille") { out.push(BARRIER); i += 2; continue; }
+    if ((tokens[i] === "milione" || tokens[i] === "milioni") && tokens[i + 1] === "di" && tokens[i + 2] === "grazie") { out.push(BARRIER); i += 3; continue; }
     out.push(tokens[i]!); // i < tokens.length (while guard)
     i += 1;
   }
@@ -109,7 +156,7 @@ function stripGratitudeIdioms(tokens: readonly string[]): string[] {
 }
 
 export function parseNumberWords(text: string): number[] {
-  const rawTokens = normalize(text).split(/[^\p{L}]+/u).filter((t) => t.length > 0);
+  const rawTokens = tokenize(normalize(text));
   const tokens = stripGratitudeIdioms(stripPercentIdioms(rawTokens));
   const numbers: number[] = [];
   let run: number[] = [];

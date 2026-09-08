@@ -57,7 +57,14 @@ const INVENTED_COMMITMENT = /\b(sono in riunione|ho una riunione|sono in ferie|s
 // forms "di"/"de"/"dl": "del"/"della"/"dei"/"degli" are 3+ letters, so the
 // trailing \b — mid-word, between two letters — never fires and "a causa
 // del …" was silently never treated as causal at all (found by review).
-const CAUSAL = /\b(perche|in quanto|dato che|poiche|siccome|a causa (?:di|del|dell[ae]|dello|dei|degli)|because|since|as i)\b/iu;
+// Longest alternatives first so the elided form ("a causa dell'imprevisto")
+// matches on the first try instead of relying on backtracking out of "del"
+// after its trailing \b fails mid-word (found by review: it was missing
+// from the alternation entirely, so "a causa dell'…" was never causal at
+// all — same family of bug as the "del" case above, since "'" is a
+// non-word character to JS's ASCII-only "\b" and "dell'" alone never
+// matched anything in the list).
+const CAUSAL = /\b(perche|in quanto|dato che|poiche|siccome|a causa (?:degli|dello|dell'|dell[ae]|dei|del|di)|because|since|as i)\b/iu;
 const REASON_KEYS = new Set(["decline", "reject_offer"]);
 // A model that runs out of things to say sometimes echoes the second-person
 // INSTRUCTION it was given ("Verifichi e fai sapere…", "Rispondi in senso
@@ -68,7 +75,12 @@ const REASON_KEYS = new Set(["decline", "reject_offer"]);
 // the feature mute (found by review: 4 legitimate replies all dropped).
 // Narrowed to the two specific instruction-shaped phrasings actually
 // observed, which are not something a person says to another person.
-const INSTRUCTION_ECHO = /\bverifichi\b[^.!?]{0,60}\bfai sapere\b|\brispondi in senso (?:affermativo|negativo)\b/iu;
+// [\s\S]{0,60}, not [^.!?]{0,60}: the two-sentence form ("Verifichi la
+// situazione. Fai sapere...") stopped matching once the model closed the
+// first clause with a period instead of a comma, because [^.!?] can't cross
+// a sentence boundary (found by review). The two literal anchors are the
+// restrictive part of this rule; only the gap between them is widened.
+const INSTRUCTION_ECHO = /\bverifichi\b[\s\S]{0,60}\bfai sapere\b|\brispondi in senso (?:affermativo|negativo)\b/iu;
 // Literal leak of the prompt's own example marker phrase ("nello spirito
 // di…"); isCannedExampleCopy below catches the subtler case where the model
 // reproduces the example's CONTENT without naming the marker.
@@ -100,14 +112,23 @@ export function jaccardWords(a: string, b: string): number {
   return inter / (wa.size + wb.size - inter);
 }
 
+// Typographic apostrophes (U+2018/U+2019) and MODIFIER LETTER APOSTROPHE
+// (U+02BC, "ʼ"), which models emit routinely, defeat every regex written
+// with a plain ASCII "'" (DONE_ACTION's "i've", INVENTED_COMMITMENT's
+// "i'm", …) if left unnormalized — found by review: "I’ve already sent…",
+// "I’m in a meeting…" and "Iʼve already sent…" all slipped through.
+// Extracted to one function, rather than patched inline, so the same
+// normalization also applies to the counterpart/user NAME in isSignature
+// below — a name from the AX tree can carry the same typographic
+// apostrophe ("D’Angelo") and previously escaped `signature` entirely
+// because it was normalized only in the variant text, not in the name it
+// was compared against (found by review).
+function normalizeApostrophes(s: string): string {
+  return s.replace(/[‘’ʼ]/gu, "'");
+}
+
 export function cleanVariantText(text: string): string {
-  // Typographic apostrophes (U+2018/U+2019), which models emit routinely,
-  // defeat every regex written with a plain ASCII "'" (DONE_ACTION's
-  // "i've", INVENTED_COMMITMENT's "i'm", …) if left unnormalized — found by
-  // review: "I’ve already sent…" and "I’m in a meeting…" (curly apostrophe)
-  // both slipped through. Normalizing once here, rather than patching every
-  // regex, closes the whole family of apostrophe-variant escapes at once.
-  let t = text.replace(/[‘’]/gu, "'").replace(/[*_]/gu, "").replace(/\s+/gu, " ").trim();
+  let t = normalizeApostrophes(text).replace(/[*_]/gu, "").replace(/\s+/gu, " ").trim();
   t = t.replace(LABEL_PREFIX, "").trim();
   const pairs: Array<[string, string]> = [['"', '"'], ["'", "'"], ["«", "»"], ["“", "”"]];
   for (const [open, close] of pairs) {
@@ -126,7 +147,7 @@ function escapeRe(s: string): string {
 
 function isSignature(text: string, counterpart: string, user: string): boolean {
   if (FORMAL_CLOSING.test(text)) return true;
-  for (const name of [firstToken(counterpart), firstToken(user)].filter((n) => n.length > 0)) {
+  for (const name of [firstToken(normalizeApostrophes(counterpart)), firstToken(normalizeApostrophes(user))].filter((n) => n.length > 0)) {
     const n = escapeRe(name);
     if (new RegExp(`(?:saluti|grazie|presto|cordiali|distinti)[,\\s]*${n}\\s*[.!]?\\s*$`, "iu").test(text)) return true;
     if (new RegExp(`[.!?,]\\s+${n}\\s*[.!]?\\s*$`, "u").test(text)) return true;

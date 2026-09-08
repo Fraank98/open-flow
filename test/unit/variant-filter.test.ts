@@ -77,6 +77,12 @@ describe("filterVariants — each rule, positive and negative", () => {
     expect(run([V("accept_offer", "Confermo, ma entro due settimane e non tre."), GOOD_B, GOOD_C], quote).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
     expect(run([V("accept_offer", "Confermo il preventivo di 4.900 euro, procediamo."), GOOD_B, GOOD_C], quote).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
     expect(run([V("accept", "Ci penso io, la chiudo entro le 18 di oggi."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "unanchored-number" }]);
+    // Fix round 2 (review): "per cento" was stripped unconditionally by
+    // parseNumberWords, so an invented amount phrased as "per cento euro"
+    // (genuinely "a hundred euros", not a percentage) parsed to no number at
+    // all and slipped past this rule.
+    const noNumbers = { ...CTX, transcript: "INTERLOCUTORE (Marta): ciao, come procede?", lastMessage: "ciao, come procede?" };
+    expect(run([V("accept_offer", "Te lo faccio per cento euro, se ti va bene procediamo."), GOOD_B, GOOD_C], noNumbers).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
   });
 
   it("question-echo: Jaccard with the last message above 0.6 is dropped", () => {
@@ -265,5 +271,36 @@ describe("Fix round 1 (review)", () => {
     const realistic = "La review della PR sul login la faccio io, non serve girarla a Paolo.";
     expect(jaccardWords(realistic, CTX.lastMessage)).toBeLessThanOrEqual(0.6);
     expect(run([V("accept", realistic), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+});
+
+/**
+ * Fix round 2 (review, verified by running the real modules): an Important
+ * finding (an invented price slipping past unanchored-number via a
+ * mis-stripped "per cento") and three Minor ones (a typographic apostrophe
+ * in the counterpart/user NAME, rather than the variant text, still
+ * defeating `signature`; the elided causal form "a causa dell'…"; and
+ * instruction-echo not crossing a sentence boundary).
+ */
+describe("Fix round 2 (review)", () => {
+  it("signature: a typographic apostrophe in the counterpart's name (not just the variant text) is normalized", () => {
+    expect(
+      run([V("accept", "Ci penso io. Grazie, D’Angelo"), GOOD_B, GOOD_C], { counterpart: "D’Angelo" }).dropped,
+    ).toEqual([{ key: "accept", rule: "signature" }]);
+  });
+
+  it("done-action: MODIFIER LETTER APOSTROPHE (U+02BC) is normalized like the typographic apostrophes", () => {
+    expect(run([V("accept", "Iʼve already sent the payment yesterday."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "done-action" }]);
+  });
+
+  it("invented-reason: the elided causal form 'a causa dell'…' is recognized as causal", () => {
+    const invented = "Non ce la faccio a causa dell'imprevisto totale del mio sprint interno.";
+    expect(run([V("decline", invented), GOOD_A, GOOD_C]).dropped).toEqual([{ key: "decline", rule: "invented-reason" }]);
+  });
+
+  it("instruction-echo: the two-sentence form ('Verifichi la situazione.' + 'Fai sapere...') is still caught", () => {
+    expect(run([V("accept", "Verifichi la situazione. Fai sapere a breve come procedere."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    // Legitimate replies from fix round 1 stay kept.
+    expect(run([V("accept", "Puoi girarla a Paolo, io questa settimana non ce la faccio."), GOOD_B, GOOD_C]).dropped).toEqual([]);
   });
 });
