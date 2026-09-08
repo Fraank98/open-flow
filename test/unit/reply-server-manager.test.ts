@@ -38,6 +38,8 @@ function env(over: {
   deferDownload?: boolean;
   /** Hold every created server's `start()` open until the test releases it via `releaseStart(index)`. */
   deferStart?: boolean;
+  /** Hold every `isInstalled()` call open until the test calls `releaseInstalled(index)`. */
+  deferInstalled?: boolean;
 } = {}) {
   const installed = new Set(over.installed ?? ["gemma-3-4b-it-Q4_K_M.gguf"]);
   const servers: Array<ReturnType<typeof fakeServer> & { modelPath: string }> = [];
@@ -49,6 +51,7 @@ function env(over: {
     installed.add(desc.filename);
   });
   const startGates: Array<ReturnType<typeof deferred<void>>> = [];
+  const installedGates: Array<ReturnType<typeof deferred<void>>> = [];
   const logger = { info: vi.fn(async () => {}), error: vi.fn(async () => {}) };
   const states: string[] = [];
   const m = new ReplyServerManager({
@@ -60,7 +63,14 @@ function env(over: {
       return s;
     },
     modelManager: {
-      isInstalled: async (d) => installed.has(d.filename),
+      isInstalled: async (d) => {
+        if (over.deferInstalled) {
+          const gate = deferred<void>();
+          installedGates.push(gate);
+          await gate.promise;
+        }
+        return installed.has(d.filename);
+      },
       download,
       getInstalledPath: (d) => `/models/${d.filename}`,
     },
@@ -68,9 +78,10 @@ function env(over: {
   });
   m.onStateChange((s) => states.push(s));
   return {
-    m, servers, download, logger, states,
+    m, servers, download, logger, states, installedGates,
     releaseDownload: () => downloadGate?.resolve(),
     releaseStart: (i = 0) => startGates[i]?.resolve(),
+    releaseInstalled: (i = 0) => installedGates[i]?.resolve(),
   };
 }
 
@@ -315,6 +326,143 @@ describe("ReplyServerManager.stop", () => {
     await m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
     expect(servers).toHaveLength(2);
     expect(m.isReady()).toBe(true);
+  });
+});
+
+// The generation is bumped synchronously by stop()/disable, but a job already
+// sitting in the queue only reads it once the queue gives it a turn. These
+// tests put a job in that "still queued, not yet running" position — as
+// opposed to "already running, suspended on an await", covered above — by
+// enqueueing it and firing the invalidating call before its own turn comes up.
+describe("ReplyServerManager — generation captured at enqueue time, not at job start", () => {
+  it("apply({enabled:true}) and stop() in the same tick: no server survives, state off, endpoint null", async () => {
+    const { m, servers } = env();
+    const applyPromise = m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
+    m.stop(); // synchronous, before apply()'s queued job has had a turn to run
+    await applyPromise;
+    expect(servers).toHaveLength(0);
+    expect(m.getState()).toBe("off");
+    expect(m.isReady()).toBe(false);
+    expect(m.getEndpoint()).toBeNull();
+  });
+
+  it("apply({enabled:true}) queued behind an in-flight download, then stop(): no server survives", async () => {
+    const { m, servers, states, releaseDownload } = env({ installed: [], deferDownload: true });
+    const firstApply = m.apply({ enabled: true, replyModelId: "gemma-4-e4b" }); // stuck downloading
+    await vi.waitFor(() => expect(states).toContain("downloading"));
+    const secondApply = m.apply({ enabled: true, replyModelId: "gemma-4-e4b" }); // queued behind the first, not yet run
+    m.stop(); // synchronous, before the second job's turn comes up
+    releaseDownload();
+    await Promise.all([firstApply, secondApply]);
+    expect(servers).toHaveLength(0);
+    expect(m.getState()).toBe("off");
+    expect(m.getEndpoint()).toBeNull();
+  });
+
+  it("apply({enabled:false}) queued right behind an enable that hasn't run yet: no server is ever created, ends off", async () => {
+    const { m, servers, download, releaseDownload } = env({ installed: [], deferDownload: true });
+    const enablePromise = m.apply({ enabled: true, replyModelId: "gemma-4-e4b" });
+    const disablePromise = m.apply({ enabled: false, replyModelId: "gemma-4-e4b" }); // same tick; enable's job hasn't run yet
+    releaseDownload();
+    await Promise.all([enablePromise, disablePromise]);
+    expect(download).not.toHaveBeenCalled();
+    expect(servers).toHaveLength(0);
+    expect(m.getState()).toBe("off");
+  });
+
+  it("recover() queued right before a disabling apply(): no server is started after the disable lands", async () => {
+    const { m, servers } = env();
+    await m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
+    expect(m.getState()).toBe("ready");
+    const recoverPromise = m.recover(); // queued; current/state still show the live, ready server
+    const disablePromise = m.apply({ enabled: false, replyModelId: "gemma-3-4b" }); // bumps generation now, queued behind recover()
+    const recovered = await recoverPromise;
+    await disablePromise;
+    expect(recovered).toBe(false);
+    expect(servers).toHaveLength(1); // recover() never created a second server
+    expect(m.getState()).toBe("off");
+    expect(m.isReady()).toBe(false);
+    expect(m.getEndpoint()).toBeNull();
+  });
+
+  it("stop() during isInstalled (not-installed branch): state moves to off, the listener is told, no download is even attempted", async () => {
+    const { m, states, download, installedGates, releaseInstalled } = env({ installed: ["gemma-3-4b-it-Q4_K_M.gguf"], deferInstalled: true });
+    const firstApply = m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
+    await vi.waitFor(() => expect(installedGates).toHaveLength(1));
+    releaseInstalled(0);
+    await firstApply;
+    expect(m.getState()).toBe("ready");
+
+    const secondApply = m.apply({ enabled: true, replyModelId: "gemma-4-e4b" }); // not installed
+    await vi.waitFor(() => expect(installedGates).toHaveLength(2)); // genuinely suspended inside isInstalled
+    m.stop();
+    releaseInstalled(1);
+    await secondApply;
+
+    expect(m.getState()).toBe("off");
+    expect(states[states.length - 1]).toBe("off");
+    expect(download).not.toHaveBeenCalled();
+    expect(m.isReady()).toBe(false);
+    expect(m.getEndpoint()).toBeNull();
+  });
+
+  it("stop() during isInstalled (already-installed branch): state moves to off, no server for the new tier, old one already stopped", async () => {
+    const { m, servers, states, installedGates, releaseInstalled } = env({
+      installed: ["gemma-3-4b-it-Q4_K_M.gguf", "gemma-4-E4B-it-Q4_K_M.gguf"],
+      deferInstalled: true,
+    });
+    const firstApply = m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
+    await vi.waitFor(() => expect(installedGates).toHaveLength(1));
+    releaseInstalled(0);
+    await firstApply;
+    expect(m.getState()).toBe("ready");
+    expect(servers).toHaveLength(1);
+
+    const secondApply = m.apply({ enabled: true, replyModelId: "gemma-4-e4b" }); // already installed
+    await vi.waitFor(() => expect(installedGates).toHaveLength(2));
+    m.stop();
+    releaseInstalled(1);
+    await secondApply;
+
+    expect(m.getState()).toBe("off");
+    expect(states[states.length - 1]).toBe("off");
+    expect(servers).toHaveLength(1); // no second server was ever created
+    expect(servers[0]!.stopCalls).toBe(1); // stopped once, when reconcile switched away from it
+    expect(m.isReady()).toBe(false);
+    expect(m.getEndpoint()).toBeNull();
+  });
+
+  it("no download-progress events are delivered after a stop()", async () => {
+    const { m, states, releaseDownload } = env({ installed: [], deferDownload: true });
+    const progress: Array<{ bytes: number; total: number }> = [];
+    m.onDownloadProgress((p) => progress.push(p));
+    const applyPromise = m.apply({ enabled: true, replyModelId: "gemma-4-e4b" });
+    await vi.waitFor(() => expect(states).toContain("downloading"));
+    m.stop();
+    releaseDownload(); // the fake download() calls onProgress only after this resolves
+    await applyPromise;
+    expect(progress).toEqual([]);
+  });
+
+  it("no download-progress events are delivered after a disable", async () => {
+    const { m, states, releaseDownload } = env({ installed: [], deferDownload: true });
+    const progress: Array<{ bytes: number; total: number }> = [];
+    m.onDownloadProgress((p) => progress.push(p));
+    const enablePromise = m.apply({ enabled: true, replyModelId: "gemma-4-e4b" });
+    await vi.waitFor(() => expect(states).toContain("downloading"));
+    const disablePromise = m.apply({ enabled: false, replyModelId: "gemma-4-e4b" });
+    releaseDownload();
+    await Promise.all([enablePromise, disablePromise]);
+    expect(progress).toEqual([]);
+  });
+
+  it("the restart budget regenerates on a re-apply with identical prefs, even a no-op one", async () => {
+    const { m } = env();
+    await m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
+    expect(await m.recover()).toBe(true); // spends the one-restart budget
+    expect(m.getState()).toBe("ready");
+    await m.apply({ enabled: true, replyModelId: "gemma-3-4b" }); // identical re-apply, a no-op otherwise
+    expect(await m.recover()).toBe(true); // budget regenerated, not "restarted once already"
   });
 });
 

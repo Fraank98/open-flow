@@ -69,7 +69,15 @@ export class ReplyServerManager {
     // queued, so a download/start already in progress notices on its next
     // await and gives up instead of finishing behind our back.
     if (!prefs.enabled) this.generation += 1;
-    const job = this.queue.then(() => this.reconcile(prefs));
+    // Capture the generation now too — at enqueue time, not when the queue
+    // later gives this job its turn. The bump above is synchronous but the
+    // queue turn is not: a job enqueued *before* a stop()/disable, but whose
+    // turn comes up *after* it, must still compare against the generation it
+    // was enqueued under, not the one already bumped by the time it runs —
+    // otherwise its own recheck below is comparing a stale baseline to
+    // itself and can never see a mismatch.
+    const generation = this.generation;
+    const job = this.queue.then(() => this.reconcile(prefs, generation));
     this.queue = job.catch(() => undefined);
     return job;
   }
@@ -77,7 +85,9 @@ export class ReplyServerManager {
   /** One automatic restart per apply(); false when refused or off. */
   recover(): Promise<boolean> {
     let result = false;
-    const job = this.queue.then(async () => { result = await this.doRecover(); });
+    // Same reasoning as apply(): capture at enqueue time, not job-start time.
+    const generation = this.generation;
+    const job = this.queue.then(async () => { result = await this.doRecover(generation); });
     this.queue = job.catch(() => undefined);
     return job.then(() => result);
   }
@@ -102,19 +112,30 @@ export class ReplyServerManager {
     if (this.server) { this.server.stop(); this.server = null; }
   }
 
-  private async reconcile(prefs: ReplyServerPrefs): Promise<void> {
+  private async reconcile(prefs: ReplyServerPrefs, generation: number): Promise<void> {
     if (!prefs.enabled) {
       if (this.server || this.state !== "off") { this.stopServer(); this.setState("off"); }
       this.current = null;
       this.error = null;
       return;
     }
+    // Entry check: this job may have sat in the queue behind a stop()/disable
+    // whose generation bump already landed before this job's turn came up
+    // (`current`/`state` might not be rewritten yet either — a disabling
+    // apply()'s own reconcile could still be queued behind this one). Back
+    // off without touching state — whoever bumped it already set what they
+    // wanted.
+    if (generation !== this.generation) return;
     const same = this.current !== null && this.current.replyModelId === prefs.replyModelId && this.isReady();
-    if (same) return;
-    // Snapshot the generation this job is acting on. If stop() or a disabling
-    // apply() bumps it while we're suspended on an await below, whoever
-    // bumped it already set the state they wanted — we just back off.
-    const generation = this.generation;
+    if (same) {
+      // The restart budget exists to stop an *automatic* restart loop from a
+      // failed request; a re-apply — identical or not — is always a
+      // deliberate user action and can never reopen that loop, so it always
+      // regenerates the budget, matching the class docstring ("... until the
+      // user re-applies").
+      this.restarts = 0;
+      return;
+    }
     this.stopServer();
     this.current = { ...prefs };
     this.restarts = 0;
@@ -122,10 +143,21 @@ export class ReplyServerManager {
     const desc = getModelById("reply", prefs.replyModelId);
     if (!desc) { this.error = `unknown reply model: ${prefs.replyModelId}`; this.setState("failed"); return; }
     try {
-      if (!(await this.deps.modelManager.isInstalled(desc))) {
+      const installed = await this.deps.modelManager.isInstalled(desc);
+      // The one await in this module that previously had no recheck: a
+      // stop()/disable landing here left the state stuck on "downloading" or
+      // "starting" forever, since stop()'s own setState("off") had already
+      // happened (and is a no-op once the state already reads "off").
+      if (generation !== this.generation) return;
+      if (!installed) {
         this.setState("downloading");
         const t0 = Date.now();
-        await this.deps.modelManager.download(desc, (p) => { for (const l of this.progressListeners) l(p); });
+        await this.deps.modelManager.download(desc, (p) => {
+          // No progress for a feature the user has already turned off or
+          // moved on from.
+          if (generation !== this.generation) return;
+          for (const l of this.progressListeners) l(p);
+        });
         void this.deps.logger.info("reply model downloaded", { modelId: desc.id, ms: Date.now() - t0 });
         // Superseded while the download was in flight: nothing was started,
         // so there is nothing to stop. Note this does not abort the HTTP
@@ -167,8 +199,13 @@ export class ReplyServerManager {
     this.setState("ready", { loadMs: Date.now() - t0 });
   }
 
-  private async doRecover(): Promise<boolean> {
+  private async doRecover(generation: number): Promise<boolean> {
     if (!this.current || this.state === "off") return false;
+    // Same reasoning as reconcile's entry check: this job may have been
+    // queued before a stop()/disabling apply() whose bump already landed,
+    // even if `current`/`state` haven't been rewritten yet (that job might
+    // still be waiting behind this one in the queue).
+    if (generation !== this.generation) return false;
     if (this.restarts >= 1) {
       this.error = "reply server restarted once already";
       this.stopServer();
@@ -184,7 +221,6 @@ export class ReplyServerManager {
     // user's next real restart still gets a full budget either way.
     this.restarts += 1;
     this.stopServer();
-    const generation = this.generation;
     try {
       await this.startServer(desc, generation);
       // Superseded while starting: the restart did not actually happen, so
