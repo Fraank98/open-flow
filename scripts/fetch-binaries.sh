@@ -27,9 +27,26 @@ need() {
 need cmake cmake
 need git git
 need swiftc xcode-select
+need otool xcode-select
+
+# True if binary $1 carries an LC_RPATH entry equal to $2. Used by the build
+# guards below so a checkout that already has a binary from a *previous*
+# build (baked with a different, non-relocatable rpath — e.g. the machine's
+# own build-tmp/ absolute path, or a binary left over from a different
+# LLAMA_TAG/WHISPER_TAG checkout) rebuilds instead of being waved through by
+# a bare `-x` check.
+# True when $1 carries EXACTLY the rpath $2. The match must be whole-line:
+# `grep -q "path @executable_path/../lib"` also matches `../lib-llama`, which
+# would let a llama binary satisfy the whisper guard.
+rpath_ok() {
+  otool -l "$1" 2>/dev/null \
+    | awk '/LC_RPATH/ { want = 1; next } want && $1 == "path" { print $2; want = 0 }' \
+    | grep -qxF "$2"
+}
 
 build_whisper() {
-  if [[ -x "$BIN_DIR/whisper-cli" && -x "$BIN_DIR/whisper-server" ]]; then
+  if [[ -x "$BIN_DIR/whisper-cli" && -x "$BIN_DIR/whisper-server" ]] \
+    && rpath_ok "$BIN_DIR/whisper-server" "@executable_path/../lib"; then
     echo "[skip] whisper-cli + whisper-server already present"
     return
   fi
@@ -40,7 +57,20 @@ build_whisper() {
   fi
   # GGML_NATIVE=OFF disables -mcpu=native+nodotprod+noi8mm+nosve which Apple
   # clang 17 doesn't accept. Metal GPU acceleration is unaffected.
-  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
+  #
+  # CMAKE_BUILD_WITH_INSTALL_RPATH + CMAKE_INSTALL_RPATH: without this, cmake
+  # bakes the *build-tree* absolute path (this machine's build-tmp/) into
+  # whisper-cli/whisper-server's LC_RPATH — same defect as llama-server had
+  # (see the rpath comment in build_llama). whisper-server is the fallback
+  # transcription path (used only if the native streaming addon fails to
+  # init, src/main/index.ts) and its dylibs are already shipped correctly to
+  # Contents/Resources/lib/ — it was just missing the relative rpath to find
+  # them there. Two entries cover both places the binary runs from:
+  #   @executable_path/lib       dev:      resources/bin/{whisper-server,lib/}
+  #   @executable_path/../lib    packaged: Contents/Resources/{bin/whisper-server,lib/}
+  # Unlike llama, whisper's dylibs stay in the existing resources/bin/lib/ —
+  # no new directory, no filter change, they already live there.
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib;@executable_path/../lib" >/dev/null
   # Targets are named whisper-cli / whisper-server from v1.7.2 onward (they
   # were "main" / "server" in v1.7.1).
   cmake --build "$src/build" -j --target whisper-cli whisper-server
@@ -51,7 +81,8 @@ build_whisper() {
 }
 
 build_llama() {
-  if [[ -x "$BIN_DIR/llama-server" && -x "$BIN_DIR/llama-cli" ]]; then
+  if [[ -x "$BIN_DIR/llama-server" && -x "$BIN_DIR/llama-cli" ]] \
+    && rpath_ok "$BIN_DIR/llama-server" "@executable_path/../lib-llama"; then
     echo "[skip] llama-server + llama-cli already present"
     return
   fi
@@ -60,12 +91,75 @@ build_llama() {
   if [[ ! -d "$src" ]]; then
     git clone --depth 1 --branch "$LLAMA_TAG" "$LLAMA_REPO" "$src"
   fi
-  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
+  # CMAKE_BUILD_WITH_INSTALL_RPATH + CMAKE_INSTALL_RPATH: without these, cmake
+  # bakes this machine's build-tree absolute path into llama-cli/llama-server's
+  # LC_RPATH, so they can never find their dylibs anywhere else — including
+  # inside the packaged .app on another Mac. The published v0.1.0/v0.2.0 DMGs
+  # ship exactly that: a llama-server whose four LC_RPATH entries point into a
+  # build-tmp/ directory that exists only on the maintainer's machine, so the
+  # LLM cleanup step cannot start for anyone else. Two entries cover both
+  # layouts the binary actually runs from:
+  #   @executable_path/lib-llama       dev:      resources/bin/{llama-server,lib-llama/}
+  #   @executable_path/../lib-llama    packaged: Contents/Resources/{bin/llama-server,lib-llama/}
+  #
+  # A dedicated lib-llama/ (not the resources/bin/lib/ that whisper uses) is
+  # deliberate, and it is the subtler half of the bug: llama.cpp and
+  # whisper.cpp each vendor their own ggml build, at different versions but
+  # with identical filenames (libggml-base.dylib and friends). Copying both
+  # into one shared lib/ would have one silently overwrite the other's
+  # same-named files — a corruption that surfaces as an inscrutable runtime
+  # failure rather than a build error.
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib-llama;@executable_path/../lib-llama" >/dev/null
   cmake --build "$src/build" -j --target llama-cli llama-server
   cp "$src/build/bin/llama-cli" "$BIN_DIR/llama-cli"
   cp "$src/build/bin/llama-server" "$BIN_DIR/llama-server"
   chmod +x "$BIN_DIR/llama-cli" "$BIN_DIR/llama-server"
   echo "[ok] llama-cli + llama-server → $BIN_DIR/"
+}
+
+copy_llama_libs() {
+  # Copy llama's own dylibs to a dedicated resources/bin/lib-llama/ (kept
+  # separate from whisper's resources/bin/lib/ — see the rpath comment in
+  # build_llama for why sharing one directory is unsafe). At LLAMA_TAG=b4404,
+  # llama-server links against libllama.dylib and its private
+  # libggml/-base/-cpu/-blas/-metal.dylib; there is no libmtmd (added to
+  # llama.cpp well after this tag). `common` (shared code between llama-cli
+  # and llama-server) is declared `add_library(... STATIC ...)` upstream and
+  # builds to build/common/libcommon.a, not a dylib; the server is a single
+  # add_executable target with no separate "server-impl" library. So there
+  # are no other dylibs to copy beyond these six — verify against `otool -L`
+  # on the built binaries if this ever looks stale after a tag bump.
+  #
+  # Unlike whisper.cpp's build (which places every dylib under build/bin/),
+  # b4404's dylibs land scattered across the build tree: build/src/,
+  # build/ggml/src/, build/ggml/src/ggml-blas/, build/ggml/src/ggml-metal/ —
+  # so this searches the whole build dir rather than assuming one directory.
+  # `cp -a` preserves a version symlink chain where one exists (not the case
+  # for these particular b4404 dylibs, which are unversioned, but is for
+  # e.g. whisper's libwhisper.dylib → libwhisper.1.dylib → ...).
+  local lib_dst="$BIN_DIR/lib-llama"
+  local build_root="$BUILD_DIR/llama.cpp/build"
+  if [[ ! -d "$build_root" ]]; then
+    # No build tree to copy from. That's only an error if lib-llama/ isn't
+    # already populated (e.g. from a prior run, before `rm -rf build-tmp`
+    # per the Tip at the bottom of this script) — nothing to do otherwise.
+    if compgen -G "$lib_dst"/*.dylib >/dev/null 2>&1; then
+      echo "[skip] $lib_dst already populated, no build tree to copy from"
+      return
+    fi
+    echo "[error] llama build output not found at $build_root, and $lib_dst is empty"; exit 1
+  fi
+  rm -rf "$lib_dst"
+  mkdir -p "$lib_dst"
+  local found=0
+  while IFS= read -r -d '' f; do
+    cp -a "$f" "$lib_dst/"
+    found=1
+  done < <(find "$build_root" \( -name "libllama*.dylib" -o -name "libggml*.dylib" \) \( -type f -o -type l \) -print0)
+  if [[ $found -eq 0 ]]; then
+    echo "[error] no llama/ggml dylibs found under $build_root"; exit 1
+  fi
+  echo "[ok] copied $(ls "$lib_dst" | wc -l | tr -d ' ') dylib entries → $lib_dst"
 }
 
 copy_whisper_libs() {
@@ -80,11 +174,19 @@ copy_whisper_libs() {
   # `cp -a` preserves the version symlink chain (libwhisper.dylib →
   # libwhisper.1.dylib → libwhisper.<version>.dylib).
   local lib_dst="$BIN_DIR/lib"
-  mkdir -p "$lib_dst"
   local bin_src="$BUILD_DIR/whisper.cpp/build/bin"
   if [[ ! -d "$bin_src" ]]; then
-    echo "[error] whisper build output not found at $bin_src"; exit 1
+    # No build tree to copy from. That's only an error if lib/ isn't already
+    # populated (e.g. from a prior run, before `rm -rf build-tmp` per the Tip
+    # at the bottom of this script) — nothing to do otherwise.
+    if compgen -G "$lib_dst"/*.dylib >/dev/null 2>&1; then
+      echo "[skip] $lib_dst already populated, no build tree to copy from"
+      return
+    fi
+    echo "[error] whisper build output not found at $bin_src, and $lib_dst is empty"; exit 1
   fi
+  rm -rf "$lib_dst"
+  mkdir -p "$lib_dst"
   local found=0
   for f in "$bin_src"/libwhisper*.dylib "$bin_src"/libggml*.dylib; do
     [[ -e "$f" ]] || continue
@@ -134,6 +236,7 @@ build_flag_monitor() {
 build_whisper
 build_llama
 copy_whisper_libs
+copy_llama_libs
 fetch_vad_model
 build_flag_monitor
 
@@ -141,4 +244,4 @@ echo ""
 echo "Done. Binaries:"
 ls -lh "$BIN_DIR"/whisper-cli "$BIN_DIR"/whisper-server "$BIN_DIR"/llama-cli "$BIN_DIR"/llama-server "$BIN_DIR"/flag-monitor
 echo ""
-echo "Tip: rm -rf $BUILD_DIR to reclaim disk after a successful build."
+echo "Tip: rm -rf $BUILD_DIR to reclaim disk after a successful build (but note binding.gyp also pulls headers from $BUILD_DIR/whisper.cpp/include, so do this after the native addon is built too, or you'll need to re-fetch before it can build again)."
