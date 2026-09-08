@@ -66,8 +66,11 @@ export class LLMServer {
       "-ngl", String(this.opts.ngl ?? 99),
       "-c", String(this.opts.contextSize ?? 1536),
       // Flash attention speeds up both prefill and decode on Apple Silicon
-      // and is required for KV-cache quantization below.
-      "-fa",
+      // and is required for KV-cache quantization below. As of llama.cpp
+      // v0.4.0, -fa takes an optional [on|off|auto] value; passing it bare
+      // makes the parser swallow the next argv token ("-ctk") as -fa's
+      // value and fail to start, so the value must be explicit.
+      "-fa", "on",
       // Quantize the KV cache to q8_0 (vs default f16). Halves KV-cache
       // memory and decode bandwidth with negligible quality impact on this
       // task (punctuation-only edits).

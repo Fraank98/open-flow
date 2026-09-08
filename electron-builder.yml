@@ -44,13 +44,16 @@ extraResources:
   # scripts/fetch-binaries.sh) looks for these at
   # Contents/Resources/lib-llama/.
   #
-  # At LLAMA_TAG=b4404 this is libllama.dylib plus its private
-  # libggml/-base/-cpu/-blas/-metal.dylib — no libmtmd (added to llama.cpp
-  # after this tag; not produced by this build, so not listed here).
+  # The set is tag-dependent: at v0.4.0 it is libllama, libllama-common and
+  # libllama-server-impl (all caught by the libllama* glob), libmtmd, and the
+  # private libggml/-base/-cpu/-blas/-metal. Keep this in step with the find
+  # in scripts/fetch-binaries.sh: a dylib the script copies but this filter
+  # drops produces an incomplete bundle with no error at all.
   - from: resources/bin/lib-llama
     to: lib-llama
     filter:
       - "libllama*.dylib"
+      - "libmtmd*.dylib"
       - "libggml*.dylib"
 
 asar: true
