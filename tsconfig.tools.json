@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-tools",
+    "rootDir": ".",
+    "noEmit": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "sourceMap": false,
+    "declaration": false
+  },
+  "include": ["tools/ax-context-probe.ts"],
+  "exclude": ["node_modules", "dist", "dist-tools", "resources"]
+}
