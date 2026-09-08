@@ -21,7 +21,9 @@
     "build:preload": "tsc --project tsconfig.preload.json",
     "build": "npm run clean && npm run build:main && npm run build:preload",
     "dev": "npm run build && electron dist/main/index.js",
-    "package": "npm run build && electron-builder --mac dmg --arm64"
+    "package": "npm run build && electron-builder --mac dmg --arm64",
+    "rebuild-native": "electron-rebuild -f --arch arm64",
+    "ax-probe": "tsc --project tsconfig.tools.json && electron dist-tools/tools/ax-context-probe.js"
   },
   "engines": {
     "node": ">=20"

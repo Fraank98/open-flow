@@ -62,4 +62,18 @@ describe("PreferencesStore", () => {
   it("defaults dictionary to an empty array", () => {
     expect(DEFAULT_PREFS.dictionary).toEqual([]);
   });
+
+  it("defaults userDisplayName to an empty string", () => {
+    expect(DEFAULT_PREFS.userDisplayName).toBe("");
+  });
+
+  it("loads an old preferences file without userDisplayName as an empty string", async () => {
+    const path = join(dir, "prefs.json");
+    const { writeFile } = await import("node:fs/promises");
+    // A file written by a version that predates the field.
+    await writeFile(path, JSON.stringify({ setupComplete: true, language: "it" }));
+    const prefs = await new PreferencesStore(path).load();
+    expect(prefs.userDisplayName).toBe("");
+    expect(prefs.language).toBe("it");
+  });
 });
