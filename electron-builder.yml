@@ -43,11 +43,14 @@ extraResources:
   # files. llama-server's rpath (baked in at build time, see
   # scripts/fetch-binaries.sh) looks for these at
   # Contents/Resources/lib-llama/.
+  #
+  # At LLAMA_TAG=b4404 this is libllama.dylib plus its private
+  # libggml/-base/-cpu/-blas/-metal.dylib — no libmtmd (added to llama.cpp
+  # after this tag; not produced by this build, so not listed here).
   - from: resources/bin/lib-llama
     to: lib-llama
     filter:
       - "libllama*.dylib"
-      - "libmtmd*.dylib"
       - "libggml*.dylib"
 
 asar: true

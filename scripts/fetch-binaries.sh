@@ -102,25 +102,33 @@ build_llama() {
 copy_llama_libs() {
   # Copy llama's own dylibs to a dedicated resources/bin/lib-llama/ (kept
   # separate from whisper's resources/bin/lib/ — see the rpath comment in
-  # build_llama for why sharing one directory is unsafe). llama-server needs
-  # libllama*, libllama-common*, libllama-server-impl*, libmtmd* and its own
-  # private libggml* build; llama-cli additionally needs libllama-cli-impl*.
-  # `cp -a` preserves the version symlink chain (libllama.dylib →
-  # libllama.0.dylib → libllama.<version>.dylib).
+  # build_llama for why sharing one directory is unsafe). At LLAMA_TAG=b4404,
+  # llama-server links against libllama.dylib and its private
+  # libggml/-base/-cpu/-blas/-metal.dylib; there is no libmtmd (added to
+  # llama.cpp well after this tag) and no libllama-common /
+  # libllama-server-impl split (that came with a later refactor too) — verify
+  # against `otool -L` on the built binaries if this ever looks stale.
+  #
+  # Unlike whisper.cpp's build (which places every dylib under build/bin/),
+  # b4404's dylibs land scattered across the build tree: build/src/,
+  # build/ggml/src/, build/ggml/src/ggml-blas/, build/ggml/src/ggml-metal/ —
+  # so this searches the whole build dir rather than assuming one directory.
+  # `cp -a` preserves a version symlink chain where one exists (not the case
+  # for these particular b4404 dylibs, which are unversioned, but is for
+  # e.g. whisper's libwhisper.dylib → libwhisper.1.dylib → ...).
   local lib_dst="$BIN_DIR/lib-llama"
   mkdir -p "$lib_dst"
-  local bin_src="$BUILD_DIR/llama.cpp/build/bin"
-  if [[ ! -d "$bin_src" ]]; then
-    echo "[error] llama build output not found at $bin_src"; exit 1
+  local build_root="$BUILD_DIR/llama.cpp/build"
+  if [[ ! -d "$build_root" ]]; then
+    echo "[error] llama build output not found at $build_root"; exit 1
   fi
   local found=0
-  for f in "$bin_src"/libllama*.dylib "$bin_src"/libmtmd*.dylib "$bin_src"/libggml*.dylib; do
-    [[ -e "$f" ]] || continue
+  while IFS= read -r -d '' f; do
     cp -a "$f" "$lib_dst/"
     found=1
-  done
+  done < <(find "$build_root" \( -name "libllama*.dylib" -o -name "libmtmd*.dylib" -o -name "libggml*.dylib" \) \( -type f -o -type l \) -print0)
   if [[ $found -eq 0 ]]; then
-    echo "[error] no llama/mtmd/ggml dylibs found in $bin_src"; exit 1
+    echo "[error] no llama/mtmd/ggml dylibs found under $build_root"; exit 1
   fi
   echo "[ok] copied $(ls "$lib_dst" | wc -l | tr -d ' ') dylib entries → $lib_dst"
 }
