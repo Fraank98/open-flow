@@ -80,7 +80,15 @@ const REASON_KEYS = new Set(["decline", "reject_offer"]);
 // first clause with a period instead of a comma, because [^.!?] can't cross
 // a sentence boundary (found by review). The two literal anchors are the
 // restrictive part of this rule; only the gap between them is widened.
-const INSTRUCTION_ECHO = /\bverifichi\b[\s\S]{0,60}\bfai sapere\b|\brispondi in senso (?:affermativo|negativo)\b/iu;
+// "verifichi" is anchored to the start of a sentence (start of the whole
+// reply, or right after a ".", "!" or "?"): widening the gap above also
+// re-opened a false match on ORDINARY second-person Italian where
+// "verifichi" is the object of a mid-sentence clause addressed to someone
+// else ("Preferisco che la verifichi Marta. Fai sapere anche a Paolo...")
+// — the exact failure mode round 1 fixed for "fai sapere"/"puoi"/"scegli",
+// now recurring for "verifichi" for the same structural reason (found by
+// review).
+const INSTRUCTION_ECHO = /(?:^|[.!?]\s+)verifichi\b[\s\S]{0,60}\bfai sapere\b|\brispondi in senso (?:affermativo|negativo)\b/iu;
 // Literal leak of the prompt's own example marker phrase ("nello spirito
 // di…"); isCannedExampleCopy below catches the subtler case where the model
 // reproduces the example's CONTENT without naming the marker.
@@ -99,8 +107,38 @@ export const STOPWORDS: ReadonlySet<string> = new Set([
   "is", "are", "be", "you", "your", "we", "our", "it", "as",
 ]);
 
+// Typographic apostrophes (U+2018/U+2019) and MODIFIER LETTER APOSTROPHE
+// (U+02BC, "ʼ"), which models emit routinely, defeat every regex written
+// with a plain ASCII "'" (DONE_ACTION's "i've", INVENTED_COMMITMENT's
+// "i'm", …) if left unnormalized — found by review: "I’ve already sent…",
+// "I’m in a meeting…" and "Iʼve already sent…" all slipped through.
+// Extracted to one function, rather than patched inline, so the same
+// normalization also applies wherever else two independently-sourced
+// strings get compared: the counterpart/user NAME in isSignature below (a
+// name from the AX tree can carry the same typographic apostrophe,
+// "D’Angelo", and previously escaped `signature` entirely because only the
+// variant text was normalized — found by review), and words()/contentWords()
+// just below (lastMessage/transcript never go through cleanVariantText the
+// way the variant does, so an unnormalized U+02BC on the context side
+// desynced jaccardWords/hasInventedReason's token counts on the two sides
+// of the comparison — found by review, round 3).
+function normalizeApostrophes(s: string): string {
+  return s.replace(/[‘’ʼ]/gu, "'");
+}
+
+// Apostrophes normalized here, inside words(), rather than left to each
+// caller: U+2018/U+2019 are punctuation and already split a letter run on
+// their own, but U+02BC ("ʼ", MODIFIER LETTER APOSTROPHE) is itself \p{L}
+// and does NOT split one, so "lʼagenda" reads as a single token while the
+// same word normalized to "l'agenda" reads as two ("l", "agenda"). The
+// variant text always goes through cleanVariantText first (which already
+// normalizes), but lastMessage/transcript never do, so an unnormalized
+// U+02BC on the context side desynchronized jaccardWords's token counts on
+// both sides of the comparison and let a genuine echoed question slip past
+// question-echo (found by review, measured: 0.615 → 0.278 jaccard on an
+// otherwise-identical pair of sentences).
 function words(s: string): Set<string> {
-  return new Set((s.toLowerCase().match(/\p{L}+/gu) ?? []).filter((w) => !STOPWORDS.has(w)));
+  return new Set((normalizeApostrophes(s).toLowerCase().match(/\p{L}+/gu) ?? []).filter((w) => !STOPWORDS.has(w)));
 }
 
 export function jaccardWords(a: string, b: string): number {
@@ -110,21 +148,6 @@ export function jaccardWords(a: string, b: string): number {
   let inter = 0;
   for (const w of wa) if (wb.has(w)) inter += 1;
   return inter / (wa.size + wb.size - inter);
-}
-
-// Typographic apostrophes (U+2018/U+2019) and MODIFIER LETTER APOSTROPHE
-// (U+02BC, "ʼ"), which models emit routinely, defeat every regex written
-// with a plain ASCII "'" (DONE_ACTION's "i've", INVENTED_COMMITMENT's
-// "i'm", …) if left unnormalized — found by review: "I’ve already sent…",
-// "I’m in a meeting…" and "Iʼve already sent…" all slipped through.
-// Extracted to one function, rather than patched inline, so the same
-// normalization also applies to the counterpart/user NAME in isSignature
-// below — a name from the AX tree can carry the same typographic
-// apostrophe ("D’Angelo") and previously escaped `signature` entirely
-// because it was normalized only in the variant text, not in the name it
-// was compared against (found by review).
-function normalizeApostrophes(s: string): string {
-  return s.replace(/[‘’ʼ]/gu, "'");
 }
 
 export function cleanVariantText(text: string): string {
@@ -176,8 +199,12 @@ function hasUnanchoredNumber(text: string, transcript: string): boolean {
   return false;
 }
 
+// Apostrophes normalized here too (see words() above): hasInventedReason
+// compares the variant's clause against the transcript's content words, and
+// the same U+02BC-doesn't-split-a-token mismatch would otherwise desync
+// that comparison exactly like it did for jaccardWords.
 function contentWords(s: string): string[] {
-  return (s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().match(/\p{L}{4,}/gu) ?? []);
+  return (normalizeApostrophes(s).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().match(/\p{L}{4,}/gu) ?? []);
 }
 
 /** A causal clause whose content words are mostly absent from the context is

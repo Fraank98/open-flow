@@ -83,6 +83,15 @@ describe("filterVariants — each rule, positive and negative", () => {
     // all and slipped past this rule.
     const noNumbers = { ...CTX, transcript: "INTERLOCUTORE (Marta): ciao, come procede?", lastMessage: "ciao, come procede?" };
     expect(run([V("accept_offer", "Te lo faccio per cento euro, se ti va bene procediamo."), GOOD_B, GOOD_C], noNumbers).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    // Fix round 3 (review): a comma inside a compound numeral ("quattro
+    // mila, ottocento cinquanta") was read as a hard boundary, splitting a
+    // genuine 4850 into [4000, 850] — neither of which matches the context's
+    // "4.850" — and wrongly dropping a legitimate, grounded reply.
+    expect(run([V("accept_offer", "Confermo il preventivo di quattro mila, ottocento cinquanta euro, procediamo."), GOOD_B, GOOD_C], quote).dropped).toEqual([]);
+    // Fix round 3 (review): stripPercentIdioms ran before stripGratitudeIdioms,
+    // so the "mille" of "grazie mille" anchored the percent guard and ate a
+    // genuine "cento" — an invented amount then slipped past this rule.
+    expect(run([V("accept_offer", "Grazie mille per cento euro di anticipo, procediamo così."), GOOD_B, GOOD_C], noNumbers).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
   });
 
   it("question-echo: Jaccard with the last message above 0.6 is dropped", () => {
@@ -302,5 +311,48 @@ describe("Fix round 2 (review)", () => {
     expect(run([V("accept", "Verifichi la situazione. Fai sapere a breve come procedere."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
     // Legitimate replies from fix round 1 stay kept.
     expect(run([V("accept", "Puoi girarla a Paolo, io questa settimana non ce la faccio."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+});
+
+/**
+ * Fix round 3 (review, verified by running the real modules): two Important
+ * findings in number-words.ts (a comma inside a compound numeral read as a
+ * hard boundary; strip order letting the "mille" of a gratitude idiom
+ * anchor the percent guard — both covered at the unit level above and at
+ * the filter level in the "unanchored-number" test) and two Minor ones here
+ * (instruction-echo's widened gap catching ordinary second-person replies
+ * on two sentences; apostrophe normalization applied to the variant but not
+ * to lastMessage/transcript in the context comparisons).
+ */
+describe("Fix round 3 (review)", () => {
+  it("instruction-echo: 'verifichi' is only an instruction when it opens a sentence, not mid-sentence", () => {
+    for (const t of [
+      "Preferisco che la verifichi Marta. Fai sapere anche a Paolo, grazie.",
+      "Non serve che verifichi io. Fai sapere tu a Paolo come procedere.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+    // The sentence-start forms it exists to catch are still caught.
+    expect(run([V("accept", "Verifichi la situazione. Fai sapere a breve come procedere."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(run([V("accept", "Verifichi e fai sapere a breve se riesci a occupartene."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(run([V("accept", "Rispondi in senso affermativo alla richiesta della review."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+  });
+
+  it("question-echo: MODIFIER LETTER APOSTROPHE (U+02BC) is normalized on the context side too, not just the variant", () => {
+    const withModifierLetterApostrophe = {
+      ...CTX,
+      lastMessage: "Hai controllato lʼagenda di oggi pomeriggio prima della review?",
+      transcript: "INTERLOCUTORE (Marta): Hai controllato lʼagenda di oggi pomeriggio prima della review?",
+    };
+    const echo = "Ho controllato lʼagenda di oggi pomeriggio prima della review, confermo.";
+    expect(run([V("accept", echo), GOOD_B, GOOD_C], withModifierLetterApostrophe).dropped).toEqual([{ key: "accept", rule: "question-echo" }]);
+  });
+
+  it("near-duplicate: unaffected by the apostrophe fix (both variant texts already agree via cleanVariantText)", () => {
+    const withApostrophe = V("accept", "Ci penso io, prendo in carico lʼintervento e confermo entro stasera se riesco.");
+    const dup = { ...withApostrophe, key: "defer" };
+    const r = run([withApostrophe, GOOD_B, dup]);
+    expect(r.kept.map((v) => v.key)).toEqual(["accept", "decline"]);
+    expect(r.dropped).toEqual([{ key: "defer", rule: "near-duplicate" }]);
   });
 });

@@ -15,12 +15,20 @@
  * still break a run the way they did when they used to vanish between
  * separators) — they only serve as "a numeral sits right before this point"
  * signal for the percent-idiom guard below. A separator that carries
- * sentence punctuation (`.,;:!?…`) becomes an explicit BARRIER token instead
- * of vanishing silently: this is what stops idiom-stripping from welding the
- * numerals on either side of the idiom together, and what stops a genuine
- * count from being read as part of a thank-you idiom two sentences away
- * (fix round 2, review). Plain separators (spaces, hyphens, apostrophes)
- * still vanish with no token at all, exactly as before.
+ * sentence punctuation (`.;:!?…`) becomes an explicit hard BARRIER token
+ * instead of vanishing silently: this is what stops idiom-stripping from
+ * welding the numerals on either side of the idiom together, and what stops
+ * a genuine count from being read as part of a thank-you idiom two
+ * sentences away (fix round 2, review). A comma gets its own SOFT_BARRIER
+ * instead: in English/Italian a comma inside a compound numeral is the
+ * normal written form ("one thousand, two hundred", "quattro mila,
+ * ottocento cinquanta"), not a sentence break, so — unlike the hard
+ * BARRIER — it still glues the numerals on either side together when they
+ * are magnitude-linked, exactly like the "e"/"and" connector does (fix
+ * round 3, review: a hard barrier on comma silently broke every
+ * comma-written compound number and dropped otherwise-grounded replies).
+ * Plain separators (spaces, hyphens, apostrophes) still vanish with no
+ * token at all, exactly as before.
  */
 const IT: Record<string, number> = {
   zero: 0, uno: 1, due: 2, tre: 3, quattro: 4, cinque: 5, sei: 6, sette: 7, otto: 8, nove: 9, dieci: 10,
@@ -45,15 +53,19 @@ function normalize(s: string): string {
 }
 
 const BARRIER = "\u0000";
-const SENTENCE_PUNCT = /[.,;:!?…]/u;
+const SOFT_BARRIER = "\u0001";
+const SENTENCE_PUNCT = /[.;:!?…]/u;
 
-/** Letter runs and digit runs as tokens; a BARRIER token per punctuation
- *  separator; plain separators (space/hyphen/apostrophe/…) produce nothing. */
+/** Letter runs and digit runs as tokens; a hard BARRIER token per sentence
+ *  punctuation, a SOFT_BARRIER per comma; plain separators
+ *  (space/hyphen/apostrophe/…) produce nothing. */
 function tokenize(s: string): string[] {
   const out: string[] = [];
   for (const m of s.matchAll(/(\p{L}+)|(\p{N}+)|([^\p{L}\p{N}]+)/gu)) {
-    if (m[1] !== undefined || m[2] !== undefined) out.push(m[1] ?? m[2]!);
-    else if (SENTENCE_PUNCT.test(m[3]!)) out.push(BARRIER);
+    if (m[1] !== undefined || m[2] !== undefined) { out.push(m[1] ?? m[2]!); continue; }
+    const sep = m[3]!;
+    if (SENTENCE_PUNCT.test(sep)) out.push(BARRIER);
+    else if (sep.includes(",")) out.push(SOFT_BARRIER);
   }
   return out;
 }
@@ -119,6 +131,12 @@ function hasMagnitudeLink(run: readonly number[], nextSeg: readonly number[]): b
  * Removed groups are replaced by a BARRIER, not deleted outright, so they
  * cannot weld the numerals on either side of the idiom into one number
  * (found by review, live case: "novanta per cento, tre giorni" read as 93).
+ *
+ * Must run AFTER stripGratitudeIdioms (see call site in parseNumberWords):
+ * the "<per> <cento>" guard anchors on whatever numeral immediately
+ * precedes it, and an unremoved "mille" from "grazie mille" is exactly such
+ * a numeral — running this first let it wrongly authorize the strip and eat
+ * a genuine "cento" ("Grazie mille per cento euro" → [], found by review).
  */
 function stripPercentIdioms(tokens: readonly string[]): string[] {
   const out: string[] = [];
@@ -157,7 +175,12 @@ function stripGratitudeIdioms(tokens: readonly string[]): string[] {
 
 export function parseNumberWords(text: string): number[] {
   const rawTokens = tokenize(normalize(text));
-  const tokens = stripGratitudeIdioms(stripPercentIdioms(rawTokens));
+  // Gratitude idioms strip first: stripPercentIdioms's "<per> <cento>" guard
+  // anchors on the immediately preceding numeral, and running it first meant
+  // the still-unremoved "mille" of "grazie mille" was that numeral, wrongly
+  // authorizing "per cento" as a percent suffix and eating a genuine "cento"
+  // ("Grazie mille per cento euro" → [] instead of [100], found by review).
+  const tokens = stripPercentIdioms(stripGratitudeIdioms(rawTokens));
   const numbers: number[] = [];
   let run: number[] = [];
   let runTokens: string[] = [];
@@ -171,7 +194,10 @@ export function parseNumberWords(text: string): number[] {
     const seg = segment(t);
     if (seg) { run.push(...seg); runTokens.push(t); continue; }
     const next = tokens[i + 1];
-    if (CONNECTORS.has(t) && runTokens.length > 0 && next !== undefined) {
+    // SOFT_BARRIER (comma) joins two numeral segments exactly like the
+    // "e"/"and" connector: only when magnitude-linked, so "due, tre giorni"
+    // still reads as two separate counts, not 23 (fix round 3, review).
+    if ((CONNECTORS.has(t) || t === SOFT_BARRIER) && runTokens.length > 0 && next !== undefined) {
       const nextSeg = segment(next);
       if (nextSeg !== null && hasMagnitudeLink(run, nextSeg)) continue;
     }

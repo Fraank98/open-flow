@@ -93,3 +93,54 @@ describe("parseNumberWords — punctuation is a token boundary", () => {
     expect(parseNumberWords("Il novanta per cento, tre giorni al massimo e chiudo.")).toEqual([90, 3]);
   });
 });
+
+/**
+ * Fix round 3 (review): round 2 made every punctuation separator a hard
+ * boundary, but a comma inside a compound numeral ("one thousand, two
+ * hundred", "quattro mila, ottocento cinquanta") is the normal written form,
+ * not a sentence break — the comma needs a SOFT barrier that glues the two
+ * sides back together when they are magnitude-linked (same rule as the "e"
+ * connector), while a hard barrier still applies to sentence punctuation and
+ * to idiom removal.
+ */
+describe("parseNumberWords — a comma inside a compound numeral is not a hard boundary", () => {
+  it("joins magnitude-linked numerals across a comma", () => {
+    expect(parseNumberWords("duemila, trecento")).toEqual([2300]);
+    expect(parseNumberWords("mille, cinquecento")).toEqual([1500]);
+    expect(parseNumberWords("quattro mila, ottocento cinquanta")).toEqual([4850]);
+    expect(parseNumberWords("centomila, duecento euro")).toEqual([100200]);
+    expect(parseNumberWords("one thousand, two hundred pounds")).toEqual([1200]);
+    expect(parseNumberWords("twenty-five thousand, eight hundred and fifty")).toEqual([25850]);
+    expect(parseNumberWords("un milione, duecentomila euro")).toEqual([1200000]);
+  });
+  it("still treats a comma between two unrelated counts as a boundary", () => {
+    expect(parseNumberWords("due, tre giorni")).toEqual([2, 3]);
+    expect(parseNumberWords("tre, quattro settimane")).toEqual([3, 4]);
+    expect(parseNumberWords("venti. Trenta")).toEqual([20, 30]);
+  });
+  it("does not regress the round 2 fixes that also rely on the comma being a boundary", () => {
+    expect(parseNumberWords("Il novanta per cento, tre giorni al massimo e chiudo.")).toEqual([90, 3]);
+    expect(parseNumberWords("Facciamo mille, grazie. Ci penso io alla consegna.")).toEqual([1000]);
+    expect(parseNumberWords("Va bene al cento per cento.")).toEqual([]);
+  });
+});
+
+/**
+ * Fix round 3 (review): stripPercentIdioms ran BEFORE stripGratitudeIdioms,
+ * so by the time it reached "per cento" the still-unremoved "mille" of
+ * "grazie mille" was the preceding token — a numeral — and the percent
+ * guard (round 2, point A) fired on it, stripping a genuine "cento" that
+ * was never a percentage.
+ */
+describe("parseNumberWords — gratitude idioms are stripped before the percent guard runs", () => {
+  it("does not let the 'mille' of a gratitude idiom anchor the percent guard", () => {
+    expect(parseNumberWords("Grazie mille per cento euro di anticipo.")).toEqual([100]);
+  });
+  it("does not regress the already-correct order-independent cases", () => {
+    expect(parseNumberWords("mille grazie per cento euro")).toEqual([100]);
+    expect(parseNumberWords("grazie mille")).toEqual([]);
+    expect(parseNumberWords("mille grazie")).toEqual([]);
+    expect(parseNumberWords("Va bene al cento per cento.")).toEqual([]);
+    expect(parseNumberWords("Il novanta per cento del lavoro è già in review.")).toEqual([90]);
+  });
+});
