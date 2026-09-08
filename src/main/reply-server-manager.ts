@@ -21,7 +21,7 @@ export interface ReplyModelManagerLike {
 export interface ReplyServerManagerDeps {
   createServer: (modelPath: string) => ReplyServerLike;
   modelManager: ReplyModelManagerLike;
-  logger: Pick<Logger, "info" | "warn" | "error">;
+  logger: Pick<Logger, "info" | "error">;
 }
 
 export interface ReplyServerPrefs { enabled: boolean; replyModelId: string }
@@ -39,6 +39,10 @@ export class ReplyServerManager {
   private restarts = 0;
   private error: string | null = null;
   private queue: Promise<void> = Promise.resolve();
+  /** Bumped by stop() and by a disabling apply(); a queued job whose captured
+   *  generation no longer matches abandons its effects instead of resurrecting
+   *  a state that whoever bumped it already set. See `reconcile`/`startServer`. */
+  private generation = 0;
   private readonly stateListeners: Array<(s: ReplyServerState) => void> = [];
   private readonly progressListeners: Array<(p: { bytes: number; total: number }) => void> = [];
 
@@ -60,6 +64,11 @@ export class ReplyServerManager {
 
   /** Reconciles the running state with the preferences. Serialized. */
   apply(prefs: ReplyServerPrefs): Promise<void> {
+    // A disable must invalidate in-flight work immediately, not once its turn
+    // in the queue comes up: bump the generation now, before the job is even
+    // queued, so a download/start already in progress notices on its next
+    // await and gives up instead of finishing behind our back.
+    if (!prefs.enabled) this.generation += 1;
     const job = this.queue.then(() => this.reconcile(prefs));
     this.queue = job.catch(() => undefined);
     return job;
@@ -75,8 +84,10 @@ export class ReplyServerManager {
 
   /** Synchronous stop for will-quit. */
   stop(): void {
+    this.generation += 1;
     this.stopServer();
     this.current = null;
+    this.error = null;
     this.setState("off");
   }
 
@@ -93,12 +104,17 @@ export class ReplyServerManager {
 
   private async reconcile(prefs: ReplyServerPrefs): Promise<void> {
     if (!prefs.enabled) {
-      if (this.server || this.state !== "off") { this.stopServer(); this.current = null; this.setState("off"); }
+      if (this.server || this.state !== "off") { this.stopServer(); this.setState("off"); }
       this.current = null;
+      this.error = null;
       return;
     }
-    const same = this.current !== null && this.current.replyModelId === prefs.replyModelId && this.state === "ready";
+    const same = this.current !== null && this.current.replyModelId === prefs.replyModelId && this.isReady();
     if (same) return;
+    // Snapshot the generation this job is acting on. If stop() or a disabling
+    // apply() bumps it while we're suspended on an await below, whoever
+    // bumped it already set the state they wanted — we just back off.
+    const generation = this.generation;
     this.stopServer();
     this.current = { ...prefs };
     this.restarts = 0;
@@ -111,17 +127,24 @@ export class ReplyServerManager {
         const t0 = Date.now();
         await this.deps.modelManager.download(desc, (p) => { for (const l of this.progressListeners) l(p); });
         void this.deps.logger.info("reply model downloaded", { modelId: desc.id, ms: Date.now() - t0 });
+        // Superseded while the download was in flight: nothing was started,
+        // so there is nothing to stop. Note this does not abort the HTTP
+        // request itself — modelManager.download has no cancellation
+        // contract (adding one would also touch dictation model downloads).
+        // What this guarantees is the memory half of the constraint: no
+        // server gets started and no model gets loaded into RAM afterwards.
+        if (generation !== this.generation) return;
       }
-      await this.startServer(desc);
+      await this.startServer(desc, generation);
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
-      this.stopServer();
       void this.deps.logger.error("reply server failed", { modelId: desc.id, message: this.error });
       this.setState("failed");
+      try { this.stopServer(); } catch { /* best-effort cleanup; state already reflects the failure */ }
     }
   }
 
-  private async startServer(desc: ModelDescriptor): Promise<void> {
+  private async startServer(desc: ModelDescriptor, generation: number): Promise<void> {
     this.setState("starting");
     const t0 = Date.now();
     const server = this.deps.createServer(this.deps.modelManager.getInstalledPath(desc));
@@ -129,9 +152,17 @@ export class ReplyServerManager {
     try {
       await server.start();
     } catch (err) {
-      server.stop();
-      this.server = null;
+      if (this.server === server) { this.server = null; server.stop(); }
+      // Superseded while starting (e.g. stop() tore the process down mid-health-check):
+      // whoever bumped the generation already set the state they want.
+      if (generation !== this.generation) return;
       throw err;
+    }
+    if (generation !== this.generation) {
+      // Superseded while starting: stop the server we just brought up,
+      // unless whoever bumped the generation already stopped it themselves.
+      if (this.server === server) { this.server = null; server.stop(); }
+      return;
     }
     this.setState("ready", { loadMs: Date.now() - t0 });
   }
@@ -144,13 +175,22 @@ export class ReplyServerManager {
       this.setState("failed");
       return false;
     }
-    this.restarts += 1;
     const desc = getModelById("reply", this.current.replyModelId);
     if (!desc) return false;
+    // Spends the one-restart budget up front. If stop()/disable supersedes us
+    // before the restart lands (checked below), that spend is harmless: stop()
+    // nulls `current` so this budget can never be consulted again, and a fresh
+    // apply() unconditionally resets `restarts` to 0 in reconcile — so the
+    // user's next real restart still gets a full budget either way.
+    this.restarts += 1;
     this.stopServer();
+    const generation = this.generation;
     try {
-      await this.startServer(desc);
-      return true;
+      await this.startServer(desc, generation);
+      // Superseded while starting: the restart did not actually happen, so
+      // report failure rather than a misleading true (startServer already
+      // left state/server exactly as whoever superseded us wanted).
+      return generation === this.generation;
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
       this.setState("failed");
