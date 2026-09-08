@@ -73,12 +73,56 @@ build_llama() {
   if [[ ! -d "$src" ]]; then
     git clone --depth 1 --branch "$LLAMA_TAG" "$LLAMA_REPO" "$src"
   fi
-  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 >/dev/null
+  # CMAKE_BUILD_WITH_INSTALL_RPATH + CMAKE_INSTALL_RPATH: without these, cmake
+  # bakes this machine's build-tree absolute path into llama-cli/llama-server's
+  # LC_RPATH, so they can never find their dylibs anywhere else — including
+  # inside the packaged .app on another Mac. The published v0.1.0/v0.2.0 DMGs
+  # ship exactly that: a llama-server whose four LC_RPATH entries point into a
+  # build-tmp/ directory that exists only on the maintainer's machine, so the
+  # LLM cleanup step cannot start for anyone else. Two entries cover both
+  # layouts the binary actually runs from:
+  #   @executable_path/lib-llama       dev:      resources/bin/{llama-server,lib-llama/}
+  #   @executable_path/../lib-llama    packaged: Contents/Resources/{bin/llama-server,lib-llama/}
+  #
+  # A dedicated lib-llama/ (not the resources/bin/lib/ that whisper uses) is
+  # deliberate, and it is the subtler half of the bug: llama.cpp and
+  # whisper.cpp each vendor their own ggml build, at different versions but
+  # with identical filenames (libggml-base.dylib and friends). Copying both
+  # into one shared lib/ would have one silently overwrite the other's
+  # same-named files — a corruption that surfaces as an inscrutable runtime
+  # failure rather than a build error.
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib-llama;@executable_path/../lib-llama" >/dev/null
   cmake --build "$src/build" -j --target llama-cli llama-server
   cp "$src/build/bin/llama-cli" "$BIN_DIR/llama-cli"
   cp "$src/build/bin/llama-server" "$BIN_DIR/llama-server"
   chmod +x "$BIN_DIR/llama-cli" "$BIN_DIR/llama-server"
   echo "[ok] llama-cli + llama-server → $BIN_DIR/"
+}
+
+copy_llama_libs() {
+  # Copy llama's own dylibs to a dedicated resources/bin/lib-llama/ (kept
+  # separate from whisper's resources/bin/lib/ — see the rpath comment in
+  # build_llama for why sharing one directory is unsafe). llama-server needs
+  # libllama*, libllama-common*, libllama-server-impl*, libmtmd* and its own
+  # private libggml* build; llama-cli additionally needs libllama-cli-impl*.
+  # `cp -a` preserves the version symlink chain (libllama.dylib →
+  # libllama.0.dylib → libllama.<version>.dylib).
+  local lib_dst="$BIN_DIR/lib-llama"
+  mkdir -p "$lib_dst"
+  local bin_src="$BUILD_DIR/llama.cpp/build/bin"
+  if [[ ! -d "$bin_src" ]]; then
+    echo "[error] llama build output not found at $bin_src"; exit 1
+  fi
+  local found=0
+  for f in "$bin_src"/libllama*.dylib "$bin_src"/libmtmd*.dylib "$bin_src"/libggml*.dylib; do
+    [[ -e "$f" ]] || continue
+    cp -a "$f" "$lib_dst/"
+    found=1
+  done
+  if [[ $found -eq 0 ]]; then
+    echo "[error] no llama/mtmd/ggml dylibs found in $bin_src"; exit 1
+  fi
+  echo "[ok] copied $(ls "$lib_dst" | wc -l | tr -d ' ') dylib entries → $lib_dst"
 }
 
 copy_whisper_libs() {
@@ -147,6 +191,7 @@ build_flag_monitor() {
 build_whisper
 build_llama
 copy_whisper_libs
+copy_llama_libs
 fetch_vad_model
 build_flag_monitor
 

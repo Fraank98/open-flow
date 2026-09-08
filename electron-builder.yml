@@ -36,6 +36,19 @@ extraResources:
       # ggml was split into libggml, -base, -cpu, -metal and -blas in
       # whisper.cpp v1.9.2; all of them are loaded at runtime.
       - "libggml*.dylib"
+  # llama-server's own dylibs, in a directory separate from the one above.
+  # llama.cpp and whisper.cpp each vendor their own ggml build, at different
+  # versions but under identical filenames, with incompatible content —
+  # sharing lib/ would have one silently overwrite the other's same-named
+  # files. llama-server's rpath (baked in at build time, see
+  # scripts/fetch-binaries.sh) looks for these at
+  # Contents/Resources/lib-llama/.
+  - from: resources/bin/lib-llama
+    to: lib-llama
+    filter:
+      - "libllama*.dylib"
+      - "libmtmd*.dylib"
+      - "libggml*.dylib"
 
 asar: true
 
