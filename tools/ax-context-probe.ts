@@ -4,18 +4,29 @@
  * Run under Electron (the addon is built for Electron's ABI):
  *   npm run ax-probe -- [--user-name NAME] [--delay SECONDS] [--budget CHARS]
  *                       [--allow BUNDLE_ID[,BUNDLE_ID…]] [--metrics-only]
+ *                       [--jump-ratio N] [--jump-min CHARS] [--text-markers]
  *
  * Counts down, reads the AX context under the mouse once, prints the reader
  * metrics, then what the deterministic parser makes of it. Prints to stdout
  * ONLY; nothing is written to disk and no logger is attached: this is the one
  * place where screen text is shown, on purpose, to the person who asked for it.
+ *
+ * --text-markers turns on the addon's WebKit text-marker safety net (off by
+ * default — final review, correction 4): the one way to measure its benefit
+ * without rebuilding. --jump-ratio/--jump-min override the jump-detection
+ * budgets, e.g. to force a jump on a shorter body while testing.
  */
 import { app } from "electron";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { AxContextReader, toLogMeta as readerLogMeta } from "../src/main/ax-context-reader.js";
+import {
+  AxContextReader,
+  parseFiniteNumber,
+  toLogMeta as readerLogMeta,
+  type ReadOptions,
+} from "../src/main/ax-context-reader.js";
 import { parse, toLogMeta as parserLogMeta } from "../src/main/utils/conversation-parser.js";
 import { PreferencesStore } from "../src/main/preferences-store.js";
 
@@ -38,6 +49,9 @@ async function main(): Promise<number> {
       budget: { type: "string", default: "2500" },
       allow: { type: "string" },
       "metrics-only": { type: "boolean", default: false },
+      "jump-ratio": { type: "string" },
+      "jump-min": { type: "string" },
+      "text-markers": { type: "boolean", default: false },
     },
   });
 
@@ -47,11 +61,31 @@ async function main(): Promise<number> {
     console.error("Nome utente mancante: passa --user-name oppure imposta userDisplayName nelle preferenze.");
     return 2;
   }
-  const delayS = Number(values.delay);
-  const budget = Number(values.budget);
+
+  // Number(x) silently turns a bad argument into NaN, which then skips guards
+  // downstream instead of failing loudly (final review, correction 8): NaN >
+  // 0 is false, so the countdown loop below would just not run, and NaN < 100
+  // is also false, so buildTranscript's minimum-budget guard would never
+  // fire. parseFiniteNumber throws instead, and every throw in main() is
+  // caught by the top-level handler and reported with exit code 1.
+  let delayS: number;
+  let budget: number;
+  const overrides: Partial<ReadOptions> = {};
+  try {
+    delayS = parseFiniteNumber(values.delay, "--delay");
+    budget = parseFiniteNumber(values.budget, "--budget");
+    if (values["jump-ratio"] !== undefined) overrides.jumpRatio = parseFiniteNumber(values["jump-ratio"], "--jump-ratio");
+    if (values["jump-min"] !== undefined) overrides.jumpMinChars = parseFiniteNumber(values["jump-min"], "--jump-min");
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  }
+  if (values["text-markers"]) overrides.textMarkers = true;
+
   const filter = values.allow
     ? { mode: "allowlist" as const, bundleIds: values.allow.split(",").map((s) => s.trim()).filter(Boolean) }
     : undefined;
+  if (filter) overrides.bundleIdFilter = filter;
 
   const reader = new AxContextReader({ appRoot: APP_ROOT, isPackaged: false });
   if (!reader.isTrusted()) {
@@ -65,7 +99,7 @@ async function main(): Promise<number> {
   }
 
   const frontBefore = reader.frontmostPid();
-  const r = reader.read(filter ? { bundleIdFilter: filter } : {});
+  const r = reader.read(overrides);
   console.log("=== READER ===");
   console.log(JSON.stringify(readerLogMeta(r), null, 2));
   if (!r.ok) {
@@ -74,9 +108,12 @@ async function main(): Promise<number> {
   }
   console.log(`frontmost pid: ${frontBefore} ${frontBefore === r.context.pid ? "== target" : "!= target (sarebbe not-frontmost nel coordinatore)"}`);
   for (const l of r.context.levelSummary) {
-    console.log(`  livello ${l.depth}: ${String(l.chars).padStart(6)} char, ${String(l.n).padStart(4)} frammenti${l.depth === r.context.chosenLevel ? "  ← scelto" : ""}`);
+    console.log(`  livello ${l.depth}: ${String(l.chars).padStart(6)} char, ${String(l.n).padStart(4)} frammenti${l.truncated ? " (troncato)" : ""}${l.depth === r.context.chosenLevel ? "  ← scelto" : ""}`);
   }
   if (r.context.chosenLevel === -1) console.log("  nessun salto: il parser usa il livello più ricco");
+  console.log(r.context.markerText === null
+    ? "  webkit marker: assente"
+    : `  webkit marker: presente, ${r.context.markerText.chars} char, ${r.context.markerText.fragmentsTouched} frammenti toccati dallo split`);
 
   const p = parse({ fragments: r.context.fragments, userDisplayName, tailBudgetChars: budget });
   console.log("=== PARSER ===");
