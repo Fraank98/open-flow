@@ -78,11 +78,73 @@ export const TIERS: readonly TierDescriptor[] = [
   },
 ];
 
-export function getModelById(kind: "whisper" | "llm", id: string): ModelDescriptor | undefined {
-  const list = kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
+// Reply-suggestion models: the two Gemma GGUFs of the spec's benchmark,
+// byte-exact. The "thinking on by default" finding (spec §Spike 3) was made on
+// THESE files; a different GGUF of the same family may template differently.
+export const REPLY_MODELS: readonly ModelDescriptor[] = [
+  {
+    id: "gemma-3-4b",
+    filename: "gemma-3-4b-it-Q4_K_M.gguf",
+    sizeBytes: 2_489_894_016,
+    sha256: "04a43a22e8d2003deda5acc262f68ec1005fa76c735a9962a8c77042a74a7d19",
+    url: "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+  },
+  {
+    id: "gemma-4-e4b",
+    filename: "gemma-4-E4B-it-Q4_K_M.gguf",
+    sizeBytes: 4_977_171_584,
+    sha256: "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+    url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+  },
+];
+
+export interface ReplyTierDescriptor {
+  id: "default" | "max";
+  label: string;
+  description: string;
+  replyModelId: string;
+}
+
+// Tier descriptions reflect the Task 1 classifier benchmark, not an assumption
+// about which model is safer: "default" carries that name only because it is
+// DEFAULT_PREFS.replyModelId (spec-mandated pending the deterministic-gate
+// measurement), not because it scored better. No logic here depends on the
+// array order or on the "default"/"max" ids — getReplyTier looks up by id.
+// Inverting which model is the spec's default stays a DATA-only change,
+// confined to this file and preferences-store.ts, but it is at least three
+// edits across the two files, not one: DEFAULT_PREFS.replyModelId, plus BOTH
+// REPLY_TIERS[].replyModelId (so the UI still shows the right tier as
+// default), plus swapping the two `description` strings below — they are
+// written as per-model facts (percentages, GB, latency) and would describe
+// the wrong model if left in place.
+export const REPLY_TIERS: readonly ReplyTierDescriptor[] = [
+  {
+    id: "default",
+    label: "Standard",
+    description:
+      "Gemma 3 4B. 2,49 GB su disco, ~3,1 GB di RAM a feature accesa (stima). " +
+      'Nel benchmark del classificatore ha frainteso 4 domande su 8 che in realtà chiedevano un dato solo tuo (es. "quante volte vai in palestra?"), proponendo comunque una risposta: controlla sempre prima di accettare.',
+    replyModelId: "gemma-3-4b",
+  },
+  {
+    id: "max",
+    label: "Qualità massima",
+    description:
+      "Gemma 4 E4B. 4,98 GB su disco, ~5,8 GB di RAM a feature accesa (stima). " +
+      "Nel benchmark non ha mai confuso una domanda che chiede un dato con una che richiede una decisione (0 falsi positivi su 8), ma è più lento (~900 ms) e in 3 casi su 12 non ha proposto una risposta che sarebbe stata appropriata. Consigliato da 24 GB di RAM.",
+    replyModelId: "gemma-4-e4b",
+  },
+];
+
+export function getModelById(kind: "whisper" | "llm" | "reply", id: string): ModelDescriptor | undefined {
+  const list = kind === "whisper" ? WHISPER_MODELS : kind === "llm" ? LLM_MODELS : REPLY_MODELS;
   return list.find((m) => m.id === id);
 }
 
 export function getTier(id: string): TierDescriptor | undefined {
   return TIERS.find((t) => t.id === id);
+}
+
+export function getReplyTier(id: string): ReplyTierDescriptor | undefined {
+  return REPLY_TIERS.find((t) => t.id === id);
 }

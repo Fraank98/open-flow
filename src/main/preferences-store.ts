@@ -20,6 +20,18 @@ export interface Preferences {
    *  the speaker of each turn to tell the user's turns from the counterpart's.
    *  Empty means "not configured": the feature cannot be enabled without it. */
   userDisplayName: string;
+  /** Reply suggestions (context → three proposed replies). Off by default:
+   *  off means no second llama-server, no extra RAM, identical behaviour. */
+  replySuggestionsEnabled: boolean;
+  /** Electron accelerator. Must not contain Alt/Option: dictation holds
+   *  Option through the native modifier monitor (utils/reply-hotkey.ts). */
+  replySuggestionsHotkey: string;
+  /** Id in REPLY_MODELS, chosen through REPLY_TIERS in the UI. */
+  replyModelId: string;
+  /** allowlist: read only the listed apps (default). blocklist: read all but them. */
+  replyAppsMode: "allowlist" | "blocklist";
+  /** Bundle ids. Compared case-insensitively by AxContextReader. */
+  replyApps: string[];
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -34,6 +46,11 @@ export const DEFAULT_PREFS: Preferences = {
   spokenPunctuation: false,
   dictionary: [],
   userDisplayName: "",
+  replySuggestionsEnabled: false,
+  replySuggestionsHotkey: "Command+Control+R",
+  replyModelId: "gemma-3-4b",
+  replyAppsMode: "allowlist",
+  replyApps: ["com.tinyspeck.slackmacgap", "com.apple.mail", "com.brave.Browser"],
 };
 
 export class PreferencesStore {

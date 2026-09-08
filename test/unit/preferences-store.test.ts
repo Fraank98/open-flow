@@ -76,4 +76,22 @@ describe("PreferencesStore", () => {
     expect(prefs.userDisplayName).toBe("");
     expect(prefs.language).toBe("it");
   });
+
+  it("defaults the reply-suggestions preferences to off, Command+Control+R, gemma-3-4b, allowlist with the three verified apps", () => {
+    expect(DEFAULT_PREFS.replySuggestionsEnabled).toBe(false);
+    expect(DEFAULT_PREFS.replySuggestionsHotkey).toBe("Command+Control+R");
+    expect(DEFAULT_PREFS.replyModelId).toBe("gemma-3-4b");
+    expect(DEFAULT_PREFS.replyAppsMode).toBe("allowlist");
+    expect(DEFAULT_PREFS.replyApps).toEqual(["com.tinyspeck.slackmacgap", "com.apple.mail", "com.brave.Browser"]);
+  });
+
+  it("loads an old preferences file with the feature OFF and the defaults filled in", async () => {
+    const path = join(dir, "prefs.json");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(path, JSON.stringify({ setupComplete: true, userDisplayName: "Danilo" }));
+    const prefs = await new PreferencesStore(path).load();
+    expect(prefs.replySuggestionsEnabled).toBe(false);
+    expect(prefs.replyApps).toHaveLength(3);
+    expect(prefs.userDisplayName).toBe("Danilo");
+  });
 });
