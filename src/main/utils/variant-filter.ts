@@ -43,8 +43,22 @@ const DUPLICATE_THRESHOLD = 0.75;
 // "\p{L}+ed" suffix misses common cases, so a short list of the ones likely
 // in this context is spelled out alongside the regular -ed suffix.
 const EN_PAST_IRREGULAR = "sent|given|done|made|taken|paid|said|brought|received";
+// "già"/"appena" used to be followed by "\p{L}+" — ANY word, participle or
+// not — so "ho già altri impegni" (a COMMITMENT: "altri" is a plain noun)
+// read as a completed action, with the wrong reported rule (measured
+// against the live server: 2/5 generations on the same scenario hit exactly
+// this). Restricted to the shapes of a real past participle: the regular
+// endings (-ato, -ito, -uto) plus the irregular endings frequent in this
+// context (-so, -sto, -tto: "preso", "visto", "risposto", "detto"/"fatto").
+// Not exhaustive (a rare irregular could still slip through as a false
+// negative, and an ordinary noun/adjective that happens to end the same way
+// — "peso", "riposo" — could still slip through as a false positive), but
+// closes the concrete "già + noun" failure mode without narrowing to the
+// closed verb list below, which would regress every participle not already
+// on it (e.g. "ho già mandato…").
+const DONE_ACTION_PARTICIPLE = "\\p{L}*(?:ato|ito|uto|so|sto|tto)";
 const DONE_ACTION = new RegExp(
-  `\\b(ho (?:appena|gi[aà]) \\p{L}+|ho (?:corretto|inviato|rifatto|risolto|sistemato|completato|girato|accettato)|l'ho (?:gi[aà] )?\\p{L}+at[oa]|i(?:'ve| have) (?:just |already )?(?:\\p{L}+ed|${EN_PAST_IRREGULAR})|i just (?:\\p{L}+ed|${EN_PAST_IRREGULAR}))\\b`,
+  `\\b(?:ho (?:appena|gi[aà]) (${DONE_ACTION_PARTICIPLE})|ho (corretto|inviato|rifatto|risolto|sistemato|completato|girato|accettato)|l'ho (?:gi[aà] )?(\\p{L}+at[oa])|i(?:'ve| have) (?:just |already )?(\\p{L}+ed|${EN_PAST_IRREGULAR})|i just (\\p{L}+ed|${EN_PAST_IRREGULAR}))\\b`,
   "iu",
 );
 // A lexical FAMILY, not the fixed multi-word phrase list this used to be:
@@ -320,6 +334,34 @@ function hasInventedCommitment(text: string, transcript: string): boolean {
   return grounded / cw.length < 0.5;
 }
 
+/** DONE_ACTION used to drop unconditionally: any "ho già/appena <participio>"
+ *  match was treated as invented, even a TRUE one ("hai già corretto
+ *  l'errore?" … "sì, ho già corretto l'errore" — the transcript itself
+ *  already states it). Its twin above, hasInventedCommitment, was fixed on
+ *  exactly this point (round 2): ground ONLY the captured predicate, not
+ *  "everything after the match" — reused verbatim here (same contentWords
+ *  helper, same <0.5 threshold), just against DONE_ACTION's five
+ *  alternatives (m[1]..m[5], exactly one defined per match).
+ *
+ *  Grounds the ACTION WORD only, never the object it acts on ("la PR", "il
+ *  documento"): the object is usually the very thing already under
+ *  discussion, so grounding on it would keep genuinely invented claims too
+ *  — measured against the "Ho già preso in carico la PR…" fixture just
+ *  above, which shares "PR" with the ambient transcript and must stay
+ *  dropped. A same-topic transcript is not the same as the claimed action
+ *  being true; only the transcript itself stating the action is. */
+function hasInventedDoneAction(text: string, transcript: string): boolean {
+  const stripped = text.normalize("NFD").replace(/\p{M}/gu, "");
+  const m = DONE_ACTION.exec(stripped);
+  if (!m) return false;
+  const action = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? "";
+  const cw = contentWords(action);
+  if (cw.length === 0) return false;
+  const ctx = new Set(contentWords(transcript));
+  const grounded = cw.filter((w) => ctx.has(w)).length;
+  return grounded / cw.length < 0.5;
+}
+
 /** Trailing punctuation and casing removed for exact comparison against a
  *  canned voice example (spec extension below). */
 function normalizeForExactCompare(s: string): string {
@@ -363,7 +405,7 @@ function isCannedExampleCopy(text: string): boolean {
 function ruleFor(v: FilterVariant, input: FilterInput): FilterRule | null {
   const t = v.text;
   if (t.length < LENGTH_MIN || t.length > LENGTH_MAX) return "length";
-  if (DONE_ACTION.test(t)) return "done-action";
+  if (hasInventedDoneAction(t, input.transcript)) return "done-action";
   if (hasInventedCommitment(t, input.transcript)) return "invented-reason";
   if (REASON_KEYS.has(v.key) && hasInventedReason(t, input.transcript)) return "invented-reason";
   if (isSignature(t, input.counterpart, input.userDisplayName)) return "signature";

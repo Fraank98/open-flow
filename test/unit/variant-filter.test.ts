@@ -46,6 +46,80 @@ describe("filterVariants — each rule, positive and negative", () => {
     expect(run([V("accept", "Ho visto la PR, la prendo io e la chiudo entro oggi."), GOOD_B, GOOD_C]).dropped).toEqual([]);
   });
 
+  describe("done-action: precision (già/appena needs a participle) and grounding (measured against the live server)", () => {
+    // Bug measured on the real model (5 generations, 2/5 hit this): "ho già
+    // altri impegni" is a COMMITMENT, not a completed action — "altri" is a
+    // plain noun, not a participle — but the old "\p{L}+" after
+    // "già"/"appena" accepted any word at all, so it read as done-action with
+    // the wrong reported rule. Both examples below carry no digits or
+    // invented commitment phrase either, so with the fix they are fully
+    // kept — not just "not done-action".
+    it("già/appena followed by a noun (not a participle) is not this rule's business", () => {
+      expect(run([GOOD_A, V("decline", "Non posso, ho già altri impegni quel pomeriggio."), GOOD_C]).dropped).toEqual([]);
+      // "due" parses as the number 2 (number-words.ts) and isn't anchored in
+      // CTX's transcript, so this is legitimately dropped — by
+      // unanchored-number, never by done-action.
+      const r = run([GOOD_A, V("decline", "Ho appena due minuti, poi ti richiamo."), GOOD_C]).dropped;
+      expect(r.find((d) => d.key === "decline")?.rule).not.toBe("done-action");
+    });
+
+    // The suffix restriction must not swallow the true-positive shapes the
+    // rule exists for.
+    it("già/appena followed by a real participle still fires (ato/ito/uto/so/sto/tto)", () => {
+      for (const t of ["Ho già inviato tutto ieri sera.", "Ho appena corretto la bozza, controlla pure.", "Ho già girato a Paolo, se ne occupa lui."]) {
+        expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "done-action" }]);
+      }
+    });
+
+    // Its twin, hasInventedCommitment, was fixed to ground the CAPTURED
+    // predicate (not "everything to end of sentence" — that shape let filler
+    // words outvote the invented content, round 2). done-action reuses the
+    // exact same mechanism (contentWords + the same <0.5 threshold), applied
+    // to whichever alternative of DONE_ACTION matched.
+    it("invented completed actions — not grounded in the transcript — are still dropped (5 shapes)", () => {
+      for (const t of [
+        "Ho già corretto il documento e te lo rimando.",
+        "Ho appena finito il report, controllalo pure.",
+        "Ho girato tutto al team stamattina.",
+        "L'ho già sistemata ieri sera.",
+        "I've already sent the updated file to Sarah.",
+      ]) {
+        expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "done-action" }]);
+      }
+    });
+
+    // A completed action IS supported by the transcript when the SAME
+    // action word recurs there — a true statement, wrongly dropped before
+    // this fix because done-action never checked grounding at all.
+    it("a completed action whose own word recurs in the transcript is grounded and kept (2 shapes)", () => {
+      const askedCorrected = { ...CTX, transcript: `${CTX.transcript}\nINTERLOCUTORE (Marta): hai già corretto l'errore nel modulo di login?` };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Sì, ho già corretto l'errore, è tutto a posto.")], askedCorrected).dropped).toEqual([]);
+      const askedForwarded = { ...CTX, transcript: `${CTX.transcript}\nINTERLOCUTORE (Marta): hai già girato il documento a Paolo?` };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Sì, l'ho già girato ieri pomeriggio.")], askedForwarded).dropped).toEqual([]);
+    });
+
+    // Same phrase, transcript that never talks about the object at all: the
+    // OBJECT mentioned in a done-action clause (e.g. "la PR") is not what
+    // grounding checks — only the action word itself is — so a same-topic
+    // transcript does not, by itself, save an invented claim. This is the
+    // same "Ho già preso in carico la PR…" shape as the invented-actions
+    // test above, spelled out here to make the boundary explicit: sharing
+    // the conversation's TOPIC is not the same as the claimed ACTION being
+    // true.
+    it("sharing the conversation's topic does not ground an invented action", () => {
+      // Note: this is NOT the default CTX — its transcript happens to
+      // contain the literal words "ho visto" (Marta's own line), which
+      // would ground "visto" for real and defeat the point of this test.
+      const talksAboutPrOnly = {
+        ...CTX,
+        transcript: "INTERLOCUTORE (Marta): ciao, la PR sul login è ferma da due giorni, la fai tu o la giro a Paolo?",
+        lastMessage: "ciao, la PR sul login è ferma da due giorni, la fai tu o la giro a Paolo?",
+      };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Sì, ho già visto la PR, ci penso io.")], talksAboutPrOnly).dropped)
+        .toEqual([{ key: "defer", rule: "done-action" }]);
+    });
+  });
+
   it("invented-reason: a decline/reject_offer with a causal clause not grounded in the context is dropped", () => {
     const invented = "Non riesco a occuparmene perché ho un carico di lavoro pesante in questo periodo.";
     expect(run([GOOD_A, V("decline", invented), GOOD_C]).dropped).toEqual([{ key: "decline", rule: "invented-reason" }]);
