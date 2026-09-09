@@ -92,22 +92,37 @@ button.variant:hover { background: rgba(255, 255, 255, 0.16); }
 .variant .vlabel { flex-shrink: 0; opacity: 0.75; width: 104px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Important 7: what can be ACCEPTED must be READABLE. The filter admits
-   variants up to LENGTH_MAX = 280 chars (variant-filter.ts). The review's
-   ~90-chars-per-2-lines measurement (12px font) was taken at ~265px, but
-   this column is narrower: #suggest itself is 420px (:78 above), and net of
-   its own padding, the row's padding, the badge and the 104px label column,
-   .vtext is only ~232px wide — round 2, found by review; the earlier
-   comment here cited the wrong width. At ~232px the same rate gives ~300
-   gross characters over 8 lines against the 280-char maximum, a 6-7% margin
-   — real sentences don't wrap as efficiently as the average word length
-   this rate assumes, so a variant right at 280 chars with a few long words
-   could still lose its last line. 9 lines restores a comfortable margin.
-   SUGGEST_WINDOW_SIZE (overlay-bounds.ts) is out of this round's scope and
-   left unchanged at 480×520 — not independently re-verified here that a 9th
-   line still fits inside it without visual testing (round 2 constraints:
-   no GUI). */
+   variants up to LENGTH_MAX = 280 chars (variant-filter.ts).
+
+   .vtext line-height is set explicitly below so this math doesn't depend on
+   the font's own (unspecified-under-"normal") metrics:
+     font-size 12px, line-height 1.35 -> 16.2px per line
+     button.variant padding 7px top + 7px bottom -> 14px fixed per variant
+     one variant, N lines: 14 + N*16.2
+
+   Total #suggest height, which must fit under SUGGEST_WINDOW_SIZE = 520px
+   (overlay-bounds.ts, out of scope here and left unchanged):
+     3 variants:                    3 * (14 + N*16.2) = 42 + 48.6*N
+     2 gaps (.variants gap: 6px):   2 * 6              = 12
+     #suggest padding (14px * 2):                        28
+     gist line (~16px) + its 10px margin-bottom:          26
+     hint's 8px margin-top + its own ~12px line:          20
+                                            fixed total = 128
+     grand total = 128 + 48.6*N
+
+   N=8: 128 + 48.6*8 = 128 + 388.8 = 516.8px -> fits, ~3px to spare.
+   N=9: 128 + 48.6*9 = 128 + 437.4 = 565.4px -> overflows by ~45px, and
+   #suggest does not scroll, so that overflow silently clips the third
+   variant — the exact defect this comment exists to prevent. Hence N=8.
+
+   Readability check at N=8: .vtext is ~232px wide (420px #suggest, minus
+   its own padding, the row's padding, the badge and the 104px label
+   column). At 12px font, ~37 chars/line -> 8 lines hold ~296 chars, ~6%
+   above the 280-char LENGTH_MAX, so the worst-case 280-char variant is not
+   clipped by the line clamp. */
 .variant .vtext { flex: 1; min-width: 0; display: -webkit-box;
-  -webkit-line-clamp: 9; -webkit-box-orient: vertical; overflow: hidden; }
+  line-height: 1.35; -webkit-line-clamp: 8; -webkit-box-orient: vertical;
+  overflow: hidden; }
 #suggest .hint { margin-top: 8px; font-size: 10px; opacity: 0.45; }
 .state-reading .dot, .state-thinking .dot { background: #5e5ce6; animation: pulse 1s infinite; }
 .state-nothing .dot, .state-flash .dot { background: #8e8e93; }
