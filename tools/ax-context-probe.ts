@@ -8,8 +8,11 @@
  *                       [--text-markers]
  *
  * Il filtro è obbligatorio dopo il Task 6: senza `--allow`/`--block` vale la
- * lista delle tre app verificate. Non esiste un `--allow-all`: la lettura
- * senza filtro non è esprimibile.
+ * lista delle tre app verificate. Non esiste un `--allow-all` esplicito, ma
+ * `--block ""` (blocklist vuota) sarebbe equivalente — il cancello tratta una
+ * blocklist vuota come permesso universale — quindi è rifiutato: uno strumento
+ * che legge davvero lo schermo deve fallire chiuso anche sull'input, non solo
+ * sul cancello.
  *
  * Counts down, reads the AX context under the mouse once, prints the reader
  * metrics, then what the deterministic parser makes of it. Prints to stdout
@@ -97,9 +100,21 @@ async function main(): Promise<number> {
     console.error("--allow e --block sono alternativi: passane uno solo.");
     return 2;
   }
-  const filter: BundleIdFilter = values.block !== undefined
-    ? { mode: "blocklist", bundleIds: ids(values.block) }
-    : { mode: "allowlist", bundleIds: values.allow !== undefined ? ids(values.allow) : PROBE_DEFAULT_APPS };
+  let filter: BundleIdFilter;
+  if (values.block !== undefined) {
+    const blockIds = ids(values.block);
+    // A blocklist with nothing in it refuses nothing: isAppAllowed treats it
+    // as "everything passes" (documented, intentional there — see
+    // isAppAllowed's own docs). This tool reads the real screen, so it must
+    // fail closed on the INPUT too, not rely on the gate alone.
+    if (blockIds.length === 0) {
+      console.error("--block vuoto equivale a permettere qualunque app: rifiutato. Passa almeno un bundle id, oppure usa --allow.");
+      return 2;
+    }
+    filter = { mode: "blocklist", bundleIds: blockIds };
+  } else {
+    filter = { mode: "allowlist", bundleIds: values.allow !== undefined ? ids(values.allow) : PROBE_DEFAULT_APPS };
+  }
 
   const reader = new AxContextReader({ appRoot: APP_ROOT, isPackaged: false });
   if (!reader.isTrusted()) {
@@ -116,12 +131,14 @@ async function main(): Promise<number> {
   const r = reader.read(filter, overrides);
   console.log("=== READER ===");
   console.log(JSON.stringify(readerLogMeta(r), null, 2));
+  // Printed before the early return below: on a refusal this is exactly what
+  // you want to see (which filter was applied), not just on success.
+  console.log(`filtro: ${filter.mode} [${filter.bundleIds.join(", ")}]`);
   if (!r.ok) {
     console.log(`ESITO: nessun contesto (${r.reason})`);
     return 0;
   }
   console.log(`frontmost pid: ${frontBefore} ${frontBefore === r.context.pid ? "== target" : "!= target (sarebbe not-frontmost nel coordinatore)"}`);
-  console.log(`filtro: ${filter.mode} [${filter.bundleIds.join(", ")}]`);
   console.log(`  stadio 1 (identificazione): ${r.context.timings.probeMs.toFixed(1)} ms`);
   for (const l of r.context.levelSummary) {
     console.log(`  livello ${l.depth}: ${String(l.chars).padStart(6)} char, ${String(l.n).padStart(4)} frammenti${l.truncated ? " (troncato)" : ""}${l.depth === r.context.chosenLevel ? "  ← scelto" : ""}`);

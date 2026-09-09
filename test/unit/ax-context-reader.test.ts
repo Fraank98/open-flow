@@ -51,24 +51,33 @@ function okResult(over: Partial<NativeContextResult> = {}): NativeContextResult 
 }
 
 /**
- * Two-stage native double. Call 1 is the identification probe: it always
- * refuses with `app-not-allowed` (that is what an empty allowlist does in the
- * addon) and still reports pid + bundleId. Call 2 returns `result`.
- * `probeOver` lets a test bend the probe's answer (an unexpected success, a
- * different reason, an empty bundleId, levels that should be ignored).
+ * Two-stage native double. The identification probe is whichever call carries
+ * an EMPTY allowlist (`PROBE_FILTER`'s exact shape): it always refuses with
+ * `app-not-allowed` (that is what an empty allowlist does in the addon) and
+ * still reports pid + bundleId. Every other call is the harvest and returns
+ * `result`. `probeOver` lets a test bend the probe's answer (an unexpected
+ * success, a different reason, an empty bundleId, levels that should be
+ * ignored).
  *
- * The probe/harvest split is by PARITY of the call count (odd = probe, even =
- * harvest), not by a one-shot latch on the very first call ever made: a test
- * that calls `.read()` more than once on the same double (e.g. "does not
- * enable textMarkers unless the caller opts in") must see a fresh two-stage
- * dance on every read, exactly like production traffic would.
+ * The split is by the CONTRACT of the call (does its filter ask for nothing?)
+ * rather than by the call count's parity. Parity is only an accident of the
+ * happy path, where probe and harvest strictly alternate 1st/2nd, 3rd/4th,
+ * etc.: after a REFUSED read, the next read's stage 1 probe lands on an even
+ * call, and a parity-based double would hand it `result` instead of the
+ * forced refusal — silently turning a permitted app's read into a false
+ * refusal that looks identical to a real one (round-1 review finding: the
+ * same refusal assertion passed even when the filter allowed the app). A
+ * fresh two-stage dance still happens on every `.read()`, including a second
+ * one on the same double (e.g. "does not enable textMarkers unless the
+ * caller opts in"), because the shape check is stateless per call.
  */
 function makeFakeNative(result: NativeContextResult, trusted = true, probeOver: Partial<NativeContextResult> = {}) {
   const calls: ReadOptions[] = [];
   const native: AxContextNative = {
     readContextUnderCursor: (opts) => {
       calls.push(opts);
-      if (calls.length % 2 === 1) {
+      const isProbe = opts.bundleIdFilter.mode === "allowlist" && opts.bundleIdFilter.bundleIds.length === 0;
+      if (isProbe) {
         return { ...result, ok: false, reason: "app-not-allowed", levels: [], chosenLevel: -1, ...probeOver };
       }
       return result;
@@ -121,12 +130,14 @@ describe("AxContextReader.read", () => {
     expect(fake.calls[1]).toEqual({ ...DEFAULT_READ_OPTIONS, bundleIdFilter: { mode: "allowlist", bundleIds: [SLACK] } });
   });
 
-  it("does not enable textMarkers unless the caller opts in", () => {
+  it("does not enable textMarkers unless the caller opts in, and stage 1 never gets it even when the caller does (round-1 fix: stage 1 doesn't need any harvest budget)", () => {
     const fake = makeFakeNative(okResult());
     new AxContextReader({ native: fake.native }).read(ALLOW_SLACK);
-    expect(fake.calls[1]?.textMarkers).toBe(false);
+    expect(fake.calls[0]?.textMarkers).toBe(false); // stage 1
+    expect(fake.calls[1]?.textMarkers).toBe(false); // stage 2
     new AxContextReader({ native: fake.native }).read(ALLOW_SLACK, { textMarkers: true });
-    expect(fake.calls[3]?.textMarkers).toBe(true);
+    expect(fake.calls[2]?.textMarkers).toBe(false); // stage 1: forced false regardless of the override
+    expect(fake.calls[3]?.textMarkers).toBe(true); // stage 2: honors the override
   });
 
   it("maps a failed native result to ok:false with the native reason and the level counts", () => {
@@ -242,7 +253,7 @@ describe("AxContextReader — privacy", () => {
     assertNoLeak(seen, slack);
   });
 
-  it("non passa mai al logger testo letto dallo schermo (timeout)", () => {
+  it("non passa mai al logger testo letto dallo schermo (timeout, stadio 1)", () => {
     const result = okResult({
       levels: [lvl(7, slack.ax.length, axFragments(slack.ax))],
       chosenLevel: 0,
@@ -252,6 +263,27 @@ describe("AxContextReader — privacy", () => {
     const clock = [0, 501];
     const r = new AxContextReader({ native: fake.native, logger, now: () => clock.shift() ?? 501 }).read(ALLOW_SLACK);
     expect(r.ok === false && r.reason).toBe("timeout");
+    expect(fake.calls).toHaveLength(1); // this timeout fires before stage 2 ever runs
+    assertNoLeak(seen, slack);
+  });
+
+  it("non passa mai al logger testo letto dallo schermo (timeout, stadio 2 — l'unico timeout con metriche derivate da testo davvero raccolto)", () => {
+    // Round-1 review finding: with the "(timeout)" test above scoped to
+    // stage 1 (which never harvests), the stage-2 timeout branch
+    // (ax-context-reader.ts, wrapperMs > timeoutMs after a real harvest) had
+    // no non-leak assertion at all. probeMs=50 keeps stage 1 under budget so
+    // stage 2 actually runs; wrapperMs=600 then blows the outer timeout AFTER
+    // the addon returned real corpus fragments.
+    const result = okResult({
+      levels: [lvl(7, slack.ax.length, axFragments(slack.ax))],
+      chosenLevel: 0,
+    });
+    const { logger, seen } = makeSpyLogger();
+    const fake = makeFakeNative(result);
+    const clock = [0, 50, 50, 600];
+    const r = new AxContextReader({ native: fake.native, logger, now: () => clock.shift() ?? 600 }).read(ALLOW_SLACK);
+    expect(r.ok === false && r.reason).toBe("timeout");
+    expect(fake.calls).toHaveLength(2); // both stages ran; stage 2 harvested real text
     assertNoLeak(seen, slack);
   });
 
@@ -323,6 +355,17 @@ describe("isAppAllowed / normalizeBundleId", () => {
   it("PROBE_FILTER is an empty allowlist: the addon refuses every app with it", () => {
     expect(PROBE_FILTER).toEqual({ mode: "allowlist", bundleIds: [] });
   });
+
+  it("PROBE_FILTER is frozen: neither the object nor its bundleIds array can be mutated at runtime, and bundleIds has no .push at compile time", () => {
+    expect(Object.isFrozen(PROBE_FILTER)).toBe(true);
+    expect(Object.isFrozen(PROBE_FILTER.bundleIds)).toBe(true);
+    // @ts-expect-error bundleIds is `readonly string[]`: push does not exist
+    // on the type (tsc fails this test file if that stops being a type
+    // error). vitest doesn't type-check, so the call still runs at runtime,
+    // where Object.freeze must reject it even with the compile-time guard bypassed.
+    expect(() => PROBE_FILTER.bundleIds.push("com.evil.app")).toThrow(TypeError);
+    expect(() => { (PROBE_FILTER as { mode: string }).mode = "blocklist"; }).toThrow(TypeError);
+  });
 });
 
 describe("AxContextReader.read — mandatory filter, two-stage gate", () => {
@@ -359,6 +402,13 @@ describe("AxContextReader.read — mandatory filter, two-stage gate", () => {
     const allowed = makeFakeNative(okResult());
     expect(new AxContextReader({ native: allowed.native }).read(BLOCK_MAIL).ok).toBe(true);
     expect(allowed.calls).toHaveLength(2);
+    // The caller's blocklist filter is never itself forwarded to the addon:
+    // what the addon sees is always the synthesized allowlist shape (empty,
+    // then the exact id) — same guarantee the allowlist case asserts above.
+    expect(allowed.calls.map((c) => c.bundleIdFilter)).toEqual([
+      { mode: "allowlist", bundleIds: [] },
+      { mode: "allowlist", bundleIds: [SLACK] },
+    ]);
   });
 
   it("fails closed when the probe reports an empty bundleId, in both modes", () => {
@@ -380,6 +430,23 @@ describe("AxContextReader.read — mandatory filter, two-stage gate", () => {
     assertNoLeak(seen, CASES[0]!);
   });
 
+  it("logs the probe's own ok flag on a stage-1 timeout, so an anomaly masked by the timeout stays visible", () => {
+    // ax-context-reader.ts checks probeMs > timeoutMs BEFORE checking
+    // probe.ok, so a probe that both blew its budget AND wrongly said
+    // ok:true (the same anomaly as the test above) is reported as a plain
+    // "timeout" — without this field the disagreement between addon and
+    // wrapper on the gate would never be logged. Neither `reason` changes
+    // (both branches already fail closed): only the added diagnostic field
+    // is new.
+    const { logger, seen } = makeSpyLogger();
+    const fake = makeFakeNative(okResult(), true, { ok: true, reason: undefined, levels: okResult().levels, chosenLevel: 2 });
+    const clock = [0, 501];
+    const r = new AxContextReader({ native: fake.native, logger, now: () => clock.shift() ?? 501 }).read(ALLOW_SLACK);
+    expect(r.ok === false && r.reason).toBe("timeout");
+    expect(seen.join(" ")).toContain('"probeOk":true');
+    assertNoLeak(seen, CASES[0]!);
+  });
+
   it("propagates a probe failure that is not app-not-allowed, without a second call", () => {
     for (const reason of ["no-element", "ax-error", "budget-exceeded"] as const) {
       const fake = makeFakeNative(okResult(), true, { reason });
@@ -395,6 +462,20 @@ describe("AxContextReader.read — mandatory filter, two-stage gate", () => {
     const r = new AxContextReader({ native: fake.native, now: () => clock.shift() ?? 501 }).read(ALLOW_SLACK);
     expect(r.ok === false && r.reason).toBe("timeout");
     expect(fake.calls).toHaveLength(1);
+  });
+
+  it("distinguishes stage 1 from stage 2 by the filter's SHAPE (empty allowlist), not by call parity: a refused read followed by an allowed read on the SAME double must succeed", () => {
+    // This is the case the parity-based double got wrong: two consecutive
+    // read()s on one double, first refused, second permitted. Under
+    // call-count parity, the second read's stage 1 lands on an even call and
+    // the double hands it `result` (a full harvest) instead of the forced
+    // probe refusal — the wrapper then hits the "probe.ok" anomaly branch and
+    // refuses even though the filter allows the app.
+    const fake = makeFakeNative(okResult()); // bundleId is SLACK
+    const refused = new AxContextReader({ native: fake.native }).read(ALLOW_MAIL);
+    expect(refused.ok).toBe(false);
+    const allowed = new AxContextReader({ native: fake.native }).read(ALLOW_SLACK);
+    expect(allowed.ok).toBe(true);
   });
 
   it("logs the filter as mode + size, never as the list of ids", () => {

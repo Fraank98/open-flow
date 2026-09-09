@@ -12,7 +12,7 @@ export type NativeReason =
 
 export interface BundleIdFilter {
   mode: "allowlist" | "blocklist";
-  bundleIds: string[];
+  bundleIds: readonly string[];
 }
 
 /** The addon's budgets. Separated from the filter so DEFAULT_READ_OPTIONS
@@ -55,8 +55,22 @@ export const DEFAULT_READ_OPTIONS: Readonly<ReadBudgets> = {
 /** Stage 1 filter. An empty allowlist matches nothing, so the addon refuses
  *  every app with `app-not-allowed` BEFORE it harvests anything — and its
  *  refusal still carries pid and bundleId. That is what makes the exact-case
- *  id available to stage 2 without touching native/ (§Deviazioni 2). */
-export const PROBE_FILTER: Readonly<BundleIdFilter> = { mode: "allowlist", bundleIds: [] };
+ *  id available to stage 2 without touching native/ (§Deviazioni 2).
+ *
+ *  This constant is the entire guarantee that stage 1 collects nothing: it
+ *  must stay an empty array forever. `Readonly<BundleIdFilter>` alone only
+ *  protects `mode` from reassignment at compile time — `bundleIds` was typed
+ *  `string[]`, so `PROBE_FILTER.bundleIds.push(...)` used to compile, and the
+ *  same object is handed to the addon (and recorded by test doubles) on every
+ *  stage-1 call, so a mutated recorded call would have polluted this constant
+ *  for the rest of the process (round-1 review finding). `bundleIds` is now
+ *  `readonly string[]` on the type, and both the object and the array are
+ *  frozen so mutation fails at runtime too, even through a type-level bypass
+ *  (a cast, `as any`, plain JS). */
+export const PROBE_FILTER: Readonly<BundleIdFilter> = Object.freeze({
+  mode: "allowlist",
+  bundleIds: Object.freeze([]),
+});
 
 export function normalizeBundleId(id: string): string {
   return id.trim().toLowerCase();
@@ -345,6 +359,20 @@ export class AxContextReader {
   frontmostPid(): number { return this.native.frontmostPid(); }
   activateApp(pid: number): boolean { return this.native.activateApp(pid); }
 
+  /** Logs one "ax-context read" info line: metrics only, never text (spec,
+   *  privacy 2). Every non-anomaly exit of `read()` below logged this exact
+   *  same shape independently, seven times over (final review round 1,
+   *  minor 3); `extra` lets one branch (the stage-1 timeout) attach a
+   *  diagnostic field without growing a bespoke call. */
+  private logRead(
+    r: ReadContextResult,
+    filterMeta: { filterMode: BundleIdFilter["mode"]; filterSize: number },
+    probeMs: number,
+    extra: Record<string, unknown> = {},
+  ): void {
+    void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs, ...extra });
+  }
+
   /**
    * One read under the cursor, in two stages.
    *
@@ -369,9 +397,13 @@ export class AxContextReader {
       return r;
     }
 
-    // ── Stage 1: identify the app. No harvest happens here. ──
+    // ── Stage 1: identify the app. No harvest happens here, so it gets no
+    // harvest budget: textMarkers is forced off regardless of what the
+    // caller asked for, instead of inviting the addon to build the WebKit
+    // marker text (privacy risk 5, spec) for a call whose result is always
+    // discarded (round-1 review: defense in depth, free). ──
     const t0 = this.now();
-    const probe = this.native.readContextUnderCursor({ ...budgets, bundleIdFilter: PROBE_FILTER });
+    const probe = this.native.readContextUnderCursor({ ...budgets, textMarkers: false, bundleIdFilter: PROBE_FILTER });
     const probeMs = this.now() - t0;
     const refuse = (): ReadContextResult => ({
       ok: false, reason: "app-not-allowed", pid: probe.pid, bundleId: probe.bundleId, levelSummary: [],
@@ -379,7 +411,13 @@ export class AxContextReader {
 
     if (probeMs > this.timeoutMs) {
       const r: ReadContextResult = { ok: false, reason: "timeout", pid: probe.pid, bundleId: probe.bundleId, levelSummary: [] };
-      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      // probeOk: this check runs BEFORE the probe.ok anomaly check below, so
+      // a probe that both blew its budget AND wrongly said ok:true (empty
+      // allowlist not refused) would otherwise be reported as a plain
+      // timeout, and the addon/wrapper disagreement would never be logged
+      // (round-1 review, minor 5). Neither branch's `reason` changes: both
+      // already fail closed.
+      this.logRead(r, filterMeta, probeMs, { probeOk: probe.ok });
       return r;
     }
     if (probe.ok) {
@@ -394,12 +432,12 @@ export class AxContextReader {
       const r: ReadContextResult = {
         ok: false, reason: probe.reason ?? "ax-error", pid: probe.pid, bundleId: probe.bundleId, levelSummary: [],
       };
-      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      this.logRead(r, filterMeta, probeMs);
       return r;
     }
     if (!isAppAllowed(probe.bundleId, filter)) {
       const r = refuse();
-      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      this.logRead(r, filterMeta, probeMs);
       return r;
     }
 
@@ -412,7 +450,7 @@ export class AxContextReader {
 
     if (wrapperMs > this.timeoutMs) {
       const r: ReadContextResult = { ok: false, reason: "timeout", pid: native.pid, bundleId: native.bundleId, levelSummary };
-      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      this.logRead(r, filterMeta, probeMs);
       return r;
     }
 
@@ -424,7 +462,7 @@ export class AxContextReader {
         bundleId: native.bundleId,
         levelSummary,
       };
-      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      this.logRead(r, filterMeta, probeMs);
       return r;
     }
 
@@ -434,7 +472,7 @@ export class AxContextReader {
 
     if (fragments.length === 0) {
       const r: ReadContextResult = { ok: false, reason: "no-text", pid: native.pid, bundleId: native.bundleId, levelSummary };
-      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      this.logRead(r, filterMeta, probeMs);
       return r;
     }
 
@@ -454,7 +492,7 @@ export class AxContextReader {
         timings: { ...native.timings, probeMs, wrapperMs },
       },
     };
-    void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+    this.logRead(r, filterMeta, probeMs);
     return r;
   }
 }
