@@ -11,7 +11,10 @@ export const IpcChannels = {
   ReplySuggestions: "reply:suggestions",
   /** overlay → main: the user picked variant `id` (1, 2 or 3). */
   ReplyChoose: "reply:choose",
-  /** overlay → main: the user closed the pill (✕ or Esc inside the pill). */
+  /** overlay → main: the user dismissed the suggestions via the global Esc
+   *  accelerator. The ✕ inside the pill is hidden while suggesting (the
+   *  window never takes focus via showInactive(), so a renderer keydown for
+   *  Esc would not fire reliably) — the accelerator is the primary path. */
   ReplyDismiss: "reply:dismiss",
   /** main → overlay: neutral flash text (degradation L2/L3). Never a reason
    *  that would describe what was on screen (spec §Errori). */

@@ -82,6 +82,22 @@ describe("computeOverlayBounds", () => {
     expect(computeOverlayBounds([odd], { x: 5, y: 5 }, PILL_WINDOW_SIZE).x).toBe(546); // 545.5 → 546
   });
 
+  it("rounds BOTH final coordinates, not just the half-width offset (fractional work area)", () => {
+    // A work area with fractional edges: rounding only the centering offset
+    // (as opposed to the final x) leaves x at 546.5, and leaves y unrounded
+    // entirely since the old formula never touched it.
+    const fractional: DisplayLike = {
+      id: 10,
+      bounds: { x: 0, y: 0, width: 1512, height: 982 },
+      workArea: { x: 0.5, y: 25.5, width: 1511.5, height: 956.25 },
+    };
+    const b = computeOverlayBounds([fractional], { x: 700, y: 400 }, PILL_WINDOW_SIZE);
+    expect(b.x).toBe(546);
+    expect(b.y).toBe(882);
+    expect(Number.isInteger(b.x)).toBe(true);
+    expect(Number.isInteger(b.y)).toBe(true);
+  });
+
   it("never places the window left of or above the work area, even if it does not fit", () => {
     const tiny: DisplayLike = { id: 8, bounds: { x: 100, y: 100, width: 320, height: 200 }, workArea: { x: 100, y: 100, width: 320, height: 200 } };
     const b = computeOverlayBounds([tiny], { x: 150, y: 150 }, SUGGEST_WINDOW_SIZE);

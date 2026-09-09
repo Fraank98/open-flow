@@ -16,6 +16,7 @@ html, body {
   left: 50%;
   bottom: 30px;
   transform: translateX(-50%);
+  transition: opacity 200ms ease;
 }
 #pill {
   display: flex;
@@ -29,7 +30,6 @@ html, body {
   font-size: 14px;
   height: 56px;
   width: 360px;
-  transition: opacity 200ms ease;
 }
 .dot {
   width: 12px;

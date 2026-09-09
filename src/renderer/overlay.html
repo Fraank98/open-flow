@@ -69,8 +69,15 @@
       });
 
       window.openFlowOverlay.onSuggestions((payload) => {
+        // The sender is main only, so a malformed payload is unlikely, but a
+        // half-built panel (gist written, no rows) is bad enough to guard
+        // against cheaply: bail out to a clean, empty state instead.
+        if (!payload || !Array.isArray(payload.variants)) {
+          clearSuggestions();
+          return;
+        }
         suggesting = true;
-        gistEl.textContent = payload.gist;
+        gistEl.textContent = payload.gist ?? "";
         const rows = payload.variants.map((v, i) => {
           const row = document.createElement("button");
           row.type = "button";
@@ -104,7 +111,7 @@
       });
 
       // Hovering the pill resets the 20 s auto-close timer (spec §7).
-      document.getElementById("root").addEventListener("mouseenter", () => {
+      rootEl.addEventListener("mouseenter", () => {
         if (suggesting) window.openFlowOverlay.hover();
       });
     </script>

@@ -19,10 +19,12 @@ export interface Point { x: number; y: number }
 export interface Size { width: number; height: number }
 export interface OverlayBounds extends Rect { displayId: number }
 
-/** The dictation pill: 360×56 of visible pill inside a 420×124 window. */
-export const PILL_WINDOW_SIZE: Readonly<Size> = { width: 420, height: 124 };
+/** The dictation pill: 360×56 of visible pill inside a 420×124 window.
+ *  Frozen: `Readonly<Size>` is compile-time only, and callers spread it, but
+ *  freezing costs nothing and rules out an accidental runtime mutation. */
+export const PILL_WINDOW_SIZE: Readonly<Size> = Object.freeze({ width: 420, height: 124 });
 /** The suggesting state: gist row + three variant rows (spec §7). */
-export const SUGGEST_WINDOW_SIZE: Readonly<Size> = { width: 480, height: 300 };
+export const SUGGEST_WINDOW_SIZE: Readonly<Size> = Object.freeze({ width: 480, height: 300 });
 /** The window extends this far past the work-area bottom so the pill's
  *  box-shadow is not clipped; the CSS pulls the pill back up. */
 export const SHADOW_MARGIN = 24;
@@ -41,7 +43,7 @@ function contains(r: Rect, p: Point): boolean {
 }
 
 export function pickDisplay(displays: readonly DisplayLike[], cursor: Point): DisplayLike {
-  if (displays.length === 0) throw new RangeError("pickDisplay: no displays");
+  if (displays.length === 0) throw new RangeError("pickDisplay: no displays given");
   for (const d of displays) if (contains(d.bounds, cursor)) return d;
   // The cursor can sit in a gap (mismatched resolutions) or, briefly, outside
   // every screen: fall back to the nearest one instead of the primary.
@@ -55,9 +57,13 @@ export function pickDisplay(displays: readonly DisplayLike[], cursor: Point): Di
  * above the work area even when it is wider/taller than the screen.
  */
 export function computeOverlayBounds(displays: readonly DisplayLike[], cursor: Point, size: Size): OverlayBounds {
+  if (displays.length === 0) throw new RangeError("computeOverlayBounds: no displays given");
   const display = pickDisplay(displays, cursor);
   const wa = display.workArea;
-  const x = Math.max(wa.x, wa.x + Math.round((wa.width - size.width) / 2));
-  const y = Math.max(wa.y, wa.y + wa.height - size.height + SHADOW_MARGIN);
+  // Round the FINAL coordinate, not an intermediate offset: rounding only
+  // the centering half-width (as this used to) leaves a fractional work
+  // area's x still fractional, and left y unrounded entirely.
+  const x = Math.round(Math.max(wa.x, wa.x + (wa.width - size.width) / 2));
+  const y = Math.round(Math.max(wa.y, wa.y + wa.height - size.height + SHADOW_MARGIN));
   return { x, y, width: size.width, height: size.height, displayId: display.id };
 }
