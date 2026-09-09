@@ -109,44 +109,38 @@ interface Pending {
   cancelTtl: () => void;
 }
 
-/**
- * The deadline branch is deliberately pushed a fixed real-time margin past
- * whatever `deadline` itself settles to, instead of racing it against `work`
- * on raw promise-microtask scheduling. A `deadline` that is already resolved
- * at the moment `raced()` runs — production's real 12 s timer never is, but
- * the coordinator test double resolves it instantly for every other
- * `sleep()` call, deliberately, for every OTHER (non-raced) use of `sleep` —
- * would otherwise win a same-tick `Promise.race` against `work` purely on
- * mock scheduling: an async test double needs one or more extra microtask
- * turns to settle even when it carries no real delay, which is enough for an
- * already-settled deadline to be treated as "first" by native
- * `Promise.race`. RACE_GUARD_MS is chosen to clear `vi.waitFor`'s 50 ms
- * polling interval (used by tests that hold a stage open with a
- * manually-released promise and assert the transient `thinking` state)
- * with margin, while staying negligible next to the real 12 s ceiling: any
- * `work` that is going to settle on its own — a real HTTP response as much
- * as a synchronous test double — settles well within this margin; only a
- * genuinely hung request, or an explicitly-armed test deadline, ever lets
- * the guard fire.
- */
-const RACE_GUARD_MS = 250;
-
 async function raced<T>(work: Promise<T>, deadline: Promise<void>): Promise<{ ok: true; value: T } | { ok: false }> {
-  const guardedDeadline = deadline.then(() => new Promise<void>((resolve) => setTimeout(resolve, RACE_GUARD_MS)));
   return Promise.race([
     work.then((value) => ({ ok: true as const, value })),
-    guardedDeadline.then(() => ({ ok: false as const })),
+    deadline.then(() => ({ ok: false as const })),
   ]);
+}
+
+/** A code, never the exception's own message: a native (N-API) throw can
+ *  carry arbitrary text — a path, an address, anything the addon happened to
+ *  be holding — and this feature's logs carry metrics and codes only. */
+function errorCode(err: unknown): string {
+  return err instanceof Error ? err.name : typeof err;
 }
 
 /**
  * Deterministic pre-gate over the last message: does it contain an explicit
  * proposal (a modal, two explicit alternatives, an offer)? Regular
  * expressions cannot tell "ti va bene giovedì?" from "a che ora arrivi
- * giovedì?" in general — that is what the classifier is for — but they can
- * cheaply rule OUT messages that propose nothing. Wired only if the Task 1
- * experiment measured too many false positives on the "information only the
- * user has" cases; it costs false negatives, deliberately.
+ * giovedì?" in general — that is what the classifier is for. Wired only if
+ * the Task 1 experiment measured too many false positives on the
+ * "information only the user has" cases.
+ *
+ * This gate is deliberately permissive, not strict: it is measured to let
+ * through things that are not proposals at all — a plain statement
+ * containing a keyword ("Il preventivo è pronto." → true, no proposal in
+ * it) and English wh-questions that happen to contain an auxiliary the word
+ * list also uses for yes/no questions ("do you"/"are you"/"is it"). That is
+ * fine and intentional: ruling IN too much here is cheap, because the
+ * classifier — the second, more accurate gate — runs right after it and is
+ * the one that actually decides answerability. What this gate must never do
+ * is rule OUT a genuine proposal; it only ever narrows what reaches the
+ * classifier, never widens it.
  */
 const PROPOSAL_WORDS = /\b(puoi|riesci|te ne occupi|la fai|lo fai|ci pensi|confermi|va bene|d'accordo|ti va|possiamo|riusciamo|preferisci|preferisce|can you|could you|will you|would you|do you|are you|is it|shall we|preventivo|offerta|proposta|quotazione|quote|proposal|estimate)\b/iu;
 const ALTERNATIVE_HINT = /\s(?:o|oppure|or)\s/iu;
@@ -226,71 +220,80 @@ export class ReplyCoordinator {
     // synchronous and ~150 ms measured; the wait worth showing is `thinking`.
     this.deps.overlay.sendState("reading");
 
-    const frontBefore = this.deps.reader.frontmostPid();
-    const read = this.deps.reader.read(filter);
-    if (!read.ok) {
-      if (read.reason === "app-not-allowed") {
-        this.blockedBundleId = read.bundleId;
-        return this.blocked("app-not-allowed", FLASH_TEXT.appNotAllowed, { bundleId: read.bundleId });
+    try {
+      const frontBefore = this.deps.reader.frontmostPid();
+      const read = this.deps.reader.read(filter);
+      if (!read.ok) {
+        if (read.reason === "app-not-allowed") {
+          this.blockedBundleId = read.bundleId;
+          return this.blocked("app-not-allowed", FLASH_TEXT.appNotAllowed, { bundleId: read.bundleId });
+        }
+        return this.abstain(read.reason, epoch, readerLogMeta(read));
       }
-      return this.abstain(read.reason, epoch, readerLogMeta(read));
+      const ctx = read.context;
+      if (ctx.pid !== frontBefore) {
+        // Reading a background window and pasting into the active app would be
+        // the worst possible mistake (spec §9.2).
+        return this.abstain("not-frontmost", epoch, { pid: ctx.pid, frontmostPid: frontBefore, bundleId: ctx.bundleId });
+      }
+
+      const parsed = this.deps.parse({ fragments: ctx.fragments, userDisplayName: prefs.userDisplayName, tailBudgetChars: TAIL_BUDGET_CHARS });
+      if (parsed.kind === "abstain") return this.abstain(parsed.reason, epoch, parserLogMeta(parsed));
+
+      this.state = "thinking";
+      this.deps.overlay.sendState("thinking");
+      this.deps.overlay.show();
+
+      if (this.deps.preGate && !this.deps.preGate(parsed.lastMessage)) {
+        return this.abstain("no-explicit-proposal", epoch, parserLogMeta(parsed));
+      }
+
+      const cls = await raced(this.deps.classify({
+        transcript: parsed.transcript, lastMessage: parsed.lastMessage, counterpart: parsed.counterpart,
+      }), deadline);
+      if (epoch !== this.epoch) return;
+      if (!cls.ok) return this.abstain("timeout", epoch);
+      if (!cls.value.ok) {
+        if (cls.value.reason === "llm-error") return this.serverError(cls.value.error, epoch);
+        return this.abstain(cls.value.reason, epoch, { durationMs: cls.value.durationMs });
+      }
+      const classification = cls.value.classification;
+
+      const positions = positionsFor({
+        kind: classification.kind, language: classification.language,
+        ...(classification.alternatives ? { alternatives: classification.alternatives } : {}),
+      });
+      const genInput: GenerateInput = {
+        transcript: parsed.transcript, lastMessage: parsed.lastMessage, counterpart: parsed.counterpart,
+        userDisplayName: prefs.userDisplayName, subject: parsed.subject, positions, language: classification.language,
+      };
+      const gen = await raced(this.deps.generate(genInput), deadline);
+      if (epoch !== this.epoch) return;
+      if (!gen.ok) return this.abstain("timeout", epoch);
+      if (!gen.value.ok) return this.serverError(gen.value.error, epoch);
+
+      const filtered = this.deps.filterVariants({
+        variants: gen.value.variants, lastMessage: parsed.lastMessage, transcript: parsed.transcript,
+        counterpart: parsed.counterpart, userDisplayName: prefs.userDisplayName, language: classification.language,
+      });
+      void this.deps.logger.info("reply filter", { ...filterLogMeta(filtered), kind: classification.kind });
+      if (filtered.kept.length < MIN_KEPT) {
+        // One proposal is not a choice, and reads as an authoritative
+        // suggestion: no pill at all (decision 6).
+        return this.abstain("too-few-variants", epoch, filterLogMeta(filtered));
+      }
+
+      this.showSuggestions(filtered.kept.slice(0, MAX_VARIANTS), parsed.gist, ctx.pid, ctx.editableIsFocused, {
+        kind: classification.kind, language: classification.language,
+      });
+    } catch (err) {
+      // `reader.read` calls the native addon: an N-API throw is plausible.
+      // Without this, the pipeline would stay stuck mid-flight forever —
+      // isBusy() permanently true, every later hotkey "busy", the pill
+      // parked on the thinking spinner with no way to dismiss() it (that
+      // requires state "suggesting"). The feature must recover on its own.
+      this.recoverFromError(err, epoch);
     }
-    const ctx = read.context;
-    if (ctx.pid !== frontBefore) {
-      // Reading a background window and pasting into the active app would be
-      // the worst possible mistake (spec §9.2).
-      return this.abstain("not-frontmost", epoch, { pid: ctx.pid, frontmostPid: frontBefore, bundleId: ctx.bundleId });
-    }
-
-    const parsed = this.deps.parse({ fragments: ctx.fragments, userDisplayName: prefs.userDisplayName, tailBudgetChars: TAIL_BUDGET_CHARS });
-    if (parsed.kind === "abstain") return this.abstain(parsed.reason, epoch, parserLogMeta(parsed));
-
-    this.state = "thinking";
-    this.deps.overlay.sendState("thinking");
-    this.deps.overlay.show();
-
-    if (this.deps.preGate && !this.deps.preGate(parsed.lastMessage)) {
-      return this.abstain("no-explicit-proposal", epoch, parserLogMeta(parsed));
-    }
-
-    const cls = await raced(this.deps.classify({
-      transcript: parsed.transcript, lastMessage: parsed.lastMessage, counterpart: parsed.counterpart,
-    }), deadline);
-    if (epoch !== this.epoch) return;
-    if (!cls.ok) return this.abstain("timeout", epoch);
-    if (!cls.value.ok) {
-      if (cls.value.reason === "llm-error") return this.serverError(cls.value.error, epoch);
-      return this.abstain(cls.value.reason, epoch, { durationMs: cls.value.durationMs });
-    }
-    const classification = cls.value.classification;
-
-    const positions = positionsFor({
-      kind: classification.kind, language: classification.language,
-      ...(classification.alternatives ? { alternatives: classification.alternatives } : {}),
-    });
-    const genInput: GenerateInput = {
-      transcript: parsed.transcript, lastMessage: parsed.lastMessage, counterpart: parsed.counterpart,
-      userDisplayName: prefs.userDisplayName, subject: parsed.subject, positions, language: classification.language,
-    };
-    const gen = await raced(this.deps.generate(genInput), deadline);
-    if (epoch !== this.epoch) return;
-    if (!gen.ok) return this.abstain("timeout", epoch);
-    if (!gen.value.ok) return this.serverError(gen.value.error, epoch);
-
-    const filtered = this.deps.filterVariants({
-      variants: gen.value.variants, lastMessage: parsed.lastMessage, transcript: parsed.transcript,
-      counterpart: parsed.counterpart, userDisplayName: prefs.userDisplayName, language: classification.language,
-    });
-    void this.deps.logger.info("reply filter", { ...filterLogMeta(filtered), kind: classification.kind });
-    if (filtered.kept.length < MIN_KEPT) {
-      // One proposal is not a choice, and reads as an authoritative
-      // suggestion: no pill at all (decision 6).
-      return this.abstain("too-few-variants", epoch, filterLogMeta(filtered));
-    }
-
-    this.showSuggestions(filtered.kept.slice(0, MAX_VARIANTS), parsed.gist, ctx.pid, ctx.editableIsFocused, {
-      kind: classification.kind, language: classification.language,
-    });
   }
 
   private showSuggestions(kept: readonly FilterVariant[], gist: string, pid: number, editableIsFocused: boolean, meta: Record<string, unknown>): void {
@@ -323,23 +326,28 @@ export class ReplyCoordinator {
     this.deps.overlay.resetSize();
     this.deps.overlay.sendState("injecting");
 
-    if (!pending.editableIsFocused) {
-      // The field was found through AXEditableAncestor and is NOT the focused
-      // one: a ⌘V would land somewhere we never verified (spec §9.3).
-      return this.degradeToClipboard(text, "editable-not-focused", epoch);
+    try {
+      if (!pending.editableIsFocused) {
+        // The field was found through AXEditableAncestor and is NOT the focused
+        // one: a ⌘V would land somewhere we never verified (spec §9.3).
+        return this.degradeToClipboard(text, "editable-not-focused", epoch);
+      }
+      this.deps.reader.activateApp(pending.pid);
+      if (!(await this.waitForFrontmost(pending.pid))) {
+        return this.degradeToClipboard(text, "activate-failed", epoch);
+      }
+      const result = await this.deps.inject(text);
+      if (!result.pasted) {
+        // TextInjector already left the text in the clipboard on failure.
+        void this.deps.logger.warn("reply inject failed", { reason: "paste-failed", chars: text.length });
+        return this.flashThenIdle(FLASH_TEXT.copyOnly, FLASH_INFO_MS, epoch);
+      }
+      void this.deps.logger.info("reply accepted", { result: "pasted", variant: id, chars: text.length, pid: pending.pid });
+      await this.toIdle(epoch, HIDE_DELAY_MS);
+    } catch (err) {
+      // `activateApp` and `frontmostPid` also call the native addon.
+      this.recoverFromError(err, epoch);
     }
-    this.deps.reader.activateApp(pending.pid);
-    if (!(await this.waitForFrontmost(pending.pid))) {
-      return this.degradeToClipboard(text, "activate-failed", epoch);
-    }
-    const result = await this.deps.inject(text);
-    if (!result.pasted) {
-      // TextInjector already left the text in the clipboard on failure.
-      void this.deps.logger.warn("reply inject failed", { reason: "paste-failed", chars: text.length });
-      return this.flashThenIdle(FLASH_TEXT.copyOnly, FLASH_INFO_MS, epoch);
-    }
-    void this.deps.logger.info("reply accepted", { result: "pasted", variant: id, chars: text.length, pid: pending.pid });
-    await this.toIdle(epoch, HIDE_DELAY_MS);
   }
 
   /** Closes the pill for any reason; always releases the shortcuts. */
@@ -367,6 +375,10 @@ export class ReplyCoordinator {
     this.epoch += 1;
     this.state = "idle";
     this.deps.overlay.resetSize();
+    // Explicit, rather than relying on the overlay's own onStateChange
+    // listener (shared with dictation) to repaint over it: this abort path
+    // must not depend on a side effect of another subsystem.
+    this.deps.overlay.hide();
     void this.deps.logger.info("reply ignored", { reason: "ptt-arm" });
   }
 
@@ -398,6 +410,13 @@ export class ReplyCoordinator {
     // their own `reason` field (null for a non-abstain ParseResult, as with
     // the pre-gate's "no-explicit-proposal"), and the explicit `reason`
     // argument must always be the one that lands in the log.
+    //
+    // Logged BEFORE the epoch check below, deliberately: a stale/superseded
+    // run (a PTT arm bumped the epoch while this was in flight) still logs
+    // its own "reply abstain" line. That line is metrics/codes only, same as
+    // every other one this feature writes, so it carries no privacy risk —
+    // and it is useful on its own: it is the only record of what the
+    // abandoned run would have decided.
     void this.deps.logger.info("reply abstain", { ...meta, reason });
     if (epoch !== this.epoch) return;
     this.state = "idle";
@@ -407,7 +426,10 @@ export class ReplyCoordinator {
   }
 
   private async blocked(reason: string, text: string, meta: Record<string, unknown> = {}): Promise<void> {
-    void this.deps.logger.info("reply blocked", { reason, ...meta });
+    // `meta` first, same as `abstain`: none of this method's callers pass a
+    // `meta` with its own `reason` field today, but the explicit argument
+    // must always win if one ever does.
+    void this.deps.logger.info("reply blocked", { ...meta, reason });
     const epoch = ++this.epoch;
     this.state = "idle";
     await this.flashThenIdle(text, FLASH_INFO_MS, epoch);
@@ -438,5 +460,27 @@ export class ReplyCoordinator {
 
   private async ignored(reason: string): Promise<void> {
     void this.deps.logger.info("reply ignored", { reason });
+  }
+
+  /** An unhandled throw/rejection from `onHotkey` or `accept` — plausible
+   *  from either, since both call into the native addon (`reader.read`,
+   *  `reader.activateApp`, `reader.frontmostPid`). Without this the pipeline
+   *  would stay stuck exactly where it was: isBusy() permanently true, every
+   *  later hotkey answered "busy", the pill parked on whatever it was
+   *  showing with no way to dismiss() it (that requires state "suggesting").
+   *  The error is always logged (a code only); the state/overlay/pending
+   *  recovery itself is skipped only if a newer run (a dismiss or PTT arm)
+   *  already moved past this epoch and recovered on its own. */
+  private recoverFromError(err: unknown, epoch: number): void {
+    void this.deps.logger.error("reply error", { reason: "exception", code: errorCode(err) });
+    if (epoch !== this.epoch) return; // superseded by a dismiss/arm that already recovered
+    if (this.pending) {
+      this.pending.cancelTtl();
+      for (const acc of this.pending.accelerators) this.deps.shortcuts.unregister(acc);
+      this.pending = null;
+    }
+    this.state = "idle";
+    this.deps.overlay.sendState("idle");
+    this.deps.overlay.hide();
   }
 }

@@ -131,7 +131,7 @@ function makeEnv(over: Over = {}) {
     onTrustRequired: vi.fn(),
     // Waits are injected: the flash delays, the 300 ms activation poll and the
     // 12 s deadline all go through here, so every test is deterministic.
-    sleep: (ms: number) => (ms === TOTAL_TIMEOUT_MS && over.deadline ? over.deadline : Promise.resolve()),
+    sleep: (ms: number) => (ms === TOTAL_TIMEOUT_MS ? (over.deadline ?? new Promise<void>(() => {})) : Promise.resolve()),
     setTimer: (cb: () => void, ms: number) => {
       const t = { cb, ms, cancelled: false };
       timers.push(t);
@@ -476,6 +476,29 @@ describe("ReplyCoordinator — pill lifecycle", () => {
     expect(e.c.getState()).toBe("idle");
   });
 
+  // Same guard, one stage earlier: the classifier (not the generator) is
+  // still pending when the PTT arms. Covers the epoch check right after the
+  // classifier's raced() call, which the timeout test never reaches (it is
+  // decided by Promise.race itself, not by that check).
+  it("a PTT arm during the classifier aborts the run: no pill, and the generator is never even called", async () => {
+    let release: () => void = () => {};
+    const slow = new Promise<ClassifyResult>((r) => { release = () => r(CLASSIFIED); });
+    const e = makeEnv({ classify: slow });
+    const run = e.c.onHotkey();
+    await vi.waitFor(() => { expect(e.c.getState()).toBe("thinking"); });
+    e.c.onDictationArm();
+    release();
+    await run;
+    // The generator raced() call has its own, already-covered epoch check
+    // right after it: asserting only `shown` stays empty would still pass
+    // even without the check right after the classifier, since that later
+    // check would catch the staleness anyway. Asserting `generate` was never
+    // called is what isolates the classifier-stage check specifically.
+    expect(e.generate).not.toHaveBeenCalled();
+    expect(e.shown).toEqual([]);
+    expect(e.c.getState()).toBe("idle");
+  });
+
   it("hover and dismiss are no-ops when nothing is suggesting", () => {
     const e = makeEnv();
     e.c.onHover();
@@ -562,6 +585,67 @@ describe("ReplyCoordinator.accept", () => {
   });
 });
 
+// `reader.read` and `reader.activateApp`/`frontmostPid` call the native
+// addon (ax_context.node): an N-API throw is plausible. Without a
+// try/catch, a throw here would leave isBusy() permanently true — every
+// later hotkey answered "busy" forever, and the pill parked on `thinking`
+// with no way to dismiss() it (that requires state "suggesting"). Only
+// restarting the app would recover. The assertion that actually proves the
+// feature isn't dead is that a LATER hotkey still works.
+describe("ReplyCoordinator — native addon throws (recovery)", () => {
+  it("recovers when reader.read throws mid-pipeline", async () => {
+    const e = makeEnv();
+    e.reader.read.mockImplementationOnce(() => { throw new Error("N-API crash: 0x00 at /Users/danilo/secret/path"); });
+    await e.c.onHotkey();
+    expect(e.c.getState()).toBe("idle");
+    expect(e.c.isBusy()).toBe(false);
+    expect(e.overlay.hide).toHaveBeenCalled();
+    expect(e.seen.join(" ")).not.toContain("secret/path");
+    expect(e.seen.join(" ")).toContain('"reason":"exception"');
+
+    await e.c.onHotkey();
+    expect(e.c.getState()).toBe("suggesting");
+  });
+
+  it("recovers when parse throws mid-pipeline", async () => {
+    const e = makeEnv();
+    e.parse.mockImplementationOnce(() => { throw new Error("unexpected shape"); });
+    await e.c.onHotkey();
+    expect(e.c.getState()).toBe("idle");
+    expect(e.c.isBusy()).toBe(false);
+    expect(e.overlay.hide).toHaveBeenCalled();
+
+    await e.c.onHotkey();
+    expect(e.c.getState()).toBe("suggesting");
+  });
+
+  it("recovers when classify rejects (not the modeled llm-error, an actual throw)", async () => {
+    const e = makeEnv();
+    e.classify.mockImplementationOnce(() => Promise.reject(new Error("socket hang up somewhere sensitive")));
+    await e.c.onHotkey();
+    expect(e.c.getState()).toBe("idle");
+    expect(e.c.isBusy()).toBe(false);
+    expect(e.overlay.hide).toHaveBeenCalled();
+    expect(e.seen.join(" ")).not.toContain("sensitive");
+
+    await e.c.onHotkey();
+    expect(e.c.getState()).toBe("suggesting");
+  });
+
+  it("recovers when the native addon throws during accept (activateApp)", async () => {
+    const e = makeEnv();
+    await e.c.onHotkey();
+    e.reader.activateApp.mockImplementationOnce(() => { throw new Error("N-API crash"); });
+    await e.c.accept(1);
+    expect(e.c.getState()).toBe("idle");
+    expect(e.c.isBusy()).toBe(false);
+    expect(e.overlay.hide).toHaveBeenCalled();
+
+    await e.c.onHotkey();
+    expect(e.c.getState()).toBe("suggesting");
+  });
+});
+
 describe("ReplyCoordinator — privacy (Global Constraint 10)", () => {
   it("logs codes, counts and timings only: never fragments, transcript, gist, names or variant text", async () => {
     const slack = CASES[0]!;   // slack-decisione
@@ -590,6 +674,21 @@ describe("ReplyCoordinator — privacy (Global Constraint 10)", () => {
     e.c.onHover();
     e.c.onDictationArm();
     expect(e.reader.read).toHaveBeenCalledTimes(1);
+  });
+
+  // Abstention is the NORMAL outcome of this feature — the overwhelming
+  // majority of hotkeys never reach showSuggestions/accept at all. The two
+  // tests above only exercise the (rarer) fully-successful path; this one
+  // exercises abstain() itself, so the privacy guarantee has a test on the
+  // path it actually needs to hold on most often.
+  it("logs codes and counts only when the pipeline abstains (the normal outcome, not just the successful one)", async () => {
+    const slack = CASES[0]!;
+    const e = makeEnv({
+      read: { ok: true, context: { ...CONTEXT, fragments: slack.ax.split("⋄").map((s) => s.trim()) } },
+      parse: { kind: "abstain", reason: "last-turn-is-user", stats: CONVERSATION.stats },
+    });
+    await e.c.onHotkey();
+    assertNoLeak(e.seen, slack.ax);
   });
 });
 
