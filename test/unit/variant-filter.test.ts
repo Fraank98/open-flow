@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { filterVariants, cleanVariantText, jaccardWords, MIN_KEPT, toLogMeta, type FilterInput } from "../../src/main/utils/variant-filter.js";
+import { positionsFor } from "../../src/main/utils/reply-positions.js";
 import { CASES, leaksScreenText } from "../fixtures/conversations/spike-corpus.js";
 
 const CTX = {
@@ -375,6 +376,31 @@ describe("instruction-echo: verbatim copies of the canned generic/offer voice ex
   it("does not drop a legitimate variant that merely shares ordinary words with a canned example", () => {
     // GOOD_A shares "ci penso io" with the accept example but is not a copy of it.
     expect(run([GOOD_A, GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  // reply-positions.ts's offer-anchor fix (offer-terms.ts) interpolates a
+  // real amount/deadline into the offer voice's DESCRIPTIVE clause, never
+  // into the quoted "Nello spirito di: «…»" example itself — so
+  // CANNED_EXAMPLES (built here from a bare, term-less positionsFor call)
+  // must keep recognizing a verbatim copy even when the generation that
+  // produced it actually ran with offerTerms set. This is the "prova di
+  // rottura" the derivation needs: if the anchor ever leaked into the
+  // quoted example, this test would start failing (the copy text would no
+  // longer match CANNED_EXAMPLES's un-anchored set) instead of silently
+  // weakening the filter.
+  it("still catches a verbatim example copy when the offer voice carried an amount/deadline anchor", () => {
+    const anchored = positionsFor({ kind: "offer", language: "it", offerTerms: { amount: "4.850 euro", deadline: "tre settimane" } });
+    expect(anchored[0]!.voice).toContain("l'importo di 4.850 euro e la scadenza di tre settimane");
+    const r = run([
+      V("accept_offer", "Per me va bene, procediamo."),
+      V("reject_offer", "Per ora lascio stare, grazie."),
+      V("request_changes", "Prima di confermare avrei bisogno di un dettaglio."),
+    ]);
+    expect(r.dropped).toEqual([
+      { key: "accept_offer", rule: "instruction-echo" },
+      { key: "reject_offer", rule: "instruction-echo" },
+      { key: "request_changes", rule: "instruction-echo" },
+    ]);
   });
 });
 

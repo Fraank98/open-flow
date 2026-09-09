@@ -1,4 +1,5 @@
 import { positionsFor } from "./utils/reply-positions.js";
+import { extractOfferTerms } from "./utils/offer-terms.js";
 import { MIN_KEPT, hasUnanchoredNumber, toLogMeta as filterLogMeta, type FilterInput, type FilterOutput, type FilterVariant } from "./utils/variant-filter.js";
 import { toLogMeta as parserLogMeta, type ParseInput, type ParseResult } from "./utils/conversation-parser.js";
 import { toLogMeta as readerLogMeta, type BundleIdFilter, type ReadBudgets, type ReadContextResult } from "./ax-context-reader.js";
@@ -357,9 +358,15 @@ export class ReplyCoordinator {
       const kind = alternativesGrounded ? classification.kind : "generic";
       const alternatives = alternativesGrounded ? classification.alternatives : undefined;
 
+      // Extracted only for `offer`: it is the one kind whose voice has an
+      // anchor slot for it (offer-terms.ts / reply-positions.ts's
+      // offerTerms), and `undefined` when nothing is stated leaves the
+      // voice exactly as it was before this existed (no anchor invented).
+      const offerTerms = kind === "offer" ? extractOfferTerms(parsed.lastMessage) : undefined;
       const positions = positionsFor({
         kind, language,
         ...(alternatives ? { alternatives } : {}),
+        ...(offerTerms ? { offerTerms } : {}),
       });
       const genInput: GenerateInput = {
         transcript: parsed.transcript, lastMessage: parsed.lastMessage, counterpart: parsed.counterpart,
