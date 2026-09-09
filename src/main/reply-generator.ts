@@ -5,7 +5,7 @@ import type { Logger } from "./logger.js";
 /** Official Gemma sampling (spec §Vincolo tecnico); repetition penalty off. */
 export const GEMMA_SAMPLING: Readonly<SamplingParams> = { temperature: 1.0, top_p: 0.95, top_k: 64, min_p: 0, repeat_penalty: 1.0 };
 
-export const GENERATOR_MAX_TOKENS = 320;
+const GENERATOR_MAX_TOKENS = 320;
 
 /** Fixed prefix: identical across calls, so the KV cache keeps it; also the
  *  warmupPrompt of the reply server. Gemma has no system role. */

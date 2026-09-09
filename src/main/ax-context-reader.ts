@@ -189,7 +189,7 @@ function loadNativeAddon(appRoot: string, isPackaged: boolean): AxContextNative 
 
 /** Fragments of the chosen level, or of the level with the most chars when
  *  the addon found no jump (chosenLevel === -1). Empty when there are no levels. */
-export function pickFragments(result: NativeContextResult): string[] {
+function pickFragments(result: NativeContextResult): string[] {
   if (result.levels.length === 0) return [];
   if (result.chosenLevel >= 0) {
     const level = result.levels[result.chosenLevel];

@@ -23,8 +23,15 @@ export interface OverlayBounds extends Rect { displayId: number }
  *  Frozen: `Readonly<Size>` is compile-time only, and callers spread it, but
  *  freezing costs nothing and rules out an accidental runtime mutation. */
 export const PILL_WINDOW_SIZE: Readonly<Size> = Object.freeze({ width: 420, height: 124 });
-/** The suggesting state: gist row + three variant rows (spec §7). */
-export const SUGGEST_WINDOW_SIZE: Readonly<Size> = Object.freeze({ width: 480, height: 300 });
+/** The suggesting state: gist row + three variant rows (spec §7). Height
+ *  grown for Important 7 (final review): the CSS line-clamp on each variant's
+ *  text went from 2 to 8 lines so a variant up to LENGTH_MAX = 280 chars
+ *  (variant-filter.ts) is fully readable before it can be accepted — see the
+ *  comment on `.variant .vtext` in overlay.css for the sizing math. Width is
+ *  unchanged: both this and PILL_WINDOW_SIZE are centered on the work area
+ *  independently of their own width (see computeOverlayBounds), so growing
+ *  only the height cannot introduce a horizontal jump between the two. */
+export const SUGGEST_WINDOW_SIZE: Readonly<Size> = Object.freeze({ width: 480, height: 520 });
 /** The window extends this far past the work-area bottom so the pill's
  *  box-shadow is not clipped; the CSS pulls the pill back up. */
 export const SHADOW_MARGIN = 24;

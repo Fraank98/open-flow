@@ -17,7 +17,7 @@
  *  Accepts long date prefixes ("Il giorno 4 set 2026, alle ore 11:20, …").
  *  Group 1: everything before the verb (the prefix that contains the name).
  *  Group 2: the inline body, possibly empty. */
-export const SPEECH_MARKER =
+const SPEECH_MARKER =
   /^(.{2,140}?)\s+(?:ha scritto|ha detto|wrote|said|says)\s*:\s*(.*)$/iu;
 
 /** Chat attribution "Nome: testo". The name starts with an uppercase letter and
@@ -29,11 +29,11 @@ export const ATTRIBUTED = /^(\p{Lu}[\p{L}'.\- ]{1,28}?):\s*(.+)$/u;
 export const SUBJECT = /^(?:re|r|fwd|fw|oggetto|subject)\s*:\s*(.+)$/i;
 
 /** Trailing chat timestamp: " 09:12", " 09:12.", " 9.05", " 09:12 PM". */
-export const TRAILING_TIME = /\s+\d{1,2}[:.]\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?\.?$/;
+const TRAILING_TIME = /\s+\d{1,2}[:.]\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?\.?$/;
 
 /** Fragments that are never content: bare times, counters, glyphs, booleans,
  *  Mail's "message body" placeholder, whitespace. */
-export const PURE_NOISE =
+const PURE_NOISE =
   /^(?:\d{1,2}:\d{2}(?::\d{2})?|\d+|[-–—•⌘⇧↑]|true|false|nan|message body|\p{Z}*)$/iu;
 
 /** An unattributed fragment survives only if it is at least this long: the

@@ -86,7 +86,12 @@ async function init() {
 
   $("#replyEnabled").checked = prefs.replySuggestionsEnabled === true;
   $("#userDisplayName").value = prefs.userDisplayName ?? "";
-  $("#replyHotkey").value = prefs.replySuggestionsHotkey ?? "Command+Control+R";
+  // No `?? "Command+Control+R"` fallback: preferencesStore.load() always
+  // merges DEFAULT_PREFS, so replySuggestionsHotkey is never undefined here
+  // (found by review, Minor 8.3 — the fallback was dead code and a third
+  // copy of the same literal, alongside utils/reply-hotkey.ts and
+  // preferences-store.ts).
+  $("#replyHotkey").value = prefs.replySuggestionsHotkey;
   $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
 
   /** The same list serves both modes, and switching the dropdown silently
@@ -240,6 +245,11 @@ async function init() {
     const blockers = [];
     if (!nameOk) blockers.push("inserisci il tuo nome");
     if (!tier.installed) blockers.push(`scarica ${tier.label}`);
+    // Same fixed string refreshReplyStatus already shows in the status line
+    // below (no new copy): without this, checking the box while the native
+    // addon failed to load starts the reply llama-server for a feature that
+    // can never register a hotkey (found by review — Important 2).
+    if (!nativeOk) blockers.push("addon non caricabile: feature disattivata per questa sessione");
     box.disabled = blockers.length > 0;
     if (blockers.length > 0) {
       $("#status").textContent = `Per accendere le proposte di risposta: ${blockers.join(", ")}.`;
@@ -251,10 +261,18 @@ async function init() {
   }
   $("#userDisplayName").addEventListener("input", refreshReplyGuards);
   $("#replyEnabled").addEventListener("change", refreshReplyGuards);
+  // Optimistic default: the first refreshReplyStatus() (async) hasn't landed
+  // yet when refreshReplyGuards() first runs below, so the checkbox isn't
+  // wrongly disabled for the common case (addon loaded fine) while waiting.
+  let nativeOk = true;
   refreshReplyGuards();
 
   async function refreshReplyStatus() {
     const s = await window.openFlowPrefs.replyStatus();
+    if (s.nativeOk !== nativeOk) {
+      nativeOk = s.nativeOk;
+      refreshReplyGuards();
+    }
     const parts = [`stato: ${s.serverState}`];
     if (s.serverError) parts.push(`errore: ${s.serverError}`);
     if (!s.nativeOk) parts.push("addon non caricabile: feature disattivata per questa sessione");

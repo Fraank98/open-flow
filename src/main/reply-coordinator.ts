@@ -19,7 +19,7 @@ export const ERROR_PILL_MS = 2_000;
 export const ACTIVATE_TIMEOUT_MS = 300;
 export const ACTIVATE_POLL_MS = 50;
 export const HIDE_DELAY_MS = 500;
-export const MAX_VARIANTS = 3;
+const MAX_VARIANTS = 3;
 
 /** Registered on entering `suggesting`, unregistered on every exit. Command+N
  *  and not a bare 1/2/3: the pill is showInactive() so it receives no key
@@ -150,6 +150,39 @@ export function hasExplicitProposal(lastMessage: string): boolean {
   return lastMessage.includes("?") && ALTERNATIVE_HINT.test(lastMessage);
 }
 
+function groundingWords(s: string): Set<string> {
+  return new Set(
+    s.replace(/[‘’ʼ]/gu, "'").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().match(/\p{L}+/gu) ?? [],
+  );
+}
+
+/**
+ * Is this "alternative" string (free text the MODEL wrote, never checked
+ * against the transcript by the classifier's own grammar) actually something
+ * the counterpart wrote, or did the model invent it (Important 4)? Both
+ * alternatives are interpolated verbatim into the pill's "Scelgo: …" labels
+ * and the generator's prompt, so an invented one lets the user choose and
+ * commit accepted text to an option nobody ever offered.
+ *
+ * Comparison base matches the rest of this file's text comparisons
+ * (lowercase, diacritics stripped, apostrophes normalized), but deliberately
+ * NOT an exact-substring test: the model may reformulate an alternative
+ * ("venerdì" for "venerdì stessa ora"), so grounding is measured as the
+ * fraction of the alternative's OWN words that also appear in lastMessage.
+ * Threshold 0.5: these strings are short (often two or three words, e.g.
+ * "la fai tu"), so requiring every word breaks on a legitimate one-word
+ * rewrite, while accepting anything looser would let an alternative built
+ * from one real word and one invented word through.
+ */
+export function isAlternativeGrounded(alt: string, lastMessage: string): boolean {
+  const altWords = groundingWords(alt);
+  if (altWords.size === 0) return false;
+  const ctxWords = groundingWords(lastMessage);
+  let hit = 0;
+  for (const w of altWords) if (ctxWords.has(w)) hit += 1;
+  return hit / altWords.size >= 0.5;
+}
+
 /**
  * The one production call site of AxContextReader.read (Global Constraint 5,
  * spec privacy 3): nothing else in the app reads the screen, and it happens
@@ -259,13 +292,39 @@ export class ReplyCoordinator {
       }
       const classification = cls.value.classification;
 
+      // The classifier DECLARES the language; parse() MEASURES it on the real
+      // text. When both have an opinion and they disagree, the measurement
+      // wins: measured on the real model, an entirely-English conversation
+      // made the classifier say "it" and all three variants came back in
+      // Italian (found by review — none of the 114 tests in these three
+      // modules exercise a language disagreement, because they are all it/it).
+      // The "both non-other" guard is essential, not decorative:
+      // guessLanguage mis-measures Romance languages it doesn't know about
+      // (measured: Spanish → "it", French → "it"), and on those the
+      // classifier saying "other" (meaning "same language as the transcript",
+      // with the filter's language rule disabled) is the better answer. The
+      // guard lets the measurement win only on the it/en disagreement that
+      // was actually observed.
+      const language = parsed.languageGuess !== "other" && classification.language !== "other"
+          && parsed.languageGuess !== classification.language
+        ? parsed.languageGuess
+        : classification.language;
+
+      // Degrade to the `generic` set — the same conservative fallback this
+      // feature uses elsewhere — instead of ever showing two alternatives
+      // the counterpart never actually offered (Important 4).
+      const alternativesGrounded = classification.alternatives === undefined
+        || classification.alternatives.every((a) => isAlternativeGrounded(a, parsed.lastMessage));
+      const kind = alternativesGrounded ? classification.kind : "generic";
+      const alternatives = alternativesGrounded ? classification.alternatives : undefined;
+
       const positions = positionsFor({
-        kind: classification.kind, language: classification.language,
-        ...(classification.alternatives ? { alternatives: classification.alternatives } : {}),
+        kind, language,
+        ...(alternatives ? { alternatives } : {}),
       });
       const genInput: GenerateInput = {
         transcript: parsed.transcript, lastMessage: parsed.lastMessage, counterpart: parsed.counterpart,
-        userDisplayName: prefs.userDisplayName, subject: parsed.subject, positions, language: classification.language,
+        userDisplayName: prefs.userDisplayName, subject: parsed.subject, positions, language,
       };
       const gen = await raced(this.deps.generate(genInput), deadline);
       if (epoch !== this.epoch) return;
@@ -274,9 +333,9 @@ export class ReplyCoordinator {
 
       const filtered = this.deps.filterVariants({
         variants: gen.value.variants, lastMessage: parsed.lastMessage, transcript: parsed.transcript,
-        counterpart: parsed.counterpart, userDisplayName: prefs.userDisplayName, language: classification.language,
+        counterpart: parsed.counterpart, userDisplayName: prefs.userDisplayName, language,
       });
-      void this.deps.logger.info("reply filter", { ...filterLogMeta(filtered), kind: classification.kind });
+      void this.deps.logger.info("reply filter", { ...filterLogMeta(filtered), kind });
       if (filtered.kept.length < MIN_KEPT) {
         // One proposal is not a choice, and reads as an authoritative
         // suggestion: no pill at all (decision 6).
@@ -284,7 +343,7 @@ export class ReplyCoordinator {
       }
 
       this.showSuggestions(filtered.kept.slice(0, MAX_VARIANTS), parsed.gist, ctx.pid, ctx.editableIsFocused, {
-        kind: classification.kind, language: classification.language,
+        kind, language,
       });
     } catch (err) {
       // `reader.read` calls the native addon: an N-API throw is plausible.
@@ -336,6 +395,12 @@ export class ReplyCoordinator {
       if (!(await this.waitForFrontmost(pending.pid))) {
         return this.degradeToClipboard(text, "activate-failed", epoch);
       }
+      // onDictationArm bumps the epoch but cannot cancel a paste already in
+      // flight (Minor 8.2): pressing ⌘1 and immediately holding Option — a
+      // window of up to ACTIVATE_TIMEOUT_MS — used to still fire this
+      // paste on top of the dictation that wins by spec, producing two
+      // pastes. Same epoch check onHotkey already uses after its own awaits.
+      if (epoch !== this.epoch) return;
       const result = await this.deps.inject(text);
       if (!result.pasted) {
         // TextInjector already left the text in the clipboard on failure.

@@ -78,14 +78,20 @@
         }
         suggesting = true;
         gistEl.textContent = payload.gist ?? "";
-        const rows = payload.variants.map((v, i) => {
+        const rows = payload.variants.map((v) => {
           const row = document.createElement("button");
           row.type = "button";
           row.className = "variant";
           row.title = v.text; // full text on hover
           const badge = document.createElement("span");
           badge.className = "badge";
-          badge.textContent = BADGES[i] ?? "";
+          // Derived from the variant's OWN id (the same 1/2/3 the payload
+          // already carries and Command+N/accept() key off), not its array
+          // position — the array index happened to always agree with id
+          // today, but the two are conceptually the accelerator contract's
+          // ONE source of truth and a second copy of it, respectively
+          // (found by review, Minor 8.3).
+          badge.textContent = BADGES[v.id - 1] ?? "";
           const label = document.createElement("span");
           label.className = "vlabel";
           label.textContent = v.label;

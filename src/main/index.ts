@@ -66,6 +66,16 @@ const REPLY_GENERATE_TIMEOUT_MS = 10_000;
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
 
+/** Set inside main() once both llama-server managers exist, so the fatal
+ *  startup-error handler at the bottom of this file can stop them before
+ *  app.exit(1) — app.exit() never emits will-quit, so nothing else would ask
+ *  either server to release its model / free its port before a relaunch
+ *  (found by review: four things between server-start and the end of main()
+ *  can throw — ptt.start(), the trust dialog, logger.error, menubar.create()
+ *  — and any of them left both llama-server processes running with their
+ *  models in RAM and port 18082 already occupied). */
+let stopServers: () => void = () => {};
+
 async function main(): Promise<void> {
   // Single-instance lock: if another open-flow is already running, exit
   // immediately instead of spinning up a duplicate menubar icon, llama-server,
@@ -184,6 +194,31 @@ async function main(): Promise<void> {
     });
   };
 
+  // Constructed here, ahead of the streaming-whisper block below, on
+  // purpose: its own stall handler references replyServerManager, and a
+  // `const` referenced by a closure that is registered before the `const`'s
+  // own declaration line throws ReferenceError until that line executes
+  // (TDZ) — found by review. The declaration only needs `modelManager` and
+  // `logger`, both already available above, so moving the whole
+  // construction ahead of the closure that captures it removes the race
+  // instead of papering over it with an optional-chained call.
+  const replyServerManager = new ReplyServerManager({
+    createServer: (modelPath) =>
+      new LLMServer({
+        binaryPath: LLAMA_SERVER_BIN,
+        modelPath,
+        port: REPLY_PORT,
+        contextSize: REPLY_CONTEXT_SIZE,
+        startupTimeoutMs: 90_000,
+        // The generator's fixed instruction prefix, so it is already in the
+        // KV cache when the first hotkey lands.
+        warmupPrompt: GENERATOR_PREFIX,
+        keepaliveMs: 20_000,
+      }),
+    modelManager,
+    logger,
+  });
+
   // Streaming Whisper via the in-process native addon. Model loads once
   // into a whisper_context that stays in RAM; each utterance is a
   // start → feedSamples* → processChunk* → finalize cycle.
@@ -283,6 +318,10 @@ async function main(): Promise<void> {
     // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
     keepaliveMs: 20_000,
   });
+  // Both server managers exist now: from here on, a fatal startup error can
+  // release the model RAM and the reply port instead of leaking them across
+  // app.exit(1) (Important 3 — see the module-level declaration above).
+  stopServers = () => { llmServer.stop(); replyServerManager.stop(); };
   // Only run llama-server when LLM cleanup is enabled. With it off (whisper-only
   // mode) the model would just sit in RAM and its keepalive would contend with
   // whisper for the GPU every 20s — pure waste. Toggling the pref on at runtime
@@ -414,23 +453,9 @@ async function main(): Promise<void> {
     });
   }
 
-  const replyServerManager = new ReplyServerManager({
-    createServer: (modelPath) =>
-      new LLMServer({
-        binaryPath: LLAMA_SERVER_BIN,
-        modelPath,
-        port: REPLY_PORT,
-        contextSize: REPLY_CONTEXT_SIZE,
-        startupTimeoutMs: 90_000,
-        // The generator's fixed instruction prefix, so it is already in the
-        // KV cache when the first hotkey lands.
-        warmupPrompt: GENERATOR_PREFIX,
-        keepaliveMs: 20_000,
-      }),
-    modelManager,
-    logger,
-  });
-
+  // replyServerManager itself is constructed earlier, above the streaming-
+  // whisper block (see the comment there) — only its client/classifier/
+  // generator need to wait for this point.
   // The port is fixed, so one client is enough for the app's lifetime; the
   // manager's isReady() is what gates the calls.
   const replyClient = new ReplyChatClient({ endpoint: REPLY_ENDPOINT });
@@ -561,7 +586,12 @@ async function main(): Promise<void> {
     }),
   });
   prefsWindow.onSaved((next) => {
-    void replyServerManager.apply({ enabled: next.replySuggestionsEnabled, replyModelId: next.replyModelId })
+    // Mirrors the startup guard below (`prefs.replySuggestionsEnabled &&
+    // replyCoordinator`): without `replyCoordinator !== null` here, checking
+    // the box when the native addon failed to load starts the 2.5-5 GB
+    // model server for a feature applyReplyHotkey can never register a
+    // hotkey for (found by review — Important 2).
+    void replyServerManager.apply({ enabled: next.replySuggestionsEnabled && replyCoordinator !== null, replyModelId: next.replyModelId })
       .then(applyReplyHotkey)
       .catch((err: unknown) => logger.error("reply server apply failed", {
         message: err instanceof Error ? err.message : String(err),
@@ -739,5 +769,12 @@ async function main(): Promise<void> {
 main().catch((err) => {
   // eslint-disable-next-line no-console
   console.error("Fatal startup error:", err);
+  // app.exit(1) never emits will-quit: without this, a throw anywhere
+  // between server-start and the end of main() (ptt.start(), the trust
+  // dialog, logger.error, menubar.create() all can throw) leaves both
+  // llama-server processes running with their models in RAM and port 18082
+  // occupied, so the next launch can't start its own reply server (found by
+  // review — Important 3).
+  stopServers();
   app.exit(1);
 });

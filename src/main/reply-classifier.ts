@@ -65,6 +65,12 @@ export interface ReplyClassifierOptions {
 
 const KINDS = new Set(["generic", "alternative", "offer"]);
 const LANGS = new Set(["it", "en", "other"]);
+/** Mirrors CLASSIFIER_SCHEMA.properties.alternatives.items.maxLength above:
+ *  this function's own doc comment claims to re-check the shape the grammar
+ *  should have enforced, but never checked THIS part of it — a 200-char
+ *  string was accepted and reached the generator's prompt whole, since only
+ *  the pill's label truncates it (found by review, Minor 8.1). */
+const ALT_MAX_LEN = 40;
 
 function isNonEmptyString(x: unknown): x is string {
   return typeof x === "string" && x.trim().length > 0;
@@ -81,7 +87,9 @@ export function toClassification(json: unknown): Classification | null {
   if (typeof o.language !== "string" || !LANGS.has(o.language)) return null;
   const kind = o.kind as Classification["kind"];
   const language = o.language as Classification["language"];
-  const alts = Array.isArray(o.alternatives) ? o.alternatives.filter(isNonEmptyString).map((s) => s.trim()) : [];
+  const alts = Array.isArray(o.alternatives)
+    ? o.alternatives.filter(isNonEmptyString).map((s) => s.trim()).filter((s) => s.length <= ALT_MAX_LEN)
+    : [];
   if (kind === "alternative" && alts.length === 2) {
     return { answerable: o.answerable, kind, alternatives: [alts[0]!, alts[1]!], language }; // length checked
   }

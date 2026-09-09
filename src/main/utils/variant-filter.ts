@@ -47,9 +47,26 @@ const DONE_ACTION = new RegExp(
   `\\b(ho (?:appena|gi[aà]) \\p{L}+|ho (?:corretto|inviato|rifatto|risolto|sistemato|completato|girato|accettato)|l'ho (?:gi[aà] )?\\p{L}+at[oa]|i(?:'ve| have) (?:just |already )?(?:\\p{L}+ed|${EN_PAST_IRREGULAR})|i just (?:\\p{L}+ed|${EN_PAST_IRREGULAR}))\\b`,
   "iu",
 );
-// Stock excuses a model invents about the user's own schedule/workload that
-// nobody in the conversation ever mentioned ("Non posso, sono in riunione").
-const INVENTED_COMMITMENT = /\b(sono in riunione|ho una riunione|sono in ferie|sono fuori sede|ho un altro impegno|altre attivit[aà] urgenti|i(?:'m| am) in a meeting|i(?:'m| am) on leave|out of office)\b/iu;
+// A lexical FAMILY, not the fixed multi-word phrase list this used to be:
+// a first-person state/possession head ("sono …", "ho …", the English
+// "I'm"/"I am"/"I've"/"I have" glosses) combined with a predicate expressed
+// as a lookahead — so the predicate itself is NOT consumed by the match and
+// stays available for hasInventedCommitment below to ground, the same way
+// hasInventedReason grounds whatever follows a causal connective. "impegnat
+// [oa]"/"occupat[oa]" are new (found by review: "sono impegnato con
+// un'altra cosa" used a head+predicate combination the old fixed list never
+// anticipated); the rest are the original entries, reorganized under their
+// heads instead of spelled out one whole phrase at a time.
+//
+// Deliberately curated, not a bare "sono anything"/"ho anything" wildcard: a
+// causal justification like "ho un carico di lavoro pesante" is the OTHER
+// invented-reason path below (hasInventedReason, CAUSAL-triggered, gated to
+// decline/reject_offer-style keys) and must not also fire here — this rule
+// is ungated (checked on every position), so an open head would drop an
+// ACCEPT variant carrying that exact clause, which this file already has a
+// test asserting is "not this rule's business".
+const INVENTED_COMMITMENT =
+  /\b(?:sono|ho)(?=\s+(?:impegnat[oa]|occupat[oa]|in (?:riunione|ferie)|fuori sede|un altro impegno|una riunione|altre attivit[aà] urgenti))\b|\bi(?:'m| am)(?=\s+(?:busy|in a meeting|on leave|out of office))\b|\bi(?:'ve| have)(?=\s+another commitment)\b/iu;
 // Accent-insensitive: "\b" is ASCII-only in JS even under the "u" flag, so a
 // trailing "\b" right after an accented vowel ("perché", "poiché") never
 // matches — the match text is accent-stripped first (see hasInventedReason).
@@ -65,7 +82,21 @@ const INVENTED_COMMITMENT = /\b(sono in riunione|ho una riunione|sono in ferie|s
 // non-word character to JS's ASCII-only "\b" and "dell'" alone never
 // matched anything in the list).
 const CAUSAL = /\b(perche|in quanto|dato che|poiche|siccome|a causa (?:degli|dello|dell'|dell[ae]|dei|del|di)|because|since|as i)\b/iu;
-const REASON_KEYS = new Set(["decline", "reject_offer"]);
+// Which position keys hasInventedReason (the CAUSAL-triggered check right
+// below) runs on. Originally only the generic/offer sets' non-committing
+// positions — but the alternative set's three keys (first/second/defer)
+// have EMPTY intersection with this set, so on kind = "alternative" the
+// check ran on no variant at all (found by review). "defer" is added
+// because it is the one key common to the generic AND alternative sets
+// whose own voice line is structurally an excuse ("non si impegna ora"), the
+// same shape as decline/reject_offer — a real rimando often states WHY
+// ("ti dico domani perché sono in call tutto il giorno"), same as a decline.
+// "first"/"second" are deliberately left out: their voice lines just name a
+// choice ("sceglie la prima alternativa") with nothing to justify, so
+// there's no reason-giving shape for this rule to police. "request_changes"
+// (offer set) is left out for the same reason — it asks for a detail, it
+// doesn't excuse anything.
+const REASON_KEYS = new Set(["decline", "reject_offer", "defer"]);
 // A model that runs out of things to say sometimes echoes the second-person
 // INSTRUCTION it was given ("Verifichi e fai sapere…", "Rispondi in senso
 // affermativo…") instead of writing a first-person reply. The original
@@ -107,7 +138,7 @@ const FORMAL_CLOSING = /(?:[Cc]ordiali|[Dd]istinti)\s+[Ss]aluti,?\s+\p{Lu}\p{L}+
 const LABEL_PREFIX = /^(?:risposta|reply|messaggio|message|answer)\s*[:\-–]\s*/iu;
 
 /** Stopwords removed before Jaccard (spec §6: "minuscole, senza stopword"). */
-export const STOPWORDS: ReadonlySet<string> = new Set([
+const STOPWORDS: ReadonlySet<string> = new Set([
   "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "di", "a", "da", "in", "con", "su", "per", "tra", "fra", "e", "o", "ma",
   "se", "che", "non", "mi", "ti", "ci", "vi", "si", "ne", "al", "del", "dal", "nel", "sul", "alla", "della", "dalla", "nella", "sulla",
   "è", "ho", "hai", "ha", "the", "an", "and", "or", "but", "if", "that", "this", "to", "of", "on", "at", "for", "with", "from", "by",
@@ -214,11 +245,20 @@ function contentWords(s: string): string[] {
   return (normalizeApostrophes(s).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().match(/\p{L}{4,}/gu) ?? []);
 }
 
-/** A causal clause whose content words are mostly absent from the context is
- *  a reason the model made up (Gemma 3 4B: "ho un carico di lavoro pesante"). */
-function hasInventedReason(text: string, transcript: string): boolean {
+/** Shared by hasInventedReason and hasInventedCommitment below: find
+ *  `trigger`'s first match, take whatever comes after it up to the end of
+ *  the sentence, and say whether that clause's own content words are
+ *  mostly absent from `transcript` — i.e. the model asserted a reason/claim
+ *  the conversation never supported. The two rules differ only in what
+ *  counts as "the model is about to state one": a causal connective for
+ *  hasInventedReason, a first-person commitment head for
+ *  hasInventedCommitment. A widened-but-empty-of-content match (e.g.
+ *  "perché." with nothing after it) is left ungrounded-but-not-flagged —
+ *  there is nothing to check, so this errs toward keeping, same as every
+ *  other empty-clause case here. */
+function clauseUngrounded(text: string, trigger: RegExp, transcript: string): boolean {
   const stripped = text.normalize("NFD").replace(/\p{M}/gu, "");
-  const m = CAUSAL.exec(stripped);
+  const m = trigger.exec(stripped);
   if (!m) return false;
   const clause = stripped.slice(m.index + m[0].length).split(/[.!?]/u)[0] ?? "";
   const cw = contentWords(clause);
@@ -226,6 +266,22 @@ function hasInventedReason(text: string, transcript: string): boolean {
   const ctx = new Set(contentWords(transcript));
   const grounded = cw.filter((w) => ctx.has(w)).length;
   return grounded / cw.length < 0.5;
+}
+
+/** A causal clause whose content words are mostly absent from the context is
+ *  a reason the model made up (Gemma 3 4B: "ho un carico di lavoro pesante"). */
+function hasInventedReason(text: string, transcript: string): boolean {
+  return clauseUngrounded(text, CAUSAL, transcript);
+}
+
+/** A first-person commitment/state claim ("sono impegnato con un'altra
+ *  cosa", "sono in riunione fino alle 15") whose own predicate is mostly
+ *  absent from the transcript is one the model invented as an excuse; one
+ *  the transcript actually supports (found by review: "so che sei in
+ *  riunione fino alle 15, ma…" grounds "sono in riunione fino alle 15" at
+ *  0.5+) is a legitimate decline and must be kept. */
+function hasInventedCommitment(text: string, transcript: string): boolean {
+  return clauseUngrounded(text, INVENTED_COMMITMENT, transcript);
 }
 
 /** Trailing punctuation and casing removed for exact comparison against a
@@ -272,7 +328,7 @@ function ruleFor(v: FilterVariant, input: FilterInput): FilterRule | null {
   const t = v.text;
   if (t.length < LENGTH_MIN || t.length > LENGTH_MAX) return "length";
   if (DONE_ACTION.test(t)) return "done-action";
-  if (INVENTED_COMMITMENT.test(t)) return "invented-reason";
+  if (hasInventedCommitment(t, input.transcript)) return "invented-reason";
   if (REASON_KEYS.has(v.key) && hasInventedReason(t, input.transcript)) return "invented-reason";
   if (isSignature(t, input.counterpart, input.userDisplayName)) return "signature";
   if (hasUnanchoredNumber(t, input.transcript)) return "unanchored-number";

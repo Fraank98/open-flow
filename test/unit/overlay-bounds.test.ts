@@ -24,9 +24,12 @@ const LEFT: DisplayLike = {
 };
 
 describe("PILL_WINDOW_SIZE / SUGGEST_WINDOW_SIZE / SHADOW_MARGIN", () => {
-  it("are the sizes of the spec: 420x124 for the pill, 480x300 for the suggestions, 24 px of shadow", () => {
+  it("are the sizes of the spec: 420x124 for the pill, 480x520 for the suggestions, 24 px of shadow", () => {
     expect(PILL_WINDOW_SIZE).toEqual({ width: 420, height: 124 });
-    expect(SUGGEST_WINDOW_SIZE).toEqual({ width: 480, height: 300 });
+    // Height 520 (was 300): Important 7 (final review) — grown so a variant
+    // up to LENGTH_MAX = 280 chars fits fully within the CSS line-clamp
+    // instead of being readable only via hover. Width unchanged.
+    expect(SUGGEST_WINDOW_SIZE).toEqual({ width: 480, height: 520 });
     expect(SHADOW_MARGIN).toBe(24);
   });
 });
@@ -74,7 +77,8 @@ describe("computeOverlayBounds", () => {
 
   it("uses the size it is given: the suggesting window is taller and wider", () => {
     const b = computeOverlayBounds([LAPTOP], { x: 700, y: 400 }, SUGGEST_WINDOW_SIZE);
-    expect(b).toEqual({ x: 516, y: 706, width: 480, height: 300, displayId: 1 });
+    // y = 25 + 957 - 520 + 24 (Important 7 grew SUGGEST_WINDOW_SIZE's height to 520).
+    expect(b).toEqual({ x: 516, y: 486, width: 480, height: 520, displayId: 1 });
   });
 
   it("rounds to integers: Electron setBounds takes integers", () => {

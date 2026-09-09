@@ -62,6 +62,88 @@ describe("filterVariants — each rule, positive and negative", () => {
     }
   });
 
+  describe("invented-reason: the INVENTED_COMMITMENT family (Important 5)", () => {
+    // "sono impegnato con un'altra cosa" used a head+predicate combination
+    // ("sono impegnato…") the old fixed phrase list never covered (found by
+    // review: the excuse passed the filter untouched).
+    it("catches the excuse the old fixed phrase list missed: 'sono impegnato con un'altra cosa'", () => {
+      expect(run([GOOD_A, V("decline", "Non posso, sono impegnato con un'altra cosa."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
+
+    it("still catches two more invented excuses the family broadening must not lose", () => {
+      expect(run([GOOD_A, V("reject_offer", "Per ora non se ne parla, sono occupato con un altro cliente."), GOOD_C]).dropped)
+        .toEqual([{ key: "reject_offer", rule: "invented-reason" }]);
+      expect(run([GOOD_A, V("decline", "Non ce la faccio, ho una riunione con un cliente importante."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
+
+    // The false positive the old blind regex had: a genuine "sono in
+    // riunione" the transcript itself supports must be KEPT, not dropped
+    // just because it matches the family's lexical shape.
+    it("keeps a commitment claim the transcript actually grounds, even reworded", () => {
+      const grounded = {
+        ...CTX,
+        lastMessage: "so che sei in riunione fino alle 15, ma riesci a guardare il lockfile dopo?",
+        transcript: "INTERLOCUTORE (Marta): so che sei in riunione fino alle 15, ma riesci a guardare il lockfile dopo?",
+      };
+      expect(run([GOOD_A, V("decline", "Sono in riunione fino alle 15, poi ci guardo."), GOOD_C], grounded).dropped)
+        .toEqual([]);
+      // The exact same claim, unsupported by a DIFFERENT transcript, is still invented.
+      expect(run([GOOD_A, V("decline", "Sono in riunione fino alle 15, poi ci guardo."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
+
+    it("keeps other legitimate declines untouched by the family (no sono/ho commitment head at all)", () => {
+      expect(run([GOOD_A, V("decline", "Sul lockfile non riesco a intervenire adesso, ci guardo più tardi."), GOOD_C]).dropped)
+        .toEqual([]);
+      expect(run([GOOD_A, V("decline", "Non riesco a occuparmene ora, magari Paolo può darci un'occhiata."), GOOD_C]).dropped)
+        .toEqual([]);
+    });
+
+    it("keeps another family predicate ('sono in ferie') when the transcript itself grounds it", () => {
+      const grounded = {
+        ...CTX,
+        lastMessage: "puoi dare un'occhiata al deploy anche se sei in ferie questa settimana?",
+        transcript: "INTERLOCUTORE (Marta): puoi dare un'occhiata al deploy anche se sei in ferie questa settimana?",
+      };
+      expect(run([GOOD_A, V("decline", "Sono in ferie questa settimana, mi dispiace."), GOOD_C], grounded).dropped)
+        .toEqual([]);
+    });
+
+    // A causal justification stays the OTHER rule's business (hasInventedReason,
+    // gated to decline/reject_offer-style keys): the family regex must not
+    // also catch it, ungated, on a position where it doesn't apply.
+    it("does not let a generic causal 'ho …' clause leak into the ungated family check on a non-gated key", () => {
+      expect(run([V("accept", "La prendo io perché ho un carico di lavoro leggero in questo periodo."), GOOD_B, GOOD_C]).dropped)
+        .toEqual([]);
+    });
+  });
+
+  describe("REASON_KEYS: hasInventedReason's gating set (Important 6)", () => {
+    // Before the fix, kind = "alternative" produces keys first/second/defer,
+    // and REASON_KEYS only had decline/reject_offer: the intersection was
+    // empty, so hasInventedReason never ran on ANY alternative-kind variant.
+    // A CAUSAL-only clause (no "sono"/"ho" family head, so the ungated
+    // Important-5 check does not also catch it) on "defer" is the case
+    // that was completely blind.
+    it("now runs hasInventedReason on 'defer', closing the alternative-kind blind spot", () => {
+      const invented = V("defer", "Ti dico domani, perché il budget del progetto è già stato riallocato altrove.");
+      expect(run([GOOD_A, GOOD_B, invented]).dropped).toEqual([{ key: "defer", rule: "invented-reason" }]);
+      // Same clause, grounded in the transcript, must stay kept.
+      const grounded = { ...CTX, transcript: `${CTX.transcript}\nINTERLOCUTORE (Marta): occhio che il budget del progetto è già stato riallocato altrove.` };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Ti dico domani, perché il budget del progetto è già stato riallocato altrove.")], grounded).dropped)
+        .toEqual([]);
+    });
+
+    // Deliberately excluded (decision documented on REASON_KEYS itself):
+    // "first"/"second" just name a choice, nothing to justify.
+    it("deliberately leaves 'first'/'second' unchecked by hasInventedReason", () => {
+      const invented = V("first", "Scelgo la prima, perché il budget del progetto è già stato riallocato altrove.");
+      expect(run([invented, GOOD_B, GOOD_C]).dropped).toEqual([]);
+    });
+  });
+
   it("signature: ends with the counterpart's or the user's name, or a formal closing with a name", () => {
     for (const t of ["Ci penso io e la chiudo oggi. Grazie, Marta", "Ci penso io e la chiudo oggi. A presto, Marta.", "Ci penso io e la chiudo entro oggi. Danilo", "Confermo la revisione per venerdì. Cordiali saluti, Francesca Bianchi"]) {
       expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "signature" }]);

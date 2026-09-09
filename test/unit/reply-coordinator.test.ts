@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  ReplyCoordinator, hasExplicitProposal, FLASH_TEXT, TAIL_BUDGET_CHARS, TOTAL_TIMEOUT_MS,
+  ReplyCoordinator, hasExplicitProposal, isAlternativeGrounded, FLASH_TEXT, TAIL_BUDGET_CHARS, TOTAL_TIMEOUT_MS,
   SUGGEST_TTL_MS, VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR, ERROR_PILL_MS,
   type ReplyCoordinatorDeps, type ReplyPrefsSnapshot,
 } from "../../src/main/reply-coordinator.js";
@@ -344,6 +344,66 @@ describe("ReplyCoordinator.onHotkey — model stages", () => {
     expect(arg.language).toBe("it");
   });
 
+  it("prefers the language MEASURED by parse() over the one DECLARED by the classifier when they disagree", async () => {
+    const e = makeEnv({
+      parse: { ...CONVERSATION, languageGuess: "en" },
+      classify: { ok: true, classification: { answerable: true, kind: "generic", language: "it" }, durationMs: 90 },
+    });
+    await e.c.onHotkey();
+    const genArg = e.generate.mock.calls[0]![0];
+    expect(genArg.language).toBe("en");
+    expect(genArg.positions[0]!.label).toBe("Accept");
+    expect(e.filterVariants).toHaveBeenCalledWith(expect.objectContaining({ language: "en" }));
+  });
+
+  it("falls back to the classifier's language when the parser's measurement is inconclusive (other)", async () => {
+    const e = makeEnv({
+      parse: { ...CONVERSATION, languageGuess: "other" },
+      classify: { ok: true, classification: { answerable: true, kind: "generic", language: "it" }, durationMs: 90 },
+    });
+    await e.c.onHotkey();
+    expect(e.generate.mock.calls[0]![0].language).toBe("it");
+  });
+
+  it("stays with the classifier's \"other\" even when the parser measured a concrete language", async () => {
+    const e = makeEnv({
+      parse: { ...CONVERSATION, languageGuess: "en" },
+      classify: { ok: true, classification: { answerable: true, kind: "generic", language: "other" }, durationMs: 90 },
+    });
+    await e.c.onHotkey();
+    expect(e.generate.mock.calls[0]![0].language).toBe("other");
+  });
+
+  it("keeps the alternative set when both alternatives are grounded, even reworded", async () => {
+    const e = makeEnv({
+      parse: { ...CONVERSATION, lastMessage: "Possiamo vederci venerdì stessa ora o preferisci un altro giorno?" },
+      classify: {
+        ok: true,
+        classification: { answerable: true, kind: "alternative", alternatives: ["venerdì", "un altro giorno"], language: "it" },
+        durationMs: 90,
+      },
+    });
+    await e.c.onHotkey();
+    const genArg = e.generate.mock.calls[0]![0];
+    expect(genArg.positions.map((p) => p.key)).toEqual(["first", "second", "defer"]);
+    expect(genArg.positions[0]!.label).toBe("Scelgo: venerdì");
+  });
+
+  it("degrades to the generic set when the classifier's alternatives are not grounded in lastMessage", async () => {
+    const e = makeEnv({
+      classify: {
+        ok: true,
+        classification: { answerable: true, kind: "alternative", alternatives: ["sabato pomeriggio", "domenica sera"], language: "it" },
+        durationMs: 90,
+      },
+    });
+    await e.c.onHotkey();
+    const genArg = e.generate.mock.calls[0]![0];
+    expect(genArg.positions.map((p) => p.key)).toEqual(["accept", "decline", "defer"]);
+    const log = e.seen.join(" ");
+    expect(log).toContain('"kind":"generic"');
+  });
+
   it("uses the generic set when the classifier returned kind generic", async () => {
     const e = makeEnv({ classify: { ok: true, classification: { answerable: true, kind: "generic", language: "it" }, durationMs: 90 } });
     await e.c.onHotkey();
@@ -509,6 +569,17 @@ describe("ReplyCoordinator — pill lifecycle", () => {
 });
 
 describe("ReplyCoordinator.accept", () => {
+  it("skips its own paste if dictation arms while still waiting for the target app (Minor 8.2)", async () => {
+    const e = makeEnv();
+    await e.c.onHotkey();
+    const p = e.c.accept(1); // runs synchronously up to `await waitForFrontmost`, then suspends
+    expect(e.c.getState()).toBe("injecting");
+    e.c.onDictationArm(); // fires while accept() is still suspended there
+    await p;
+    expect(e.inject).not.toHaveBeenCalled();
+    expect(e.copyToClipboard).not.toHaveBeenCalled(); // not even the degraded path — no paste at all
+  });
+
   it("Command+2 pastes the second variant: unregister → injecting → activateApp → inject", async () => {
     const e = makeEnv();
     await e.c.onHotkey();
@@ -712,6 +783,27 @@ describe("hasExplicitProposal (deterministic scope pre-gate)", () => {
       "What is the current status of the migration on your side?",
       "mi ricorda il nome dell'elettricista?",
     ]) expect(hasExplicitProposal(m), m).toBe(false);
+  });
+});
+
+describe("isAlternativeGrounded (Important 4)", () => {
+  const MSG = "la review la fai tu o la giro a Paolo?";
+  it("accepts an alternative copied verbatim from the message", () => {
+    expect(isAlternativeGrounded("la fai tu", MSG)).toBe(true);
+    expect(isAlternativeGrounded("la giro a Paolo", MSG)).toBe(true);
+  });
+  it("accepts a legitimate rewording that drops words but keeps the shared ones", () => {
+    expect(isAlternativeGrounded("venerdì", "Possiamo vederci venerdì stessa ora o preferisci un altro giorno?")).toBe(true);
+  });
+  it("rejects an alternative invented out of thin air", () => {
+    expect(isAlternativeGrounded("sabato pomeriggio", MSG)).toBe(false);
+    expect(isAlternativeGrounded("domenica sera", MSG)).toBe(false);
+  });
+  it("rejects an empty string (no words to ground)", () => {
+    expect(isAlternativeGrounded("", MSG)).toBe(false);
+  });
+  it("is accent- and apostrophe-insensitive, like the rest of the file's comparisons", () => {
+    expect(isAlternativeGrounded("perche non domani", "Perché non ci vediamo domani?")).toBe(true);
   });
 });
 

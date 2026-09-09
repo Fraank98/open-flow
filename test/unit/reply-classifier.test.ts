@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { ReplyClassifier, CLASSIFIER_SCHEMA, buildClassifierPrompt, CLASSIFIER_PREFIX } from "../../src/main/reply-classifier.js";
+import { ReplyClassifier, CLASSIFIER_SCHEMA, buildClassifierPrompt, CLASSIFIER_PREFIX, toClassification } from "../../src/main/reply-classifier.js";
 import { ReplyChatClient } from "../../src/main/reply-chat-client.js";
 import { CASES, leaksScreenText } from "../fixtures/conversations/spike-corpus.js";
 
@@ -41,6 +41,19 @@ describe("buildClassifierPrompt", () => {
   it("describes the schema in words: the model cannot see it", () => {
     const p = buildClassifierPrompt(INPUT);
     for (const w of ['"answerable"', '"kind"', '"alternatives"', '"language"', "generic", "alternative", "offer"]) expect(p).toContain(w);
+  });
+});
+
+describe("toClassification (Minor 8.1: alternatives maxLength)", () => {
+  it("degrades to generic when an alternative exceeds the grammar's own maxLength: 40", () => {
+    const tooLong = "x".repeat(200);
+    const c = toClassification({ answerable: true, kind: "alternative", alternatives: ["ok", tooLong], language: "it" });
+    expect(c).toEqual({ answerable: true, kind: "generic", language: "it" });
+  });
+  it("keeps two alternatives right at the boundary (40 chars)", () => {
+    const forty = "x".repeat(40);
+    const c = toClassification({ answerable: true, kind: "alternative", alternatives: ["ok", forty], language: "it" });
+    expect(c).toEqual({ answerable: true, kind: "alternative", alternatives: ["ok", forty], language: "it" });
   });
 });
 

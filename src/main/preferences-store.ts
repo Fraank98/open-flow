@@ -1,5 +1,6 @@
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { REPLY_HOTKEY_DEFAULT } from "./utils/reply-hotkey.js";
 
 export interface Preferences {
   setupComplete: boolean;
@@ -47,7 +48,7 @@ export const DEFAULT_PREFS: Preferences = {
   dictionary: [],
   userDisplayName: "",
   replySuggestionsEnabled: false,
-  replySuggestionsHotkey: "Command+Control+R",
+  replySuggestionsHotkey: REPLY_HOTKEY_DEFAULT,
   replyModelId: "gemma-3-4b",
   replyAppsMode: "allowlist",
   replyApps: ["com.tinyspeck.slackmacgap", "com.apple.mail", "com.brave.Browser"],
