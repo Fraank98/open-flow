@@ -276,6 +276,41 @@ describe("gate", () => {
     expect(gate([T("Marta", "counterpart", "x".repeat(14))])).toEqual({ ok: false, reason: "last-message-too-short" });
     expect(gate([T("Marta", "counterpart", "x".repeat(15))])).toEqual({ ok: true });
   });
+  // Length alone measures the wrong thing: a chat message asking for a
+  // decision is often short precisely BECAUSE it is direct ("la fai tu?" —
+  // 10 chars). These four are real corpus shapes (`"Nome: testo HH:MM."`)
+  // reduced to their post-parse Turn.text, all under LAST_MESSAGE_MIN_CHARS,
+  // and all containing a hasExplicitProposal match — the gate must not
+  // abstain on them. One `it` per message so a regression on any single one
+  // shows up as its own failure, not folded into the first assertion hit.
+  it("a short last message with an explicit proposal passes: \"la fai tu?\"", () => {
+    expect(gate([T("Marta", "counterpart", "la fai tu?")])).toEqual({ ok: true });
+  });
+  it("a short last message with an explicit proposal passes: \"ci pensi tu?\"", () => {
+    expect(gate([T("Marta", "counterpart", "ci pensi tu?")])).toEqual({ ok: true });
+  });
+  it("a short last message with an explicit proposal passes: \"riesci oggi?\"", () => {
+    expect(gate([T("Marta", "counterpart", "riesci oggi?")])).toEqual({ ok: true });
+  });
+  it("a short last message with an explicit proposal passes: \"confermi?\"", () => {
+    expect(gate([T("Marta", "counterpart", "confermi?")])).toEqual({ ok: true });
+  });
+  // Same shortness, but no proposal keyword: the gate must still abstain.
+  // "ok" alone (2 chars) also checks the absolute floor kept for messages
+  // that WOULD carry a proposal match but are too short to mean anything.
+  it("a short last message without an explicit proposal still abstains as last-message-too-short", () => {
+    expect(gate([T("Marta", "counterpart", "ok?")])).toEqual({ ok: false, reason: "last-message-too-short" });
+    expect(gate([T("Marta", "counterpart", "ok grazie")])).toEqual({ ok: false, reason: "last-message-too-short" });
+    expect(gate([T("Marta", "counterpart", "ok")])).toEqual({ ok: false, reason: "last-message-too-short" });
+  });
+  // 16 chars: already >= LAST_MESSAGE_MIN_CHARS on length alone, no proposal
+  // needed. Kept here to document that the parser's gate is not where scope
+  // is decided for a long-but-uninteresting message — that is the
+  // coordinator's `preGate` (hasExplicitProposal), one step later. The two
+  // responsibilities stay separate: this gate only ever looks at shortness.
+  it("a long last message without a proposal still passes the parser's own gate", () => {
+    expect(gate([T("Marta", "counterpart", "perfetto, grazie")])).toEqual({ ok: true });
+  });
   it("applies the gates in the spec order: assistant beats only-user/last-user", () => {
     expect(gate([T("Danilo", "user", "prova"), T("Claude", "counterpart", "ok")]))
       .toEqual({ ok: false, reason: "assistant-speaker" });

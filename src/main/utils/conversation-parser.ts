@@ -13,6 +13,8 @@
  * abstention gates); do not tune them without re-running the corpus test.
  */
 
+import { hasExplicitProposal } from "./reply-proposal.js";
+
 /** "X ha scritto:" / "X wrote:" with or without the body on the same line.
  *  Accepts long date prefixes ("Il giorno 4 set 2026, alle ore 11:20, …").
  *  Group 1: everything before the verb (the prefix that contains the name).
@@ -227,7 +229,21 @@ export const ASSISTANT_NAMES: readonly string[] =
   ["chatgpt", "claude", "gemini", "copilot", "assistant", "assistente"];
 
 const RECENT_TURNS_FOR_SPEAKER_COUNT = 8;
+/** Floor below which a last message abstains UNLESS it contains an explicit
+ *  proposal (hasExplicitProposal, imported below): length alone is not the
+ *  criterion, only a proxy for it, and the proxy is wrong for chat — a
+ *  message that asks for a decision is often short precisely because it is
+ *  direct ("la fai tu?", "confermi?"). Below this, a message is judged on
+ *  its content instead of its size (see ABSOLUTE_MIN_CHARS_WITH_PROPOSAL for
+ *  the floor that still applies even then). */
 const LAST_MESSAGE_MIN_CHARS = 15;
+/** Even a message that matches hasExplicitProposal must clear this to reach
+ *  the model: below it there is no conversation left to reason about, only
+ *  punctuation ("ok?", 3 chars). Set to 4, the length of "puoi" — the
+ *  shortest single word hasExplicitProposal's own keyword list can match on
+ *  its own (no "?" required); anything shorter than that can never be the
+ *  match that rescued the message, so it is not treated as a real proposal. */
+const ABSOLUTE_MIN_CHARS_WITH_PROPOSAL = 4;
 const MIN_TAIL_BUDGET = 100;
 const GIST_MAX_CHARS = 70;
 
@@ -244,7 +260,15 @@ export function gate(turns: readonly Turn[]): GateResult {
   if (distinct.size > 2) return { ok: false, reason: "more-than-two-speakers" };
   if (turns.every((t) => t.role === "user")) return { ok: false, reason: "only-user-turns" };
   if (last.role === "user") return { ok: false, reason: "last-turn-is-user" };
-  if (last.text.trim().length < LAST_MESSAGE_MIN_CHARS) return { ok: false, reason: "last-message-too-short" };
+  // A message under the floor still passes if it contains an explicit
+  // proposal (same predicate as the coordinator's own pre-gate, imported
+  // from utils/reply-proposal.ts) and clears the absolute floor: shortness
+  // alone must not decide this — the content does.
+  const lastLen = last.text.trim().length;
+  if (lastLen < LAST_MESSAGE_MIN_CHARS) {
+    const rescuedByProposal = lastLen >= ABSOLUTE_MIN_CHARS_WITH_PROPOSAL && hasExplicitProposal(last.text);
+    if (!rescuedByProposal) return { ok: false, reason: "last-message-too-short" };
+  }
   return { ok: true };
 }
 

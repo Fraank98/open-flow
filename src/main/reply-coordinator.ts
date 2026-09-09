@@ -131,24 +131,13 @@ function errorCode(err: unknown): string {
  * the Task 1 experiment measured too many false positives on the
  * "information only the user has" cases.
  *
- * This gate is deliberately permissive, not strict: it is measured to let
- * through things that are not proposals at all — a plain statement
- * containing a keyword ("Il preventivo è pronto." → true, no proposal in
- * it) and English wh-questions that happen to contain an auxiliary the word
- * list also uses for yes/no questions ("do you"/"are you"/"is it"). That is
- * fine and intentional: ruling IN too much here is cheap, because the
- * classifier — the second, more accurate gate — runs right after it and is
- * the one that actually decides answerability. What this gate must never do
- * is rule OUT a genuine proposal; it only ever narrows what reaches the
- * classifier, never widens it.
+ * Lives in utils/reply-proposal.ts (a pure module, no orchestrator
+ * dependency) because the parser's own `gate` needs the same predicate for
+ * its `last-message-too-short` check — a short final message should abstain
+ * only when it ALSO carries no explicit proposal. Re-exported here so every
+ * existing caller (index.ts, tests) keeps importing it from this file.
  */
-const PROPOSAL_WORDS = /\b(puoi|riesci|te ne occupi|la fai|lo fai|ci pensi|confermi|va bene|d'accordo|ti va|possiamo|riusciamo|preferisci|preferisce|can you|could you|will you|would you|do you|are you|is it|shall we|preventivo|offerta|proposta|quotazione|quote|proposal|estimate)\b/iu;
-const ALTERNATIVE_HINT = /\s(?:o|oppure|or)\s/iu;
-
-export function hasExplicitProposal(lastMessage: string): boolean {
-  if (PROPOSAL_WORDS.test(lastMessage)) return true;
-  return lastMessage.includes("?") && ALTERNATIVE_HINT.test(lastMessage);
-}
+export { hasExplicitProposal } from "./utils/reply-proposal.js";
 
 function normalizeToken(w: string): string {
   return w.replace(/[‘’ʼ]/gu, "'").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();

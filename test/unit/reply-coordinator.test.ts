@@ -11,6 +11,7 @@ import type { ClassifyResult } from "../../src/main/reply-classifier.js";
 import type { GenerateInput, GenerateResult } from "../../src/main/reply-generator.js";
 import type { ReplyServerState, SuggestionPayload } from "../../src/shared/reply-types.js";
 import { CASES, leaksScreenText } from "../fixtures/conversations/spike-corpus.js";
+import { CLASSIFIER_CASES } from "../fixtures/conversations/classifier-corpus.js";
 
 const SLACK = "com.tinyspeck.slackmacgap";
 
@@ -786,6 +787,48 @@ describe("hasExplicitProposal (deterministic scope pre-gate)", () => {
       "What is the current status of the migration on your side?",
       "mi ricorda il nome dell'elettricista?",
     ]) expect(hasExplicitProposal(m), m).toBe(false);
+  });
+  // Found missing from real usage: the Italian conditional IS the polite
+  // request form ("potresti farmi la review?" reads as more natural, not
+  // less, than "puoi farmi la review?" in a work chat), so it is the one
+  // most likely to open a message asking for something. The present
+  // indicative alone ("puoi", "riesci") was missing it entirely.
+  it("recognizes the Italian conditional as a request, not only the present indicative", () => {
+    for (const m of [
+      "potresti farmi la review?",
+      "mi faresti un favore?",
+      "riusciresti entro venerdì?",
+      "te la senti di occupartene?",
+      "ce la fai per giovedì?",
+    ]) expect(hasExplicitProposal(m), m).toBe(true);
+  });
+  // The five real messages from the user's own Slack conversation that
+  // motivated this fix (gate-fix-report.md). Only the second is a request;
+  // the others must stay "niente" — in particular the last one, which
+  // states a preference ("sarei più su decisione 1") without asking for
+  // anything, and must not be mistaken for a proposal just because it
+  // discusses a decision.
+  it("classifies the five real messages from the motivating conversation correctly", () => {
+    expect(hasExplicitProposal("1 credo sto verificando su supabase una cosa.")).toBe(false);
+    expect(hasExplicitProposal("nel frattempo mi faresti delle reviews.")).toBe(true);
+    expect(hasExplicitProposal("grazie.")).toBe(false);
+    expect(hasExplicitProposal("yesss.")).toBe(false);
+    expect(hasExplicitProposal("Io sarei più su decisione 1 ma voglio fare degli accertamenti.")).toBe(false);
+  });
+  // Pins the side effect of adding the conditional forms above, measured
+  // (not just asserted in a comment) against classifier-corpus.ts's eight
+  // `info-*` cases — questions that ask for information only the user has,
+  // and must be ruled OUT by this pre-gate before ever reaching the
+  // classifier. Baseline before the conditional forms were added: 6/8
+  // blocked (info-howmany leaks via "riesci", info-en-when via "could
+  // you" — pre-existing, unrelated to this change). If this count drops,
+  // the new words are letting an info-* case through and the addition
+  // needs to be reconsidered, not the test.
+  it("keeps blocking 6/8 'info-*' (information-only) cases after adding the conditional forms", () => {
+    const info = CLASSIFIER_CASES.filter((c) => c.expected.answerable === false);
+    expect(info).toHaveLength(8);
+    const blocked = info.filter((c) => !hasExplicitProposal(c.lastMessage));
+    expect(blocked).toHaveLength(6);
   });
 });
 
