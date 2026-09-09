@@ -15,7 +15,9 @@ export interface BundleIdFilter {
   bundleIds: string[];
 }
 
-export interface ReadOptions {
+/** The addon's budgets. Separated from the filter so DEFAULT_READ_OPTIONS
+ *  cannot carry one: a read without a filter must not be expressible. */
+export interface ReadBudgets {
   maxDepth: number;
   maxTotalChars: number;
   timeBudgetMs: number;
@@ -27,8 +29,13 @@ export interface ReadOptions {
    *  carries privacy risk (spec, privacy 5 — see the addon's step 9) until
    *  someone deliberately measures its benefit (final review, correction 4). */
   textMarkers: boolean;
-  /** Checked by the addon BEFORE any harvest (spec, privacy 4). */
-  bundleIdFilter?: BundleIdFilter;
+}
+
+/** What the addon actually receives. The filter is mandatory: after Plan B
+ *  there is no code path that harvests text before the app was permitted
+ *  (spec §Privacy 4). */
+export interface ReadOptions extends ReadBudgets {
+  bundleIdFilter: BundleIdFilter;
 }
 
 /** Spec §1 budgets: depth 8 covers the measured jump at level 7 with one level
@@ -36,7 +43,7 @@ export interface ReadOptions {
  *  is about twice the worst measured total (49 + 98 ms); 10× / 400 chars sit
  *  between the measured pre-jump (20-93 chars) and post-jump (1 454-8 291, 40-200×).
  *  textMarkers is off: see the field doc above. */
-export const DEFAULT_READ_OPTIONS: Readonly<ReadOptions> = {
+export const DEFAULT_READ_OPTIONS: Readonly<ReadBudgets> = {
   maxDepth: 8,
   maxTotalChars: 16_000,
   timeBudgetMs: 300,
@@ -44,6 +51,31 @@ export const DEFAULT_READ_OPTIONS: Readonly<ReadOptions> = {
   jumpMinChars: 400,
   textMarkers: false,
 };
+
+/** Stage 1 filter. An empty allowlist matches nothing, so the addon refuses
+ *  every app with `app-not-allowed` BEFORE it harvests anything — and its
+ *  refusal still carries pid and bundleId. That is what makes the exact-case
+ *  id available to stage 2 without touching native/ (§Deviazioni 2). */
+export const PROBE_FILTER: Readonly<BundleIdFilter> = { mode: "allowlist", bundleIds: [] };
+
+export function normalizeBundleId(id: string): string {
+  return id.trim().toLowerCase();
+}
+
+/**
+ * macOS treats bundle ids case-insensitively; the addon's [NSSet
+ * containsObject:] does not. The wrapper owns the comparison.
+ *
+ * An app that reports no bundle id cannot be matched against either list, so
+ * it is refused in BOTH modes: an unidentifiable app was never knowingly
+ * permitted by the user, and `blocklist` must not become a way in.
+ */
+export function isAppAllowed(bundleId: string, filter: BundleIdFilter): boolean {
+  const id = normalizeBundleId(bundleId);
+  if (id.length === 0) return false;
+  const listed = filter.bundleIds.some((b) => normalizeBundleId(b) === id);
+  return filter.mode === "allowlist" ? listed : !listed;
+}
 
 export interface NativeLevel { depth: number; chars: number; fragments: string[]; truncated: boolean }
 
@@ -92,7 +124,7 @@ export interface RawContext {
    *  non-WebKit app). fragmentsTouched counts pre-split fragments that the
    *  marker lines actually replaced (final review, correction 8). */
   markerText: { chars: number; fragmentsTouched: number } | null;
-  timings: { elementAtPositionMs: number; collectMs: number; totalMs: number; wrapperMs: number };
+  timings: { elementAtPositionMs: number; collectMs: number; totalMs: number; probeMs: number; wrapperMs: number };
 }
 
 export type ReadContextResult =
@@ -314,28 +346,73 @@ export class AxContextReader {
   activateApp(pid: number): boolean { return this.native.activateApp(pid); }
 
   /**
-   * One synchronous read under the cursor. The addon call cannot be
-   * interrupted (it is synchronous on the main thread, like every ptt_monitor
-   * call), so the 500 ms outer timeout is enforced after the fact: a call that
-   * overran is rejected as "timeout" rather than trusted, because an addon that
-   * ignored its own budget may also have ignored its depth limit.
+   * One read under the cursor, in two stages.
+   *
+   * Stage 1 asks the addon with an EMPTY allowlist: it refuses every app
+   * before harvesting and reports pid + bundleId. Stage 2 runs only if the
+   * wrapper, comparing case-insensitively, finds the app permitted — and it
+   * passes back the addon's own spelling of the id, so the addon's
+   * case-sensitive comparison agrees. Cost: one extra
+   * AXUIElementCopyElementAtPosition (28-49 ms measured).
+   *
+   * `filter` is mandatory. The 500 ms outer timeout covers both stages: the
+   * addon call is synchronous and cannot be interrupted, so an overrun is
+   * rejected after the fact rather than trusted.
    */
-  read(overrides: Partial<ReadOptions> = {}): ReadContextResult {
+  read(filter: BundleIdFilter, overrides: Partial<ReadBudgets> = {}): ReadContextResult {
+    const budgets: ReadBudgets = { ...DEFAULT_READ_OPTIONS, ...overrides };
+    const filterMeta = { filterMode: filter.mode, filterSize: filter.bundleIds.length };
+
     if (!this.native.isTrusted()) {
       const r: ReadContextResult = { ok: false, reason: "not-trusted", pid: -1, bundleId: "", levelSummary: [] };
-      void this.logger?.warn("ax-context read blocked", toLogMeta(r));
+      void this.logger?.warn("ax-context read blocked", { ...toLogMeta(r), ...filterMeta });
       return r;
     }
 
-    const opts: ReadOptions = { ...DEFAULT_READ_OPTIONS, ...overrides };
+    // ── Stage 1: identify the app. No harvest happens here. ──
     const t0 = this.now();
+    const probe = this.native.readContextUnderCursor({ ...budgets, bundleIdFilter: PROBE_FILTER });
+    const probeMs = this.now() - t0;
+    const refuse = (): ReadContextResult => ({
+      ok: false, reason: "app-not-allowed", pid: probe.pid, bundleId: probe.bundleId, levelSummary: [],
+    });
+
+    if (probeMs > this.timeoutMs) {
+      const r: ReadContextResult = { ok: false, reason: "timeout", pid: probe.pid, bundleId: probe.bundleId, levelSummary: [] };
+      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      return r;
+    }
+    if (probe.ok) {
+      // The addon did not refuse an empty allowlist, so it may also have
+      // harvested text it was not allowed to. Its result is discarded and the
+      // read fails closed; the anomaly is logged because it means the addon
+      // and this wrapper disagree on the gate.
+      void this.logger?.warn("ax-context probe anomaly: empty allowlist was not refused", { ...filterMeta, probeMs, pid: probe.pid, bundleId: probe.bundleId });
+      return refuse();
+    }
+    if (probe.reason !== "app-not-allowed") {
+      const r: ReadContextResult = {
+        ok: false, reason: probe.reason ?? "ax-error", pid: probe.pid, bundleId: probe.bundleId, levelSummary: [],
+      };
+      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      return r;
+    }
+    if (!isAppAllowed(probe.bundleId, filter)) {
+      const r = refuse();
+      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
+      return r;
+    }
+
+    // ── Stage 2: permitted. Harvest. ──
+    const opts: ReadOptions = { ...budgets, bundleIdFilter: { mode: "allowlist", bundleIds: [probe.bundleId] } };
+    const t1 = this.now();
     const native = this.native.readContextUnderCursor(opts);
-    const wrapperMs = this.now() - t0;
+    const wrapperMs = probeMs + (this.now() - t1);
     const levelSummary = native.levels.map((l) => ({ depth: l.depth, chars: l.chars, n: l.fragments.length, truncated: l.truncated }));
 
     if (wrapperMs > this.timeoutMs) {
       const r: ReadContextResult = { ok: false, reason: "timeout", pid: native.pid, bundleId: native.bundleId, levelSummary };
-      void this.logger?.info("ax-context read", toLogMeta(r));
+      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
       return r;
     }
 
@@ -347,7 +424,7 @@ export class AxContextReader {
         bundleId: native.bundleId,
         levelSummary,
       };
-      void this.logger?.info("ax-context read", toLogMeta(r));
+      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
       return r;
     }
 
@@ -357,7 +434,7 @@ export class AxContextReader {
 
     if (fragments.length === 0) {
       const r: ReadContextResult = { ok: false, reason: "no-text", pid: native.pid, bundleId: native.bundleId, levelSummary };
-      void this.logger?.info("ax-context read", toLogMeta(r));
+      void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
       return r;
     }
 
@@ -374,10 +451,10 @@ export class AxContextReader {
         markerText: native.webkitMarkerText === undefined
           ? null
           : { chars: native.webkitMarkerText.length, fragmentsTouched: split.touched },
-        timings: { ...native.timings, wrapperMs },
+        timings: { ...native.timings, probeMs, wrapperMs },
       },
     };
-    void this.logger?.info("ax-context read", toLogMeta(r));
+    void this.logger?.info("ax-context read", { ...toLogMeta(r), ...filterMeta, probeMs });
     return r;
   }
 }

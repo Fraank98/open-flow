@@ -3,8 +3,13 @@
  *
  * Run under Electron (the addon is built for Electron's ABI):
  *   npm run ax-probe -- [--user-name NAME] [--delay SECONDS] [--budget CHARS]
- *                       [--allow BUNDLE_ID[,BUNDLE_ID…]] [--metrics-only]
- *                       [--jump-ratio N] [--jump-min CHARS] [--text-markers]
+ *                       [--allow BUNDLE_ID[,…]] [--block BUNDLE_ID[,…]]
+ *                       [--metrics-only] [--jump-ratio N] [--jump-min CHARS]
+ *                       [--text-markers]
+ *
+ * Il filtro è obbligatorio dopo il Task 6: senza `--allow`/`--block` vale la
+ * lista delle tre app verificate. Non esiste un `--allow-all`: la lettura
+ * senza filtro non è esprimibile.
  *
  * Counts down, reads the AX context under the mouse once, prints the reader
  * metrics, then what the deterministic parser makes of it. Prints to stdout
@@ -25,7 +30,8 @@ import {
   AxContextReader,
   parseFiniteNumber,
   toLogMeta as readerLogMeta,
-  type ReadOptions,
+  type BundleIdFilter,
+  type ReadBudgets,
 } from "../src/main/ax-context-reader.js";
 import { parse, toLogMeta as parserLogMeta } from "../src/main/utils/conversation-parser.js";
 import { PreferencesStore } from "../src/main/preferences-store.js";
@@ -34,6 +40,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dist-tools/tools → repo root
 const APP_ROOT = join(__dirname, "..", "..");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
+/** The three apps measured in spike 1. Duplicated here as a literal on
+ *  purpose: the probe must not depend on the preferences of Task 2. */
+const PROBE_DEFAULT_APPS = ["com.tinyspeck.slackmacgap", "com.apple.mail", "com.brave.Browser"];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,6 +57,7 @@ async function main(): Promise<number> {
       delay: { type: "string", default: "3" },
       budget: { type: "string", default: "2500" },
       allow: { type: "string" },
+      block: { type: "string" },
       "metrics-only": { type: "boolean", default: false },
       "jump-ratio": { type: "string" },
       "jump-min": { type: "string" },
@@ -70,7 +80,7 @@ async function main(): Promise<number> {
   // caught by the top-level handler and reported with exit code 1.
   let delayS: number;
   let budget: number;
-  const overrides: Partial<ReadOptions> = {};
+  const overrides: Partial<ReadBudgets> = {};
   try {
     delayS = parseFiniteNumber(values.delay, "--delay");
     budget = parseFiniteNumber(values.budget, "--budget");
@@ -82,10 +92,14 @@ async function main(): Promise<number> {
   }
   if (values["text-markers"]) overrides.textMarkers = true;
 
-  const filter = values.allow
-    ? { mode: "allowlist" as const, bundleIds: values.allow.split(",").map((s) => s.trim()).filter(Boolean) }
-    : undefined;
-  if (filter) overrides.bundleIdFilter = filter;
+  const ids = (raw: string): string[] => raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (values.allow !== undefined && values.block !== undefined) {
+    console.error("--allow e --block sono alternativi: passane uno solo.");
+    return 2;
+  }
+  const filter: BundleIdFilter = values.block !== undefined
+    ? { mode: "blocklist", bundleIds: ids(values.block) }
+    : { mode: "allowlist", bundleIds: values.allow !== undefined ? ids(values.allow) : PROBE_DEFAULT_APPS };
 
   const reader = new AxContextReader({ appRoot: APP_ROOT, isPackaged: false });
   if (!reader.isTrusted()) {
@@ -99,7 +113,7 @@ async function main(): Promise<number> {
   }
 
   const frontBefore = reader.frontmostPid();
-  const r = reader.read(overrides);
+  const r = reader.read(filter, overrides);
   console.log("=== READER ===");
   console.log(JSON.stringify(readerLogMeta(r), null, 2));
   if (!r.ok) {
@@ -107,6 +121,8 @@ async function main(): Promise<number> {
     return 0;
   }
   console.log(`frontmost pid: ${frontBefore} ${frontBefore === r.context.pid ? "== target" : "!= target (sarebbe not-frontmost nel coordinatore)"}`);
+  console.log(`filtro: ${filter.mode} [${filter.bundleIds.join(", ")}]`);
+  console.log(`  stadio 1 (identificazione): ${r.context.timings.probeMs.toFixed(1)} ms`);
   for (const l of r.context.levelSummary) {
     console.log(`  livello ${l.depth}: ${String(l.chars).padStart(6)} char, ${String(l.n).padStart(4)} frammenti${l.truncated ? " (troncato)" : ""}${l.depth === r.context.chosenLevel ? "  ← scelto" : ""}`);
   }
