@@ -50,6 +50,35 @@
       </section>
 
       <section>
+        <label><input type="checkbox" id="replyEnabled" /> Reply suggestions (leggi la conversazione sotto il mouse e proponi tre risposte)</label>
+        <p class="muted">Spenta per default. Accesa carica un secondo modello: la RAM torna identica a oggi appena la spegni. Richiede il tuo nome e il modello del tier scelto.</p>
+        <p class="muted" id="replyServerState">Stato del modello di risposta: —</p>
+
+        <label for="userDisplayName">Il tuo nome nelle chat e nelle mail</label>
+        <input id="userDisplayName" type="text" placeholder="es. Danilo Franco" />
+        <p class="muted">Serve a capire quali messaggi sono tuoi. Confrontato su nome completo e su primo nome.</p>
+
+        <label for="replyHotkey">Scorciatoia</label>
+        <input id="replyHotkey" type="text" placeholder="Command+Control+R" />
+        <p class="muted" id="replyHotkeyStatus">Non può contenere Option: la dettatura usa Hold Option.</p>
+
+        <label>Qualità del modello di risposta</label>
+        <div id="reply-tiers" class="model-list"></div>
+
+        <label for="replyAppsMode">App in cui leggere</label>
+        <select id="replyAppsMode">
+          <option value="allowlist">Solo queste app (consigliato)</option>
+          <option value="blocklist">Tutte tranne queste</option>
+        </select>
+        <div class="dict-add">
+          <input id="replyAppInput" type="text" placeholder="bundle id, es. com.apple.mail" />
+          <button id="replyAppAdd" type="button">Aggiungi</button>
+        </div>
+        <button id="replyAppAddBlocked" type="button" class="danger" hidden>Aggiungi l'ultima app rifiutata</button>
+        <ul id="replyAppList" class="dict-list"></ul>
+      </section>
+
+      <section>
         <label><input type="checkbox" id="launchAtLogin" /> Launch open-flow at login</label>
       </section>
 

@@ -123,7 +123,7 @@ export const REPLY_TIERS: readonly ReplyTierDescriptor[] = [
     label: "Standard",
     description:
       "Gemma 3 4B. 2,49 GB su disco, ~3,1 GB di RAM a feature accesa (stima). " +
-      'Nel benchmark del classificatore ha frainteso 4 domande su 8 che in realtà chiedevano un dato solo tuo (es. "quante volte vai in palestra?"), proponendo comunque una risposta: controlla sempre prima di accettare.',
+      'Nel benchmark del solo classificatore ha frainteso 4 domande su 8 che in realtà chiedevano un dato solo tuo (es. "quante volte vai in palestra?"); con il pre-cancello deterministico che precede il classificatore (attivo in questa build) il tasso scende a 1 su 8 — controlla comunque prima di accettare.',
     replyModelId: "gemma-3-4b",
   },
   {

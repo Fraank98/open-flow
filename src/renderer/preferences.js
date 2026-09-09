@@ -11,6 +11,12 @@ const $ = (sel) => document.querySelector(sel);
 // into "Save & Restart".
 // hotkeyAccelerator is not user-configurable yet (PTT is hardcoded to
 // Option in the native addon), so it never triggers a restart.
+// Reply suggestions fields (replySuggestionsEnabled, replySuggestionsHotkey,
+// replyModelId, replyAppsMode, replyApps, userDisplayName) never enter this
+// list: the second llama-server is reconciled by ReplyServerManager.apply
+// at save time, the hotkey is re-registered by applyReplyHotkey, and the
+// name/apps/mode are read fresh from disk on every hotkey press — none of
+// them needs a relaunch.
 const RESTART_REQUIRED_FIELDS = ["whisperModelId", "llmModelId", "useLlmCleanup"];
 
 async function init() {
@@ -73,6 +79,160 @@ async function init() {
     }
   });
   renderDict();
+
+  // ── Reply suggestions ──
+  let replyApps = Array.isArray(prefs.replyApps) ? [...prefs.replyApps] : [];
+  let replyTierId = (catalog.replyTiers.find((t) => t.modelId === prefs.replyModelId) ?? catalog.replyTiers[0]).id;
+
+  $("#replyEnabled").checked = prefs.replySuggestionsEnabled === true;
+  $("#userDisplayName").value = prefs.userDisplayName ?? "";
+  $("#replyHotkey").value = prefs.replySuggestionsHotkey ?? "Command+Control+R";
+  $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
+
+  function renderReplyApps() {
+    const list = $("#replyAppList");
+    list.innerHTML = "";
+    replyApps.forEach((id, i) => {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.className = "dict-term";
+      span.textContent = id;
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "danger";
+      rm.textContent = "×";
+      rm.setAttribute("aria-label", `Remove ${id}`);
+      rm.addEventListener("click", () => { replyApps.splice(i, 1); renderReplyApps(); });
+      li.append(span, rm);
+      list.appendChild(li);
+    });
+  }
+  function addReplyApp(raw) {
+    const id = (raw ?? "").trim();
+    if (!id) return;
+    replyApps = replyApps.filter((a) => a.toLowerCase() !== id.toLowerCase());
+    replyApps.push(id);
+    renderReplyApps();
+  }
+  $("#replyAppAdd").addEventListener("click", () => { addReplyApp($("#replyAppInput").value); $("#replyAppInput").value = ""; });
+  $("#replyAppInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addReplyApp($("#replyAppInput").value); $("#replyAppInput").value = ""; }
+  });
+  renderReplyApps();
+
+  function renderReplyTiers() {
+    const container = $("#reply-tiers");
+    container.innerHTML = "";
+    for (const t of catalog.replyTiers) {
+      const row = document.createElement("div");
+      row.className = "model-row" + (t.id === replyTierId ? " selected" : "");
+      row.dataset.id = t.id;
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = `${t.label} — ${t.description}`;
+      const size = document.createElement("span");
+      size.className = "size";
+      size.textContent = `${(t.sizeBytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+      const badge = document.createElement("span");
+      badge.className = "badge" + (t.installed ? " installed" : "");
+      badge.textContent = t.installed ? "installed" : "not installed";
+      const actions = document.createElement("span");
+      actions.className = "row-actions";
+      if (!t.installed) {
+        const dl = document.createElement("button");
+        dl.textContent = "Download";
+        dl.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          dl.disabled = true;
+          dl.textContent = "0%";
+          const off = window.openFlowPrefs.onDownloadProgress((p) => {
+            if (p.id === t.modelId && p.total > 0) dl.textContent = Math.floor((p.bytes / p.total) * 100) + "%";
+          });
+          try {
+            await window.openFlowPrefs.downloadModel("reply", t.modelId);
+            t.installed = true;
+            renderReplyTiers();
+            $("#status").textContent = `Scaricato ${t.label}. Seleziona il tier e salva.`;
+          } catch (err) {
+            dl.disabled = false;
+            dl.textContent = "Retry";
+            $("#status").textContent = "Download failed: " + err.message;
+          } finally { off(); }
+        });
+        actions.appendChild(dl);
+      }
+      row.append(name, size, badge, actions);
+      row.addEventListener("click", (e) => {
+        if (e.target.tagName === "BUTTON") return;
+        replyTierId = t.id;
+        renderReplyTiers();
+        refreshReplyGuards();
+      });
+      container.appendChild(row);
+    }
+  }
+  renderReplyTiers();
+
+  function selectedTier() {
+    return catalog.replyTiers.find((t) => t.id === replyTierId) ?? catalog.replyTiers[0];
+  }
+
+  /** The feature cannot be switched on without a name and without the tier's
+   *  model on disk: the parser cannot assign roles without the name, and the
+   *  server cannot start without the file. */
+  function refreshReplyGuards() {
+    const tier = selectedTier();
+    const nameOk = $("#userDisplayName").value.trim().length > 0;
+    const box = $("#replyEnabled");
+    const blockers = [];
+    if (!nameOk) blockers.push("inserisci il tuo nome");
+    if (!tier.installed) blockers.push(`scarica ${tier.label}`);
+    if (blockers.length > 0 && box.checked) {
+      box.checked = false;
+      $("#status").textContent = `Per accendere le proposte di risposta: ${blockers.join(", ")}.`;
+    }
+    box.disabled = blockers.length > 0;
+  }
+  $("#userDisplayName").addEventListener("input", refreshReplyGuards);
+  $("#replyEnabled").addEventListener("change", refreshReplyGuards);
+  refreshReplyGuards();
+
+  const HOTKEY_MESSAGES = {
+    "contains-option": "Option è riservata alla dettatura (Hold Option): scegli un'altra combinazione.",
+    "no-modifier": "Serve almeno un modificatore (Command, Control, Shift).",
+    "no-key": "Serve un tasto oltre ai modificatori.",
+    "reserved-key": "1, 2, 3 ed Esc sono le scorciatoie della pill mentre è visibile.",
+  };
+  async function validateHotkeyField() {
+    const r = await window.openFlowPrefs.validateReplyHotkey($("#replyHotkey").value.trim());
+    $("#replyHotkeyStatus").textContent = r.ok
+      ? "Non può contenere Option: la dettatura usa Hold Option."
+      : (HOTKEY_MESSAGES[r.reason] ?? "Acceleratore non valido.");
+    $("#save").disabled = !r.ok;
+    return r.ok;
+  }
+  $("#replyHotkey").addEventListener("input", () => { void validateHotkeyField(); });
+  void validateHotkeyField();
+
+  async function refreshReplyStatus() {
+    const s = await window.openFlowPrefs.replyStatus();
+    const parts = [`stato: ${s.serverState}`];
+    if (s.serverError) parts.push(`errore: ${s.serverError}`);
+    if (!s.nativeOk) parts.push("addon non caricabile: feature disattivata per questa sessione");
+    if (s.serverState === "ready" && !s.hotkeyRegistered) parts.push("scorciatoia occupata da un'altra app");
+    $("#replyServerState").textContent = `Modello di risposta — ${parts.join(" · ")}`;
+    const btn = $("#replyAppAddBlocked");
+    if (s.lastBlockedBundleId) {
+      btn.hidden = false;
+      btn.textContent = `Aggiungi ${s.lastBlockedBundleId}`;
+      btn.onclick = () => addReplyApp(s.lastBlockedBundleId);
+    } else {
+      btn.hidden = true;
+    }
+  }
+  void refreshReplyStatus();
+  const replyStatusTimer = setInterval(() => { void refreshReplyStatus(); }, 2000);
+  window.addEventListener("beforeunload", () => clearInterval(replyStatusTimer));
 
   const langSel = $("#language");
   for (const lang of catalog.languages) {
@@ -251,6 +411,12 @@ async function init() {
       launchAtLogin: $("#launchAtLogin").checked,
       spokenPunctuation: $("#spokenPunctuation").checked,
       dictionary: dictTerms,
+      userDisplayName: $("#userDisplayName").value.trim(),
+      replySuggestionsEnabled: $("#replyEnabled").checked,
+      replySuggestionsHotkey: $("#replyHotkey").value.trim(),
+      replyModelId: selectedTier().modelId,
+      replyAppsMode: $("#replyAppsMode").value,
+      replyApps,
     };
   }
 
