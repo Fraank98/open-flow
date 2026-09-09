@@ -9,13 +9,15 @@ html, body {
   -webkit-user-select: none;
   cursor: default;
 }
-/* The pill is absolutely positioned and centered with translate.
+/* #root is the positioning shell, absolutely centered with translate.
    Avoids flexbox-on-html layout quirks that were clipping it. */
 #root {
   position: absolute;
   left: 50%;
   bottom: 30px;
   transform: translateX(-50%);
+}
+#pill {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -72,3 +74,25 @@ button#cancel:hover { background: rgba(255, 255, 255, 0.22); }
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.3); opacity: 0.6; }
 }
+
+#suggest { display: none; width: 420px; padding: 14px 16px; color: #fff;
+  background: rgba(30, 30, 32, 0.94); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.state-suggesting #pill { display: none; }
+.state-suggesting #suggest { display: block; }
+#suggest .gist { font-size: 13px; opacity: 0.9; margin-bottom: 10px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#suggest .variants { display: flex; flex-direction: column; gap: 6px; }
+button.variant { display: flex; align-items: flex-start; gap: 8px; width: 100%;
+  text-align: left; background: rgba(255, 255, 255, 0.08); border: none;
+  border-radius: 8px; padding: 7px 9px; color: #fff; font-size: 12px;
+  font-family: inherit; cursor: pointer; }
+button.variant:hover { background: rgba(255, 255, 255, 0.16); }
+.variant .badge { flex-shrink: 0; opacity: 0.7; font-size: 11px; }
+.variant .vlabel { flex-shrink: 0; opacity: 0.75; width: 104px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variant .vtext { flex: 1; min-width: 0; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#suggest .hint { margin-top: 8px; font-size: 10px; opacity: 0.45; }
+.state-reading .dot, .state-thinking .dot { background: #5e5ce6; animation: pulse 1s infinite; }
+.state-nothing .dot, .state-flash .dot { background: #8e8e93; }

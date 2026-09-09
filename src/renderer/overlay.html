@@ -7,18 +7,27 @@
   </head>
   <body>
     <div id="root" class="state-idle">
-      <div class="dot"></div>
-      <div class="content">
-        <div class="label" id="label">Idle</div>
-        <div class="partial" id="partial"></div>
+      <div id="pill">
+        <div class="dot"></div>
+        <div class="content">
+          <div class="label" id="label">Idle</div>
+          <div class="partial" id="partial"></div>
+        </div>
+        <button id="cancel" type="button">✕</button>
       </div>
-      <button id="cancel" type="button">✕</button>
+      <div id="suggest">
+        <div class="gist" id="gist"></div>
+        <div class="variants" id="variants"></div>
+        <div class="hint">Esc per chiudere</div>
+      </div>
     </div>
     <script>
       const labelEl = document.getElementById("label");
       const partialEl = document.getElementById("partial");
       const rootEl = document.getElementById("root");
       const cancelBtn = document.getElementById("cancel");
+      const gistEl = document.getElementById("gist");
+      const variantsEl = document.getElementById("variants");
 
       const TEXT = {
         idle: "",
@@ -27,11 +36,27 @@
         cleaning: "Cleaning…",
         injecting: "Pasting…",
         error: "Error",
+        reading: "Leggo il contesto…",
+        thinking: "Preparo le risposte…",
+        nothing: "Nessuna proposta",
+        suggesting: "",
+        flash: "",
       };
+      const BADGES = ["⌘1", "⌘2", "⌘3"];
+      let suggesting = false;
+
+      function clearSuggestions() {
+        suggesting = false;
+        gistEl.textContent = "";
+        variantsEl.replaceChildren();
+      }
 
       window.openFlowOverlay.onState((state) => {
-        labelEl.textContent = TEXT[state] ?? state;
+        if (state !== "suggesting") clearSuggestions();
         rootEl.className = `state-${state}`;
+        // flash owns the label itself (onFlash sets it); every other state
+        // falls back to the fixed TEXT table.
+        if (state !== "flash") labelEl.textContent = TEXT[state] ?? state;
         if (state === "idle" || state === "recording") {
           // Idle clears the preview; entering a new recording starts fresh.
           if (state === "idle") partialEl.textContent = "";
@@ -43,8 +68,44 @@
         partialEl.textContent = text;
       });
 
+      window.openFlowOverlay.onSuggestions((payload) => {
+        suggesting = true;
+        gistEl.textContent = payload.gist;
+        const rows = payload.variants.map((v, i) => {
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = "variant";
+          row.title = v.text; // full text on hover
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = BADGES[i] ?? "";
+          const label = document.createElement("span");
+          label.className = "vlabel";
+          label.textContent = v.label;
+          const text = document.createElement("span");
+          text.className = "vtext";
+          text.textContent = v.text; // text only, never parsed as markup
+          row.append(badge, label, text);
+          row.addEventListener("click", () => window.openFlowOverlay.choose(v.id));
+          return row;
+        });
+        variantsEl.replaceChildren(...rows);
+      });
+
+      window.openFlowOverlay.onFlash((text) => {
+        labelEl.textContent = text;
+      });
+
+      // The ✕ dismisses the suggestions when they are up, and cancels the
+      // dictation pipeline otherwise.
       cancelBtn.addEventListener("click", () => {
-        window.openFlowOverlay.cancel();
+        if (suggesting) window.openFlowOverlay.dismiss();
+        else window.openFlowOverlay.cancel();
+      });
+
+      // Hovering the pill resets the 20 s auto-close timer (spec §7).
+      document.getElementById("root").addEventListener("mouseenter", () => {
+        if (suggesting) window.openFlowOverlay.hover();
       });
     </script>
   </body>

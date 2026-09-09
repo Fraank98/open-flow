@@ -1,0 +1,63 @@
+/**
+ * Where the overlay window goes. Pure: no electron import, so it is testable
+ * in Vitest (Global Constraint 4).
+ *
+ * The bug it fixes: overlay-window.ts positioned the pill from
+ * `screen.getPrimaryDisplay()`, once, in create(). With two monitors the pill
+ * came out on the primary screen no matter where the user was working, and it
+ * never moved afterwards. The spec asks for
+ * `getDisplayNearestPoint(getCursorScreenPoint())` recomputed at every
+ * `show()`.
+ *
+ * `DisplayLike` is structurally what Electron's `Display` gives (`id`,
+ * `bounds`, `workArea`), so the caller passes `screen.getAllDisplays()`
+ * straight in.
+ */
+export interface Rect { x: number; y: number; width: number; height: number }
+export interface DisplayLike { id: number; bounds: Rect; workArea: Rect }
+export interface Point { x: number; y: number }
+export interface Size { width: number; height: number }
+export interface OverlayBounds extends Rect { displayId: number }
+
+/** The dictation pill: 360×56 of visible pill inside a 420×124 window. */
+export const PILL_WINDOW_SIZE: Readonly<Size> = { width: 420, height: 124 };
+/** The suggesting state: gist row + three variant rows (spec §7). */
+export const SUGGEST_WINDOW_SIZE: Readonly<Size> = { width: 480, height: 300 };
+/** The window extends this far past the work-area bottom so the pill's
+ *  box-shadow is not clipped; the CSS pulls the pill back up. */
+export const SHADOW_MARGIN = 24;
+
+/** Squared distance from `p` to the nearest point of `r`; 0 when inside. */
+function distanceSquared(r: Rect, p: Point): number {
+  const dx = p.x < r.x ? r.x - p.x : p.x > r.x + r.width ? p.x - (r.x + r.width) : 0;
+  const dy = p.y < r.y ? r.y - p.y : p.y > r.y + r.height ? p.y - (r.y + r.height) : 0;
+  return dx * dx + dy * dy;
+}
+
+function contains(r: Rect, p: Point): boolean {
+  // Half-open on the right/bottom edges: with adjacent screens, x = 1512 is
+  // the first column of the second screen, not the last of the first.
+  return p.x >= r.x && p.x < r.x + r.width && p.y >= r.y && p.y < r.y + r.height;
+}
+
+export function pickDisplay(displays: readonly DisplayLike[], cursor: Point): DisplayLike {
+  if (displays.length === 0) throw new RangeError("pickDisplay: no displays");
+  for (const d of displays) if (contains(d.bounds, cursor)) return d;
+  // The cursor can sit in a gap (mismatched resolutions) or, briefly, outside
+  // every screen: fall back to the nearest one instead of the primary.
+  return displays.reduce((best, d) =>
+    distanceSquared(d.bounds, cursor) < distanceSquared(best.bounds, cursor) ? d : best, displays[0]!); // length checked
+}
+
+/**
+ * Bottom-center of the work area of the display under the cursor, with the
+ * shadow margin hanging below. Clamped so the window never starts left of or
+ * above the work area even when it is wider/taller than the screen.
+ */
+export function computeOverlayBounds(displays: readonly DisplayLike[], cursor: Point, size: Size): OverlayBounds {
+  const display = pickDisplay(displays, cursor);
+  const wa = display.workArea;
+  const x = Math.max(wa.x, wa.x + Math.round((wa.width - size.width) / 2));
+  const y = Math.max(wa.y, wa.y + wa.height - size.height + SHADOW_MARGIN);
+  return { x, y, width: size.width, height: size.height, displayId: display.id };
+}

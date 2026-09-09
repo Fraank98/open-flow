@@ -1,31 +1,29 @@
 import { BrowserWindow, screen } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { IpcChannels } from "../shared/ipc-channels.js";
+import type { SuggestionPayload } from "../shared/reply-types.js";
+import { computeOverlayBounds, PILL_WINDOW_SIZE, SUGGEST_WINDOW_SIZE, type Size } from "./utils/overlay-bounds.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const APP_ROOT = join(dirname(__filename), "..", "..");
 
 export class OverlayWindow {
   private win: BrowserWindow | null = null;
+  /** Current window size; `show()` re-centers at this size. */
+  private size: Size = { ...PILL_WINDOW_SIZE };
 
   async create(): Promise<void> {
-    const { width, height } = screen.getPrimaryDisplay().workAreaSize;
     // Window is larger than the visible pill so the box-shadow (which
     // extends ~24px out from each edge) has room to render without being
     // clipped by the window boundary. The pill itself is centered inside
     // via CSS flexbox + padding.
-    const w = 420;
-    const h = 124;
+    const b = this.currentBounds();
     this.win = new BrowserWindow({
-      width: w,
-      height: h,
-      x: Math.floor((width - w) / 2),
-      // Extend the window 24px below the work-area bottom so the pill's
-      // drop shadow can render below the pill without being clipped at
-      // the window boundary. Combined with CSS bottom: 30px inside the
-      // window, the pill itself still sits ~6px above the dock / screen
-      // edge — same visual position as before, full shadow visible.
-      y: height - h + 24,
+      width: b.width,
+      height: b.height,
+      x: b.x,
+      y: b.y,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
@@ -51,21 +49,57 @@ export class OverlayWindow {
     await this.win.loadFile(join(APP_ROOT, "src", "renderer", "overlay.html"));
   }
 
+  /** Fresh bounds for the CURRENT cursor position and window size. Called at
+   *  every show(): the user changes monitor between one dictation and the next. */
+  private currentBounds(): { x: number; y: number; width: number; height: number } {
+    return computeOverlayBounds(screen.getAllDisplays(), screen.getCursorScreenPoint(), this.size);
+  }
+
+  private reposition(): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    const { x, y, width, height } = this.currentBounds();
+    this.win.setBounds({ x, y, width, height });
+  }
+
   show(): void {
-    if (this.win && !this.win.isDestroyed()) {
-      this.win.showInactive();
-    }
+    if (!this.win || this.win.isDestroyed()) return;
+    this.reposition();
+    this.win.showInactive(); // never steal focus: the paste must land in the target app
   }
 
   hide(): void {
-    if (this.win && !this.win.isDestroyed()) {
-      this.win.hide();
-    }
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.hide();
+    this.resetSize(); // the next dictation pill must not be 480×300
+  }
+
+  /** Enters the suggesting state: grows the window, sends the payload, shows. */
+  showSuggestions(payload: SuggestionPayload): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    this.size = { ...SUGGEST_WINDOW_SIZE };
+    this.win.webContents.send(IpcChannels.ReplySuggestions, payload);
+    this.sendState("suggesting");
+    this.show();
+  }
+
+  /** Back to the pill geometry, repositioning if the window is still visible. */
+  resetSize(): void {
+    this.size = { ...PILL_WINDOW_SIZE };
+    if (this.win && !this.win.isDestroyed() && this.win.isVisible()) this.reposition();
+  }
+
+  /** Neutral one-line message (degradation L2/L3). The text comes from the
+   *  coordinator's fixed table — never a code that describes the screen. */
+  sendFlash(text: string): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.webContents.send(IpcChannels.ReplyFlash, text);
+    this.sendState("flash");
+    this.show();
   }
 
   sendState(state: string): void {
     if (this.win && !this.win.isDestroyed()) {
-      this.win.webContents.send("pipeline:state-change", state);
+      this.win.webContents.send(IpcChannels.PipelineStateChange, state);
     }
   }
 
