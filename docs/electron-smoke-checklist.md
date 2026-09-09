@@ -55,16 +55,14 @@ should return to before closing this section):
     that is the RAM regression this checklist exists to catch; stop and
     report it, do not continue to the next steps.
 15. Press `Command+Control+R` over any window. Nothing should happen on
-    screen. Then check the log:
-    ```bash
-    tail -20 ~/Library/Logs/open-flow/debug.log
-    ```
-    (run with `OPEN_FLOW_DEBUG=1` set, or check `error.log` if debug logging
-    is off — `reply ignored` only logs at info level, so debug logging must
-    be on to see it). **Expected:** a line reading `reply ignored` with
-    `"reason":"disabled"`. If instead you see a pill, a flash, or any log
-    line other than `disabled` (e.g. `server-off`), the feature reacted to
-    the hotkey while off — report which line you saw.
+    screen — and there is nothing to check in the log for this state: while
+    the feature is off, the accelerator is never registered with macOS in
+    the first place (`applyReplyHotkey` only registers it once the server
+    reports `ready`), so the keypress never reaches the app at all — no
+    `reply ignored` or any other reply-related line is written anywhere. If
+    a pill, a flash, or **any** line mentioning `reply` appears in either
+    `~/Library/Logs/open-flow/error.log` or `debug.log`, the hotkey reacted
+    while off — report it, quoting the line.
 16. Dictation still works as before: hold **Option** over a text field,
     speak, release — the transcript pastes normally. This confirms the
     reply wiring did not disturb the existing pipeline.
@@ -74,25 +72,34 @@ suggestions" section:
 
 17. The **checkbox is disabled** (grayed out, cannot be checked) as long as
     either the name field is empty or the selected tier's model is not
-    downloaded, and the status text beside it names what is missing (e.g.
-    "inserisci il tuo nome" or "scarica Standard"). If the checkbox can be
-    ticked with the name empty and no model installed, report it — the
-    feature must not be enable-able in that state.
-18. Click into the hotkey field and type `Alt+R`. **Expected:** the message
-    below the field changes to "Option è riservata alla dettatura…" and the
-    **Save button becomes disabled**. Clear it and type `Command+1`.
-    **Expected:** the message becomes "1, 2, 3 ed Esc sono le scorciatoie
-    della pill…". Clear it and type `Command+Control+R` (the default).
-    **Expected:** the message returns to the neutral "Non può contenere
-    Option…" text and **Save is enabled again**. If Save stays enabled on
-    the invalid values, or stays disabled on the valid one, report which.
-19. Type your name, then in the tier list click **Download** on the
+    downloaded, and the shared status line at the bottom of the window
+    names what is missing (e.g. "inserisci il tuo nome" or "scarica
+    Standard") — this should already read that way on a fresh install,
+    before you touch anything. If the checkbox can be ticked with the name
+    empty and no model installed, or the status line stays blank, report it.
+18. Type your name, then in the tier list click **Download** on the
     Standard tier (2.49 GB — this will take a while on a real connection).
-    When it finishes, click the Standard row to select it, tick the "Reply
-    suggestions" checkbox, and click **Save**. **Expected:** the button
-    reads **"Save"**, not "Save & Restart" — none of these fields are
-    restart-required. If the app restarts or the button says "Save &
-    Restart", report it.
+    When it finishes, click the Standard row to select it. **Expected:**
+    the checkbox is no longer disabled and no impediment message remains.
+    Tick it now, but **do not click Save yet** — the next step exercises
+    the hotkey field first, and needs the checkbox already ticked to do so.
+19. With the checkbox now ticked, click into the hotkey field and type
+    `Alt+R`. **Expected:** the message below the field changes to "Option è
+    riservata alla dettatura…" and the **Save button becomes disabled**.
+    Clear it and type `Command+1`. **Expected:** the message becomes "1, 2,
+    3 ed Esc sono le scorciatoie della pill…". Clear it and type
+    `Command+Control+R` (the default). **Expected:** the message returns to
+    the neutral "Non può contenere Option…" text and **Save is enabled
+    again**. If Save stays enabled on the invalid values, or stays disabled
+    on the valid one, report which. (This blocking is deliberately gated on
+    the checkbox being ticked: type `Alt+R` again, then untick the
+    checkbox — Save should become enabled despite the still-invalid hotkey
+    text, because an invalid value left over in an *off* feature must not
+    block saving an unrelated change, like the dictionary or a model. Tick
+    the checkbox and restore `Command+Control+R` before continuing.) Now
+    click **Save**. **Expected:** the button reads **"Save"**, not "Save &
+    Restart" — none of these fields are restart-required. If the app
+    restarts or the button says "Save & Restart", report it.
 20. Watch the status line under the checkbox (it refreshes every ~2s).
     **Expected sequence:** `stato: downloading` (only if the model wasn't
     already resident) → `stato: starting` → `stato: ready`, with no app

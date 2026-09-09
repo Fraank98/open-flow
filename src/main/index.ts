@@ -32,9 +32,9 @@ import { ReplyClassifier } from "./reply-classifier.js";
 import { ReplyGenerator, GENERATOR_PREFIX } from "./reply-generator.js";
 import { filterVariants } from "./utils/variant-filter.js";
 import { ReplyServerManager } from "./reply-server-manager.js";
-import { ReplyCoordinator, hasExplicitProposal } from "./reply-coordinator.js";
+import { ReplyCoordinator, hasExplicitProposal, VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR } from "./reply-coordinator.js";
 import { HotkeyManager } from "./hotkey-manager.js";
-import { validateReplyAccelerator } from "./utils/reply-hotkey.js";
+import { reconcileReplyAccelerator } from "./utils/reply-hotkey.js";
 import { IpcChannels } from "../shared/ipc-channels.js";
 import type { ReplyUiStatus } from "./preferences-window.js";
 
@@ -229,6 +229,13 @@ async function main(): Promise<void> {
         phase: s.phase,
         timeoutMs: s.timeoutMs,
       });
+      // app.exit() does not emit will-quit, so the child llama-server
+      // processes (dictation cleanup, and — if the reply feature is on —
+      // the second, larger model) are not asked to stop by anything else:
+      // without this they outlive this process with their RAM still held,
+      // and the relaunched instance finds their ports already occupied.
+      llmServer.stop();
+      replyServerManager.stop();
       app.relaunch();
       app.exit(0);
     });
@@ -484,16 +491,38 @@ async function main(): Promise<void> {
 
   // The reply hotkey is an impulse, not a toggle: HotkeyManager alternates
   // start/stop, so reset() right after 'start' makes every press a start.
-  const replyAccelerator = validateReplyAccelerator(prefs.replySuggestionsHotkey).ok
-    ? prefs.replySuggestionsHotkey
-    : "Command+Control+R";
-  const replyHotkey = new HotkeyManager({ accelerator: replyAccelerator });
-  replyHotkey.on("start", () => {
-    replyHotkey.reset();
-    if (replyCoordinator) void replyCoordinator.onHotkey();
-  });
+  function wireReplyHotkeyStart(hk: HotkeyManager): void {
+    hk.on("start", () => {
+      hk.reset();
+      if (replyCoordinator) void replyCoordinator.onHotkey();
+    });
+  }
+  let replyAccelerator = reconcileReplyAccelerator(prefs.replySuggestionsHotkey, "").accelerator;
+  let replyHotkey = new HotkeyManager({ accelerator: replyAccelerator });
+  wireReplyHotkeyStart(replyHotkey);
 
-  function applyReplyHotkey(): void {
+  // Reads the saved accelerator fresh every time (same "read prefs from disk
+  // on every reconcile" pattern as the coordinator's own loadPrefs), so a
+  // hotkey saved in Preferences takes effect without a restart.
+  // HotkeyManager's accelerator is immutable once constructed (opts is
+  // readonly): a change can only take effect by unregistering the old
+  // manager and constructing a fresh one — reconcileReplyAccelerator (tested
+  // in utils/reply-hotkey.ts) decides the value and whether that swap is
+  // needed; this function only carries out the swap and the register/
+  // unregister side effects.
+  async function applyReplyHotkey(): Promise<void> {
+    const saved = (await preferencesStore.load()).replySuggestionsHotkey;
+    const { accelerator, rebuild } = reconcileReplyAccelerator(saved, replyAccelerator);
+    if (rebuild) {
+      if (replyHotkeyRegistered) {
+        replyHotkey.unregister();
+        replyHotkeyRegistered = false;
+      }
+      replyAccelerator = accelerator;
+      replyHotkey = new HotkeyManager({ accelerator: replyAccelerator });
+      wireReplyHotkeyStart(replyHotkey);
+    }
+
     const wanted = replyServerManager.getState() === "ready" && replyCoordinator !== null;
     if (wanted && !replyHotkeyRegistered) {
       const r = replyHotkey.register();
@@ -506,7 +535,7 @@ async function main(): Promise<void> {
     }
   }
   replyServerManager.onStateChange((state) => {
-    applyReplyHotkey();
+    void applyReplyHotkey();
     if (state !== "ready" && replyCoordinator) replyCoordinator.dismiss("quit");
   });
   replyServerManager.onDownloadProgress((p) => {
@@ -515,7 +544,7 @@ async function main(): Promise<void> {
 
   // Overlay → main, same pattern as pipeline:cancel.
   ipcMain.on(IpcChannels.ReplyChoose, (_e, id: number) => {
-    if (replyCoordinator) void replyCoordinator.accept(id);
+    if (replyCoordinator && Number.isInteger(id)) void replyCoordinator.accept(id);
   });
   ipcMain.on(IpcChannels.ReplyDismiss, () => { replyCoordinator?.dismiss("click"); });
   ipcMain.on(IpcChannels.ReplyHover, () => { replyCoordinator?.onHover(); });
@@ -651,6 +680,34 @@ async function main(): Promise<void> {
     menubar.setStatus("Idle");
   });
 
+  // Registered BEFORE ptt.start() / the trust dialog below, deliberately:
+  // the dialog can call app.quit() on its own (Quit / Open System Settings),
+  // and app.quit()/app.exit() never queue an event for a listener added
+  // after they fire — an app.on("will-quit", ...) registered after that
+  // call would simply never run, leaking the LLM server child processes
+  // (dictation cleanup, and the reply model if the feature is on) with
+  // their RAM still held.
+  app.on("will-quit", () => {
+    ptt.stop();
+    if (powerSaveBlocker.isStarted(powerSaveBlockerId)) powerSaveBlocker.stop(powerSaveBlockerId);
+    // shutdown(), NOT release(): release() blocks on the native inference mutex,
+    // which a hung pass holds forever — that would freeze quit. The OS reclaims
+    // the model/GPU on process exit.
+    if (streamingWhisper) streamingWhisper.shutdown();
+    whisperServer.stop();
+    llmServer.stop();
+    replyCoordinator?.dismiss("quit");
+    if (replyHotkeyRegistered) replyHotkey.unregister();
+    for (const acc of [...VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR]) globalShortcut.unregister(acc);
+    replyServerManager.stop();
+    overlay.destroy();
+    menubar.destroy();
+  });
+
+  app.on("window-all-closed", () => {
+    // intentional no-op — menubar app stays alive
+  });
+
   ptt.start();
   if (!ptt.isTrusted()) {
     await logger.error("PTT start failed: not trusted for Accessibility");
@@ -677,27 +734,6 @@ async function main(): Promise<void> {
   }
 
   menubar.create();
-
-  app.on("will-quit", () => {
-    ptt.stop();
-    if (powerSaveBlocker.isStarted(powerSaveBlockerId)) powerSaveBlocker.stop(powerSaveBlockerId);
-    // shutdown(), NOT release(): release() blocks on the native inference mutex,
-    // which a hung pass holds forever — that would freeze quit. The OS reclaims
-    // the model/GPU on process exit.
-    if (streamingWhisper) streamingWhisper.shutdown();
-    whisperServer.stop();
-    llmServer.stop();
-    replyCoordinator?.dismiss("quit");
-    if (replyHotkeyRegistered) replyHotkey.unregister();
-    for (const acc of ["Command+1", "Command+2", "Command+3", "Escape"]) globalShortcut.unregister(acc);
-    replyServerManager.stop();
-    overlay.destroy();
-    menubar.destroy();
-  });
-
-  app.on("window-all-closed", () => {
-    // intentional no-op — menubar app stays alive
-  });
 }
 
 main().catch((err) => {

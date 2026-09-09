@@ -25,7 +25,6 @@ contextBridge.exposeInMainWorld("openFlowPrefs", {
     ipcRenderer.invoke("prefs:reply-status"),
   validateReplyHotkey: (accelerator: string): Promise<{ ok: boolean; reason?: string; accelerator?: string }> =>
     ipcRenderer.invoke("prefs:validate-reply-hotkey", accelerator),
-  replyBlockedApp: (): Promise<string | null> => ipcRenderer.invoke("prefs:reply-blocked-app"),
 });
 
 declare global {
@@ -45,7 +44,6 @@ declare global {
       onDownloadProgress: (cb: (p: { id: string; bytes: number; total: number }) => void) => () => void;
       replyStatus: () => Promise<{ serverState: string; serverError: string | null; hotkeyRegistered: boolean; nativeOk: boolean; lastBlockedBundleId: string | null }>;
       validateReplyHotkey: (accelerator: string) => Promise<{ ok: boolean; reason?: string; accelerator?: string }>;
-      replyBlockedApp: () => Promise<string | null>;
     };
   }
 }

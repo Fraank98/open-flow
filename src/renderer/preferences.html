@@ -65,11 +65,12 @@
         <label>Qualità del modello di risposta</label>
         <div id="reply-tiers" class="model-list"></div>
 
-        <label for="replyAppsMode">App in cui leggere</label>
+        <label id="replyAppsModeLabel" for="replyAppsMode">App in cui leggere</label>
         <select id="replyAppsMode">
           <option value="allowlist">Solo queste app (consigliato)</option>
           <option value="blocklist">Tutte tranne queste</option>
         </select>
+        <p class="muted" id="replyAppsModeWarning" hidden></p>
         <div class="dict-add">
           <input id="replyAppInput" type="text" placeholder="bundle id, es. com.apple.mail" />
           <button id="replyAppAdd" type="button">Aggiungi</button>

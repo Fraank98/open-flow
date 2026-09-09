@@ -28,3 +28,27 @@ export function validateReplyAccelerator(accelerator: string): AcceleratorValida
   if (RESERVED_KEYS.has(keys[0]!)) return { ok: false, reason: "reserved-key" }; // keys.length === 1, so keys[0] exists
   return { ok: true, accelerator };
 }
+
+export interface ReplyHotkeyReconciliation {
+  /** The accelerator to have wired: the saved preference if valid, else the
+   *  default — same fallback used at boot. */
+  accelerator: string;
+  /** True when this differs from `current`, i.e. the caller must unregister
+   *  the old accelerator and construct a fresh HotkeyManager with this one:
+   *  HotkeyManager's accelerator is immutable once constructed (its `opts`
+   *  is `readonly`), so a saved change can only take effect by swapping the
+   *  instance, never by mutating it in place. */
+  rebuild: boolean;
+}
+
+/**
+ * Pure decision for whether the reply hotkey needs to be rebuilt after the
+ * user saves a new accelerator in Preferences. index.ts owns the actual
+ * side effects (unregistering the old accelerator, constructing the new
+ * HotkeyManager, re-registering); this only decides the value and whether
+ * it changed, so it's testable without mocking Electron's globalShortcut.
+ */
+export function reconcileReplyAccelerator(savedPreference: string, current: string): ReplyHotkeyReconciliation {
+  const accelerator = validateReplyAccelerator(savedPreference).ok ? savedPreference : REPLY_HOTKEY_DEFAULT;
+  return { accelerator, rebuild: accelerator !== current };
+}

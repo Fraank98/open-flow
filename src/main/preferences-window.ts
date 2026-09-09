@@ -174,10 +174,5 @@ export class PreferencesWindow {
     ipcMain.handle("prefs:reply-status", (): ReplyUiStatus => this.deps.replyStatus());
 
     ipcMain.handle("prefs:validate-reply-hotkey", (_e, accelerator: string) => validateReplyAccelerator(accelerator));
-
-    /** The addon does not expose the frontmost app's bundle id (only its
-     *  pid), and native/ is out of scope: the UI offers the id of the last
-     *  app the reader refused instead (§Deviazioni 3). */
-    ipcMain.handle("prefs:reply-blocked-app", (): string | null => this.deps.replyStatus().lastBlockedBundleId);
   }
 }

@@ -89,6 +89,25 @@ async function init() {
   $("#replyHotkey").value = prefs.replySuggestionsHotkey ?? "Command+Control+R";
   $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
 
+  /** The same list serves both modes, and switching the dropdown silently
+   *  redefines what it means: allowlist reads ONLY these apps, blocklist
+   *  reads every app EXCEPT these. The label and a warning change with the
+   *  mode instead of leaving that to the reader to notice on their own. */
+  function updateReplyAppsModeUI() {
+    const mode = $("#replyAppsMode").value;
+    $("#replyAppsModeLabel").textContent = mode === "blocklist" ? "App da escludere" : "App in cui leggere";
+    const warn = $("#replyAppsModeWarning");
+    if (mode !== "blocklist") {
+      warn.hidden = true;
+      return;
+    }
+    warn.hidden = false;
+    warn.textContent = replyApps.length > 0
+      ? "In tutte le altre app il contesto verrà letto."
+      : "Nessuna app esclusa: con questa impostazione la feature non leggerà nulla.";
+  }
+  $("#replyAppsMode").addEventListener("change", updateReplyAppsModeUI);
+
   function renderReplyApps() {
     const list = $("#replyAppList");
     list.innerHTML = "";
@@ -106,6 +125,10 @@ async function init() {
       li.append(span, rm);
       list.appendChild(li);
     });
+    // The list content decides which blocklist warning applies (empty vs
+    // non-empty), so every add/remove must refresh it too, not just a mode
+    // switch.
+    updateReplyAppsModeUI();
   }
   function addReplyApp(raw) {
     const id = (raw ?? "").trim();
@@ -153,6 +176,11 @@ async function init() {
             t.installed = true;
             renderReplyTiers();
             $("#status").textContent = `Scaricato ${t.label}. Seleziona il tier e salva.`;
+            // This is the primary path to turning the feature on: without
+            // this the checkbox stays disabled, with no explanation, until
+            // something unrelated (a name edit, a tier click) happens to
+            // re-run the guard.
+            refreshReplyGuards();
           } catch (err) {
             dl.disabled = false;
             dl.textContent = "Retry";
@@ -177,9 +205,34 @@ async function init() {
     return catalog.replyTiers.find((t) => t.id === replyTierId) ?? catalog.replyTiers[0];
   }
 
+  const HOTKEY_MESSAGES = {
+    "contains-option": "Option è riservata alla dettatura (Hold Option): scegli un'altra combinazione.",
+    "no-modifier": "Serve almeno un modificatore (Command, Control, Shift).",
+    "no-key": "Serve un tasto oltre ai modificatori.",
+    "reserved-key": "1, 2, 3 ed Esc sono le scorciatoie della pill mentre è visibile.",
+  };
+  /** Gates the global Save button only while the feature is (or is being
+   *  left) switched on: an invalid hotkey sitting in this field must not
+   *  block saving an unrelated change — language, dictionary, models —
+   *  while the feature is off. */
+  async function validateHotkeyField() {
+    const r = await window.openFlowPrefs.validateReplyHotkey($("#replyHotkey").value.trim());
+    $("#replyHotkeyStatus").textContent = r.ok
+      ? "Non può contenere Option: la dettatura usa Hold Option."
+      : (HOTKEY_MESSAGES[r.reason] ?? "Acceleratore non valido.");
+    $("#save").disabled = !r.ok && $("#replyEnabled").checked;
+    return r.ok;
+  }
+  $("#replyHotkey").addEventListener("input", () => { void validateHotkeyField(); });
+
   /** The feature cannot be switched on without a name and without the tier's
    *  model on disk: the parser cannot assign roles without the name, and the
-   *  server cannot start without the file. */
+   *  server cannot start without the file. Never force the checkbox off —
+   *  a preference already saved as "on" (e.g. the tier's model was deleted
+   *  after enabling) must not silently flip to "off" on some unrelated Save
+   *  just because Preferences happened to be reopened: it stays disabled,
+   *  with the impediment spelled out, and whatever it already was is what
+   *  gets saved. */
   function refreshReplyGuards() {
     const tier = selectedTier();
     const nameOk = $("#userDisplayName").value.trim().length > 0;
@@ -187,32 +240,18 @@ async function init() {
     const blockers = [];
     if (!nameOk) blockers.push("inserisci il tuo nome");
     if (!tier.installed) blockers.push(`scarica ${tier.label}`);
-    if (blockers.length > 0 && box.checked) {
-      box.checked = false;
+    box.disabled = blockers.length > 0;
+    if (blockers.length > 0) {
       $("#status").textContent = `Per accendere le proposte di risposta: ${blockers.join(", ")}.`;
     }
-    box.disabled = blockers.length > 0;
+    // The checkbox's checked state is one of the two inputs to the Save
+    // gate above, so a guard refresh (which can follow a checkbox change)
+    // must recompute it too.
+    void validateHotkeyField();
   }
   $("#userDisplayName").addEventListener("input", refreshReplyGuards);
   $("#replyEnabled").addEventListener("change", refreshReplyGuards);
   refreshReplyGuards();
-
-  const HOTKEY_MESSAGES = {
-    "contains-option": "Option è riservata alla dettatura (Hold Option): scegli un'altra combinazione.",
-    "no-modifier": "Serve almeno un modificatore (Command, Control, Shift).",
-    "no-key": "Serve un tasto oltre ai modificatori.",
-    "reserved-key": "1, 2, 3 ed Esc sono le scorciatoie della pill mentre è visibile.",
-  };
-  async function validateHotkeyField() {
-    const r = await window.openFlowPrefs.validateReplyHotkey($("#replyHotkey").value.trim());
-    $("#replyHotkeyStatus").textContent = r.ok
-      ? "Non può contenere Option: la dettatura usa Hold Option."
-      : (HOTKEY_MESSAGES[r.reason] ?? "Acceleratore non valido.");
-    $("#save").disabled = !r.ok;
-    return r.ok;
-  }
-  $("#replyHotkey").addEventListener("input", () => { void validateHotkeyField(); });
-  void validateHotkeyField();
 
   async function refreshReplyStatus() {
     const s = await window.openFlowPrefs.replyStatus();
@@ -222,7 +261,14 @@ async function init() {
     if (s.serverState === "ready" && !s.hotkeyRegistered) parts.push("scorciatoia occupata da un'altra app");
     $("#replyServerState").textContent = `Modello di risposta — ${parts.join(" · ")}`;
     const btn = $("#replyAppAddBlocked");
-    if (s.lastBlockedBundleId) {
+    // lastBlockedBundleId is never cleared once set (it survives past apps
+    // the user has since added), so the button must hide itself once that
+    // app is already in the list — otherwise it stays on screen forever
+    // after being acted on.
+    const alreadyListed = s.lastBlockedBundleId
+      ? replyApps.some((a) => a.toLowerCase() === s.lastBlockedBundleId.toLowerCase())
+      : true;
+    if (s.lastBlockedBundleId && !alreadyListed) {
       btn.hidden = false;
       btn.textContent = `Aggiungi ${s.lastBlockedBundleId}`;
       btn.onclick = () => addReplyApp(s.lastBlockedBundleId);

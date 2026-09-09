@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateReplyAccelerator, REPLY_HOTKEY_DEFAULT } from "../../src/main/utils/reply-hotkey.js";
+import { validateReplyAccelerator, reconcileReplyAccelerator, REPLY_HOTKEY_DEFAULT } from "../../src/main/utils/reply-hotkey.js";
 
 describe("validateReplyAccelerator", () => {
   it("accepts the default and other Command/Control/Shift combinations", () => {
@@ -23,5 +23,24 @@ describe("validateReplyAccelerator", () => {
     for (const a of ["Command+1", "Command+2", "Command+3", "Control+Escape"]) {
       expect(validateReplyAccelerator(a), a).toEqual({ ok: false, reason: "reserved-key" });
     }
+  });
+});
+
+describe("reconcileReplyAccelerator", () => {
+  it("rebuilds when the saved (valid) accelerator differs from the current one", () => {
+    expect(reconcileReplyAccelerator("Command+Control+T", "Command+Control+R"))
+      .toEqual({ accelerator: "Command+Control+T", rebuild: true });
+  });
+  it("does not rebuild when the saved accelerator already matches the current one", () => {
+    expect(reconcileReplyAccelerator("Command+Control+R", "Command+Control+R"))
+      .toEqual({ accelerator: "Command+Control+R", rebuild: false });
+  });
+  it("falls back to the default (not the raw invalid value) when the saved accelerator is invalid", () => {
+    expect(reconcileReplyAccelerator("Alt+R", "Command+Control+R"))
+      .toEqual({ accelerator: REPLY_HOTKEY_DEFAULT, rebuild: false });
+  });
+  it("still signals rebuild when falling back to the default and the current wired value differs from it", () => {
+    expect(reconcileReplyAccelerator("Alt+R", "Command+Control+T"))
+      .toEqual({ accelerator: REPLY_HOTKEY_DEFAULT, rebuild: true });
   });
 });
