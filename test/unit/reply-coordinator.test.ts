@@ -578,6 +578,9 @@ describe("ReplyCoordinator.accept", () => {
     await p;
     expect(e.inject).not.toHaveBeenCalled();
     expect(e.copyToClipboard).not.toHaveBeenCalled(); // not even the degraded path — no paste at all
+    // Round 2, Minor 3.2: the abort used to be a silent `return` — the log
+    // is the only record that the two pastes cancelled each other out.
+    expect(e.seen.join(" ")).toContain('"reason":"epoch-superseded"');
   });
 
   it("Command+2 pastes the second variant: unregister → injecting → activateApp → inject", async () => {
@@ -804,6 +807,42 @@ describe("isAlternativeGrounded (Important 4)", () => {
   });
   it("is accent- and apostrophe-insensitive, like the rest of the file's comparisons", () => {
     expect(isAlternativeGrounded("perche non domani", "Perché non ci vediamo domani?")).toBe(true);
+  });
+
+  describe("exact membership on numbers and proper nouns (round 2, Important 2)", () => {
+    // Executed by the round-2 review: a wrong number/name scored WELL above
+    // the 0.5 word-overlap threshold because the surrounding words carried
+    // the score — the digit itself is invisible to \p{L}+, and a name is
+    // just one word among several. Both need their own exact check.
+    it("rejects a name swapped for the one the message actually said, despite high word overlap", () => {
+      // "la giro a Marco" scores 0.67 against MSG (3 of 4 words shared).
+      expect(isAlternativeGrounded("la giro a Marco", MSG)).toBe(false);
+    });
+    it("rejects a number swapped for the one the message actually said, despite full word overlap", () => {
+      const msg = "confermi con lo sconto del 10%?";
+      // "con lo sconto del 20%" scores 1.00 on words alone (%/digits are invisible to \p{L}+).
+      expect(isAlternativeGrounded("con lo sconto del 20%", msg)).toBe(false);
+    });
+    // The opposite direction: a legitimate alternative that CONTAINS a real
+    // number or name must not be punished for containing one.
+    it("keeps a number the message actually states", () => {
+      expect(isAlternativeGrounded("lo sconto del 10%", "confermi con lo sconto del 10%?")).toBe(true);
+    });
+    it("keeps a name the message actually states", () => {
+      expect(isAlternativeGrounded("la giro a Paolo", MSG)).toBe(true);
+    });
+    // A model that merely RE-CASES a shared word (not a genuine invented
+    // name) must not be punished: the proper-noun check compares
+    // case/accent-insensitively, the same normalization as the rest of this
+    // function, not a literal string match.
+    it("does not treat a re-cased shared word as an invented name", () => {
+      expect(isAlternativeGrounded("ci vediamo Giovedì", "ci vediamo giovedì mattina va bene?")).toBe(true);
+    });
+    // Sentence-initial capitalization says nothing about whether a word is a
+    // name: the first token of the alternative itself is never checked.
+    it("does not flag the alternative's own first word merely for being capitalized", () => {
+      expect(isAlternativeGrounded("Confermo la prima opzione", "puoi confermare la prima opzione o preferisci l'altra?")).toBe(true);
+    });
   });
 });
 

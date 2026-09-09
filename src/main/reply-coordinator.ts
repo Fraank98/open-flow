@@ -1,5 +1,5 @@
 import { positionsFor } from "./utils/reply-positions.js";
-import { MIN_KEPT, toLogMeta as filterLogMeta, type FilterInput, type FilterOutput, type FilterVariant } from "./utils/variant-filter.js";
+import { MIN_KEPT, hasUnanchoredNumber, toLogMeta as filterLogMeta, type FilterInput, type FilterOutput, type FilterVariant } from "./utils/variant-filter.js";
 import { toLogMeta as parserLogMeta, type ParseInput, type ParseResult } from "./utils/conversation-parser.js";
 import { toLogMeta as readerLogMeta, type BundleIdFilter, type ReadBudgets, type ReadContextResult } from "./ax-context-reader.js";
 import type { ClassifyInput, ClassifyResult } from "./reply-classifier.js";
@@ -150,10 +150,50 @@ export function hasExplicitProposal(lastMessage: string): boolean {
   return lastMessage.includes("?") && ALTERNATIVE_HINT.test(lastMessage);
 }
 
+function normalizeToken(w: string): string {
+  return w.replace(/[‘’ʼ]/gu, "'").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
 function groundingWords(s: string): Set<string> {
-  return new Set(
-    s.replace(/[‘’ʼ]/gu, "'").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().match(/\p{L}+/gu) ?? [],
-  );
+  return new Set(normalizeToken(s).match(/\p{L}+/gu) ?? []);
+}
+
+/**
+ * `groundingWords`'s `\p{L}+` never matches a digit, so a wrong NUMBER
+ * inside an otherwise-overlapping alternative was invisible to the 0.5
+ * threshold below (round 2, found by review, executed: "con lo sconto del
+ * 20%" scored 1.00 against a message that said 10%, because every non-digit
+ * word matched and the digit itself was simply never compared). Exact
+ * membership, not a threshold — reuses variant-filter.ts's own
+ * digit/percent/word-numeral value comparison (hasUnanchoredNumber) rather
+ * than a second copy of it: a number is anchored only if it equals one
+ * lastMessage actually states.
+ */
+function numbersGrounded(alt: string, lastMessage: string): boolean {
+  return !hasUnanchoredNumber(alt, lastMessage);
+}
+
+/**
+ * Same problem, different invisible class: a capitalized token votes as an
+ * ordinary word in the 0.5 threshold below, so swapping one name for
+ * another barely moves the score (round 2, found by review, executed: "la
+ * giro a Marco" scored 0.67 against a message that said Paolo, and the
+ * label/prompt/accepted-text chain all carried "Marco" through to the
+ * pasted text). Exact membership on the capitalized-token subset only,
+ * compared case/accent-insensitively (the SAME normalization
+ * `groundingWords` uses) rather than a literal string match: a model that
+ * merely re-cases a genuinely-shared word ("Giovedì" for a message's
+ * "giovedì") must not be treated as inventing a new name, only one that
+ * introduces a capitalized token absent from the message at all. The first
+ * token is skipped even when capitalized: these alternatives are short
+ * fragments, and sentence-initial capitalization says nothing about whether
+ * the word is a name.
+ */
+function properNounsGrounded(alt: string, lastMessage: string): boolean {
+  const names = [...alt.matchAll(/\p{Lu}\p{L}+/gu)].filter((m) => m.index !== 0).map((m) => normalizeToken(m[0]));
+  if (names.length === 0) return true;
+  const ctxWords = groundingWords(lastMessage);
+  return names.every((n) => ctxWords.has(n));
 }
 
 /**
@@ -173,6 +213,15 @@ function groundingWords(s: string): Set<string> {
  * "la fai tu"), so requiring every word breaks on a legitimate one-word
  * rewrite, while accepting anything looser would let an alternative built
  * from one real word and one invented word through.
+ *
+ * Round 2 (found by review, no threshold separates the two populations —
+ * raising it to 1.0 closes the number/name cases below but also drops
+ * legitimate rewordings like "la faccio io" and "rimandare alla settimana
+ * prossima"): numbers and proper nouns are the two classes where a WRONG
+ * value still scores well on the word-overlap threshold, because the
+ * surrounding words carry the score and the wrong value itself is either
+ * invisible to it (a digit) or just one vote among several (a name). Both
+ * are checked separately, by exact membership, alongside the threshold.
  */
 export function isAlternativeGrounded(alt: string, lastMessage: string): boolean {
   const altWords = groundingWords(alt);
@@ -180,7 +229,8 @@ export function isAlternativeGrounded(alt: string, lastMessage: string): boolean
   const ctxWords = groundingWords(lastMessage);
   let hit = 0;
   for (const w of altWords) if (ctxWords.has(w)) hit += 1;
-  return hit / altWords.size >= 0.5;
+  if (hit / altWords.size < 0.5) return false;
+  return numbersGrounded(alt, lastMessage) && properNounsGrounded(alt, lastMessage);
 }
 
 /**
@@ -400,7 +450,14 @@ export class ReplyCoordinator {
       // window of up to ACTIVATE_TIMEOUT_MS — used to still fire this
       // paste on top of the dictation that wins by spec, producing two
       // pastes. Same epoch check onHotkey already uses after its own awaits.
-      if (epoch !== this.epoch) return;
+      if (epoch !== this.epoch) {
+        // A bare `return` here was silent (round 2, found by review): when
+        // this guard is what stops the second paste, the log carried no
+        // record that it happened at all. A code only, same as every other
+        // line this feature logs.
+        void this.deps.logger.info("reply accept aborted", { reason: "epoch-superseded" });
+        return;
+      }
       const result = await this.deps.inject(text);
       if (!result.pasted) {
         // TextInjector already left the text in the clipboard on failure.

@@ -49,14 +49,24 @@ const DONE_ACTION = new RegExp(
 );
 // A lexical FAMILY, not the fixed multi-word phrase list this used to be:
 // a first-person state/possession head ("sono …", "ho …", the English
-// "I'm"/"I am"/"I've"/"I have" glosses) combined with a predicate expressed
-// as a lookahead — so the predicate itself is NOT consumed by the match and
-// stays available for hasInventedCommitment below to ground, the same way
-// hasInventedReason grounds whatever follows a causal connective. "impegnat
-// [oa]"/"occupat[oa]" are new (found by review: "sono impegnato con
-// un'altra cosa" used a head+predicate combination the old fixed list never
-// anticipated); the rest are the original entries, reorganized under their
-// heads instead of spelled out one whole phrase at a time.
+// "I'm"/"I am"/"I've"/"I have" glosses) combined with a predicate — captured
+// in a GROUP, not a lookahead (round 2, found by review): a lookahead is
+// zero-width, so it never becomes part of `m[0]`, and hasInventedCommitment
+// below used to ground "whatever follows the match to end of sentence",
+// which with a lookahead predicate meant "the predicate PLUS every ordinary
+// word left in the sentence" — on a realistic transcript, filler words
+// ("tutto", "giorno", "questa", "settimana", "cliente") outvoted the
+// invented predicate and 5 of 6 invented excuses survived, WORSE the longer
+// the transcript (more chances for a filler word to coincidentally appear).
+// Capturing the predicate means only the predicate itself is grounded now.
+// "impegnat[oa]"/"occupat[oa]" are new relative to the old fixed phrase list
+// (found by review round 1: "sono impegnato con un'altra cosa" used a
+// head+predicate combination the old list never anticipated); the rest are
+// the original entries' predicates, reorganized under their heads instead of
+// spelled out one whole phrase at a time. "out of office" and "altre
+// attività urgenti" have no head in the old list either, so they stay as
+// bare alternatives (group 4) — reintroduced verbatim after round 1 dropped
+// them by accident when the fixed list became a family.
 //
 // Deliberately curated, not a bare "sono anything"/"ho anything" wildcard: a
 // causal justification like "ho un carico di lavoro pesante" is the OTHER
@@ -66,7 +76,7 @@ const DONE_ACTION = new RegExp(
 // ACCEPT variant carrying that exact clause, which this file already has a
 // test asserting is "not this rule's business".
 const INVENTED_COMMITMENT =
-  /\b(?:sono|ho)(?=\s+(?:impegnat[oa]|occupat[oa]|in (?:riunione|ferie)|fuori sede|un altro impegno|una riunione|altre attivit[aà] urgenti))\b|\bi(?:'m| am)(?=\s+(?:busy|in a meeting|on leave|out of office))\b|\bi(?:'ve| have)(?=\s+another commitment)\b/iu;
+  /\b(?:sono|ho)\s+(impegnat[oa]|occupat[oa]|in (?:riunione|ferie)|fuori sede|un altro impegno|una riunione)\b|\bi(?:'m| am)\s+(busy|in a meeting|on leave)\b|\bi(?:'ve| have)\s+(another commitment)\b|\b(out of office|altre attivit[aà] urgenti)\b/iu;
 // Accent-insensitive: "\b" is ASCII-only in JS even under the "u" flag, so a
 // trailing "\b" right after an accented vowel ("perché", "poiché") never
 // matches — the match text is accent-stripped first (see hasInventedReason).
@@ -229,8 +239,13 @@ function digitTokens(s: string): string[] {
  * a context that only ever said "4.850"). A number is anchored only if it
  * equals — as a value, digits or words agreeing — one the context actually
  * stated.
+ *
+ * Exported: reply-coordinator.ts's isAlternativeGrounded reuses this exact
+ * value-membership check for the classifier's "alternative" strings (round
+ * 2, Important 2) — the SAME digit/percent/word-numeral handling, not a
+ * second copy of it.
  */
-function hasUnanchoredNumber(text: string, transcript: string): boolean {
+export function hasUnanchoredNumber(text: string, transcript: string): boolean {
   const ctxValues = new Set<number>([...digitTokens(transcript).map(Number), ...parseNumberWords(transcript)]);
   for (const d of digitTokens(text)) if (!ctxValues.has(Number(d))) return true;
   for (const n of parseNumberWords(text)) if (!ctxValues.has(n)) return true;
@@ -245,17 +260,17 @@ function contentWords(s: string): string[] {
   return (normalizeApostrophes(s).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().match(/\p{L}{4,}/gu) ?? []);
 }
 
-/** Shared by hasInventedReason and hasInventedCommitment below: find
- *  `trigger`'s first match, take whatever comes after it up to the end of
- *  the sentence, and say whether that clause's own content words are
- *  mostly absent from `transcript` — i.e. the model asserted a reason/claim
- *  the conversation never supported. The two rules differ only in what
- *  counts as "the model is about to state one": a causal connective for
- *  hasInventedReason, a first-person commitment head for
- *  hasInventedCommitment. A widened-but-empty-of-content match (e.g.
- *  "perché." with nothing after it) is left ungrounded-but-not-flagged —
- *  there is nothing to check, so this errs toward keeping, same as every
- *  other empty-clause case here. */
+/** Used by hasInventedReason: find `trigger`'s (a causal connective) first
+ *  match, take whatever comes after it up to the end of the sentence, and
+ *  say whether that clause's own content words are mostly absent from
+ *  `transcript` — i.e. the model asserted a reason the conversation never
+ *  supported. Safe to ground "everything after the match" here because the
+ *  connective itself IS fully consumed by the match (nothing of the reason
+ *  clause is left unconsumed the way a lookahead predicate would be — see
+ *  hasInventedCommitment below, which cannot reuse this function for exactly
+ *  that reason). A widened-but-empty-of-content match (e.g. "perché." with
+ *  nothing after it) is left ungrounded-but-not-flagged — there is nothing
+ *  to check, so this errs toward keeping. */
 function clauseUngrounded(text: string, trigger: RegExp, transcript: string): boolean {
   const stripped = text.normalize("NFD").replace(/\p{M}/gu, "");
   const m = trigger.exec(stripped);
@@ -275,13 +290,34 @@ function hasInventedReason(text: string, transcript: string): boolean {
 }
 
 /** A first-person commitment/state claim ("sono impegnato con un'altra
- *  cosa", "sono in riunione fino alle 15") whose own predicate is mostly
+ *  cosa", "sono in riunione fino alle 15") whose own PREDICATE is mostly
  *  absent from the transcript is one the model invented as an excuse; one
  *  the transcript actually supports (found by review: "so che sei in
- *  riunione fino alle 15, ma…" grounds "sono in riunione fino alle 15" at
- *  0.5+) is a legitimate decline and must be kept. */
+ *  riunione fino alle 15, ma…" grounds "in riunione" at 1.0) is a legitimate
+ *  decline and must be kept.
+ *
+ *  Grounds ONLY the captured predicate group (m[1]/m[2]/m[3]/m[4] — exactly
+ *  one is defined, depending which alternation branch matched), NOT
+ *  "everything after the match" the way clauseUngrounded does for a causal
+ *  connective (round 2, found by review): INVENTED_COMMITMENT's match is
+ *  just the head ("sono"/"ho"/…) plus the predicate that follows it, both
+ *  consumed into a group, so there is no unconsumed lookahead leftover to
+ *  worry about — but grounding the REST OF THE SENTENCE after the predicate
+ *  (as round 1 did, when the predicate was a lookahead and never entered
+ *  `m[0]` at all) let ordinary filler words ("tutto", "giorno", "questa",
+ *  "settimana", "cliente") outvote the invented predicate: on a realistic
+ *  transcript, 5 of 6 invented excuses survived, and WORSE the longer the
+ *  transcript (more chances for a filler word to coincidentally recur). */
 function hasInventedCommitment(text: string, transcript: string): boolean {
-  return clauseUngrounded(text, INVENTED_COMMITMENT, transcript);
+  const stripped = text.normalize("NFD").replace(/\p{M}/gu, "");
+  const m = INVENTED_COMMITMENT.exec(stripped);
+  if (!m) return false;
+  const predicate = m[1] ?? m[2] ?? m[3] ?? m[4] ?? "";
+  const cw = contentWords(predicate);
+  if (cw.length === 0) return false;
+  const ctx = new Set(contentWords(transcript));
+  const grounded = cw.filter((w) => ctx.has(w)).length;
+  return grounded / cw.length < 0.5;
 }
 
 /** Trailing punctuation and casing removed for exact comparison against a

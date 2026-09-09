@@ -194,14 +194,30 @@ async function main(): Promise<void> {
     });
   };
 
-  // Constructed here, ahead of the streaming-whisper block below, on
-  // purpose: its own stall handler references replyServerManager, and a
-  // `const` referenced by a closure that is registered before the `const`'s
-  // own declaration line throws ReferenceError until that line executes
-  // (TDZ) — found by review. The declaration only needs `modelManager` and
-  // `logger`, both already available above, so moving the whole
-  // construction ahead of the closure that captures it removes the race
-  // instead of papering over it with an optional-chained call.
+  // Both constructed here, ahead of the streaming-whisper block below, on
+  // purpose: its own stall handler references BOTH llmServer and
+  // replyServerManager, and a `const` referenced by a closure that is
+  // registered before the `const`'s own declaration line throws
+  // ReferenceError until that line executes (TDZ) — found by review, and
+  // (round 2) the same trap existed for llmServer too, left half-closed when
+  // only replyServerManager was moved. Neither construction has any
+  // dependency on anything computed below this point (llmServer needs only
+  // `llmModelPath` and `prefs.language`, both already resolved above;
+  // replyServerManager needs only `modelManager` and `logger`), so moving
+  // both ahead of the closure that captures them removes the race instead of
+  // papering over it with an optional-chained call.
+  const llmServer = new LLMServer({
+    binaryPath: LLAMA_SERVER_BIN,
+    modelPath: llmModelPath,
+    port: 18080,
+    contextSize: 1536,
+    // Prime the prefix cache with the actual cleanup template so the system
+    // instructions are already prefilled when the first dictation hits.
+    warmupPrompt: buildCleanupPrompt("test", prefs.language),
+    // Keep the GPU pipeline hot between dictations — without this every cleanup
+    // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
+    keepaliveMs: 20_000,
+  });
   const replyServerManager = new ReplyServerManager({
     createServer: (modelPath) =>
       new LLMServer({
@@ -218,6 +234,10 @@ async function main(): Promise<void> {
     modelManager,
     logger,
   });
+  // Both server managers exist now: from here on, a fatal startup error can
+  // release the model RAM and the reply port instead of leaking them across
+  // app.exit(1) (Important 3 — see the module-level declaration above).
+  stopServers = () => { llmServer.stop(); replyServerManager.stop(); };
 
   // Streaming Whisper via the in-process native addon. Model loads once
   // into a whisper_context that stays in RAM; each utterance is a
@@ -304,24 +324,8 @@ async function main(): Promise<void> {
     timeoutMs: 60_000,
   });
 
-  // Start the LLM server in the background. Model loads once, stays warm,
-  // per-cleanup latency drops from ~3-5s (cold spawn) to ~100-500ms.
-  const llmServer = new LLMServer({
-    binaryPath: LLAMA_SERVER_BIN,
-    modelPath: llmModelPath,
-    port: 18080,
-    contextSize: 1536,
-    // Prime the prefix cache with the actual cleanup template so the system
-    // instructions are already prefilled when the first dictation hits.
-    warmupPrompt: buildCleanupPrompt("test", prefs.language),
-    // Keep the GPU pipeline hot between dictations — without this every cleanup
-    // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
-    keepaliveMs: 20_000,
-  });
-  // Both server managers exist now: from here on, a fatal startup error can
-  // release the model RAM and the reply port instead of leaking them across
-  // app.exit(1) (Important 3 — see the module-level declaration above).
-  stopServers = () => { llmServer.stop(); replyServerManager.stop(); };
+  // llmServer itself is constructed earlier, above the streaming-whisper
+  // block (see the comment there) — it only gets started here.
   // Only run llama-server when LLM cleanup is enabled. With it off (whisper-only
   // mode) the model would just sit in RAM and its keepalive would contend with
   // whisper for the GPU every 20s — pure waste. Toggling the pref on at runtime

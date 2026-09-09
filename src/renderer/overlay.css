@@ -92,16 +92,22 @@ button.variant:hover { background: rgba(255, 255, 255, 0.16); }
 .variant .vlabel { flex-shrink: 0; opacity: 0.75; width: 104px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Important 7: what can be ACCEPTED must be READABLE. The filter admits
-   variants up to LENGTH_MAX = 280 chars (variant-filter.ts), but at this
-   column's ~265px width and 12px font, 2 lines shows only ~90 of them
-   (measured by review) — the rest was readable only in the `title` tooltip
-   on hover, so a variant could be accepted and pasted mostly unread. 8 lines
-   is sized for that same ~265px width and the SAME ~90-chars-per-2-lines
-   rate (280 / (90/2) ≈ 6.2, rounded up to 7, +1 line of cushion for the
-   less-than-ideal line breaks a real sentence takes versus that average).
-   SUGGEST_WINDOW_SIZE (overlay-bounds.ts) is grown to match. */
+   variants up to LENGTH_MAX = 280 chars (variant-filter.ts). The review's
+   ~90-chars-per-2-lines measurement (12px font) was taken at ~265px, but
+   this column is narrower: #suggest itself is 420px (:78 above), and net of
+   its own padding, the row's padding, the badge and the 104px label column,
+   .vtext is only ~232px wide — round 2, found by review; the earlier
+   comment here cited the wrong width. At ~232px the same rate gives ~300
+   gross characters over 8 lines against the 280-char maximum, a 6-7% margin
+   — real sentences don't wrap as efficiently as the average word length
+   this rate assumes, so a variant right at 280 chars with a few long words
+   could still lose its last line. 9 lines restores a comfortable margin.
+   SUGGEST_WINDOW_SIZE (overlay-bounds.ts) is out of this round's scope and
+   left unchanged at 480×520 — not independently re-verified here that a 9th
+   line still fits inside it without visual testing (round 2 constraints:
+   no GUI). */
 .variant .vtext { flex: 1; min-width: 0; display: -webkit-box;
-  -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
+  -webkit-line-clamp: 9; -webkit-box-orient: vertical; overflow: hidden; }
 #suggest .hint { margin-top: 8px; font-size: 10px; opacity: 0.45; }
 .state-reading .dot, .state-thinking .dot { background: #5e5ce6; animation: pulse 1s infinite; }
 .state-nothing .dot, .state-flash .dot { background: #8e8e93; }

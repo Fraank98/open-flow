@@ -118,6 +118,48 @@ describe("filterVariants — each rule, positive and negative", () => {
       expect(run([V("accept", "La prendo io perché ho un carico di lavoro leggero in questo periodo."), GOOD_B, GOOD_C]).dropped)
         .toEqual([]);
     });
+
+    // Round 2, found by review: hasInventedCommitment used to ground
+    // "predicate + everything left in the sentence" because the predicate
+    // was a lookahead, never consumed into m[0]. Ordinary filler words in
+    // the variant's own trailing clause ("tutto il giorno", "questa
+    // settimana") could then coincidentally recur in a LONGER transcript and
+    // outvote the invented predicate — on a realistic ~700-char transcript
+    // naming no commitment of the user's own, 5 of 6 invented excuses
+    // survived. Grounding only the CAPTURED predicate (not the trailing
+    // words) makes the verdict independent of transcript length.
+    it("stays invented-reason regardless of transcript length (the length-sensitivity bug)", () => {
+      const dilutingTurn = "\nINTERLOCUTORE (Marta): comunque non c'è tutto questo fretta, prendi il tempo che ti serve, fammi sapere entro il giorno.";
+      const longer = { ...CTX, transcript: CTX.transcript + dilutingTurn };
+      const excuses = [
+        "Non posso, sono in riunione tutto il giorno.",
+        "Non posso, sono in ferie questa settimana.",
+        "Non riesco, ho una riunione con il cliente.",
+        "Non posso adesso, sono impegnato con un altro cliente questa settimana.",
+        "Non ce la faccio, sono fuori sede tutto il giorno.",
+      ];
+      for (const text of excuses) {
+        expect(run([GOOD_A, V("decline", text), GOOD_C]).dropped, `short: ${text}`)
+          .toEqual([{ key: "decline", rule: "invented-reason" }]);
+        // Same excuse, longer transcript with only ordinary filler words
+        // added (no real commitment named): must NOT flip to kept.
+        expect(run([GOOD_A, V("decline", text), GOOD_C], longer).dropped, `long: ${text}`)
+          .toEqual([{ key: "decline", rule: "invented-reason" }]);
+      }
+      expect(run([V("accept", "I can't, I'm in a meeting all day."), GOOD_B, GOOD_C]).dropped)
+        .toEqual([{ key: "accept", rule: "invented-reason" }]);
+    });
+
+    // The two headless entries from the old fixed phrase list ("out of
+    // office", "altre attività urgenti") have no first-person head to pair
+    // with, so they stay bare alternatives in the regex rather than being
+    // lost when the list became a family (round 1 dropped them by accident).
+    it("still catches the two headless entries from the old fixed phrase list", () => {
+      expect(run([GOOD_A, V("decline", "Non posso, out of office fino a lunedì."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+      expect(run([GOOD_A, V("decline", "Non ce la faccio, ho altre attività urgenti."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
   });
 
   describe("REASON_KEYS: hasInventedReason's gating set (Important 6)", () => {
