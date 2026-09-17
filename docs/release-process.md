@@ -2,21 +2,43 @@
 
 ## Cutting a release
 
-1. Update the `version` field in `package.json` (e.g., `0.0.1` → `0.1.0`).
-2. Commit the version bump:
-   ```
-   git commit -am "chore: bump version to v0.1.0"
-   ```
-3. Tag and push:
-   ```
-   git tag v0.1.0
-   git push origin main
-   git push origin v0.1.0
-   ```
-4. GitHub Actions (`.github/workflows/release.yml`) will:
-   - Build the native binaries
-   - Run `electron-builder` to produce a `.dmg`
-   - Attach the `.dmg` to a GitHub Release for the tag
+Bump the version and merge. That's the whole procedure.
+
+1. In the PR that should ship, update the `version` field in `package.json`
+   (e.g. `0.2.0` → `0.2.1`).
+2. Merge the PR into `main`.
+
+On every push to `main`, `.github/workflows/release.yml` compares
+`package.json`'s version against the existing tags:
+
+- **Version has no tag yet** → it builds the `.dmg`, creates the `v<version>`
+  tag at that commit and publishes a GitHub Release with the `.dmg` attached
+  and auto-generated notes.
+- **Version already tagged** → it stops after a few seconds. Ordinary merges
+  that don't bump the version cost one cheap ubuntu job and never produce a
+  release.
+
+So the version bump *is* the release decision, and it is reviewable in the
+diff like any other change.
+
+### Still supported
+
+- **Tag by hand.** Pushing a `v*` tag releases that tag, exactly as before:
+  ```
+  git tag v0.2.1 && git push origin v0.2.1
+  ```
+  Use this to release a commit that is not the tip of `main`.
+- **Dry run.** A manual `workflow_dispatch` run builds the `.dmg` and uploads
+  it as a build artifact without publishing anything — for checking that the
+  build is healthy without cutting a release.
+
+### Why the tag is created by the release job
+
+Not by a separate "tag the commit" workflow: a tag pushed using the default
+`GITHUB_TOKEN` does not trigger further workflow runs, so a split design
+would create the tag and then sit there, never building the `.dmg`. The
+release job therefore creates the tag itself, through
+`softprops/action-gh-release`'s `tag_name`.
 
 ## Local packaging (no CI)
 
