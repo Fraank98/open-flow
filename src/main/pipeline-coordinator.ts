@@ -9,7 +9,14 @@ export type PipelineState =
   | "transcribing"
   | "cleaning"
   | "injecting"
-  | "error";
+  | "error"
+  | "paste-failed";
+
+// How long the "paste-failed" notice stays on screen before auto-returning to
+// idle. Longer than the 2000ms used for the generic "error" state: that one
+// is a short label ("Error"), this one is a full sentence
+// ("Paste failed — text in clipboard") and needs more time to actually read.
+export const PASTE_FAILED_NOTICE_MS = 4000;
 
 export interface TranscribeFn {
   (input: { wavBytes: Uint8Array; language: string }): Promise<{
@@ -77,7 +84,13 @@ export class PipelineCoordinator {
   }
 
   startRecording(): void {
-    if (this.state !== "idle") return;
+    // "error" and "paste-failed" are transient notices being displayed, not
+    // work in progress — refusing to start from them would silently eat a
+    // push-to-talk press for up to PASTE_FAILED_NOTICE_MS while the pill is
+    // still showing a stale message. The guarded auto-return timers for both
+    // states already no-op once the state has moved on (see below), so
+    // starting a new run out from under a pending notice is safe.
+    if (this.state !== "idle" && this.state !== "error" && this.state !== "paste-failed") return;
     this.cancelled = false;
     this.abortController = new AbortController();
     this.setState("recording");
@@ -237,7 +250,18 @@ export class PipelineCoordinator {
         return;
       }
       await this.deps.logger.info("pipeline done", { totalMs: Date.now() - totalStart });
-      this.setState("idle");
+      if (!r.pasted) {
+        // A genuine, unprompted paste failure (the cancel case already
+        // returned above). Show a transient notice instead of silently
+        // dropping back to idle — before this, the failure was invisible
+        // and the transcript just sat in the clipboard with no cue at all.
+        this.setState("paste-failed");
+        setTimeout(() => {
+          if (this.state === "paste-failed") this.setState("idle");
+        }, PASTE_FAILED_NOTICE_MS);
+      } else {
+        this.setState("idle");
+      }
     } catch (err) {
       await this.deps.logger.error("pipeline failure", {
         message: err instanceof Error ? err.message : String(err),

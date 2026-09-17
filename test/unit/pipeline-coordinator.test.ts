@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   PipelineCoordinator,
   PipelineState,
   CoordinatorDeps,
+  PASTE_FAILED_NOTICE_MS,
 } from "../../src/main/pipeline-coordinator.js";
 
 function makeDeps(overrides: Partial<CoordinatorDeps> = {}): CoordinatorDeps {
@@ -204,5 +205,165 @@ describe("PipelineCoordinator", () => {
     // the dictionary-corrected text, so inject gets "Slack." (capitalized + period).
     expect(deps.clean).not.toHaveBeenCalled();
     expect(deps.inject).toHaveBeenCalledWith("Slack.", expect.anything());
+  });
+
+  describe("paste-failed notice", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("enters 'paste-failed' on a genuine paste failure and auto-returns to idle after PASTE_FAILED_NOTICE_MS", async () => {
+      vi.useFakeTimers();
+      const deps = makeDeps({
+        inject: vi.fn(async () => ({ pasted: false, reason: "boom" })),
+      });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+
+      expect(coord.getState()).toBe<PipelineState>("paste-failed");
+
+      await vi.advanceTimersByTimeAsync(PASTE_FAILED_NOTICE_MS);
+      expect(coord.getState()).toBe<PipelineState>("idle");
+    });
+
+    it("does NOT enter 'paste-failed' when pasted:false was caused by a cancel — goes straight to idle", async () => {
+      vi.useFakeTimers();
+      let resolveInject!: (v: { pasted: boolean; reason?: string }) => void;
+      const pending = new Promise<{ pasted: boolean; reason?: string }>((resolve) => {
+        resolveInject = resolve;
+      });
+      const deps = makeDeps({
+        inject: vi.fn(() => pending),
+      });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      const finishPromise = coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+
+      for (let i = 0; i < 30 && coord.getState() !== "injecting"; i++) {
+        await Promise.resolve();
+      }
+      expect(coord.getState()).toBe<PipelineState>("injecting");
+
+      coord.cancel();
+      resolveInject({ pasted: false, reason: "aborted" });
+      await finishPromise;
+
+      expect(coord.getState()).toBe<PipelineState>("idle");
+
+      // No lingering timer should later flip it to "paste-failed" or otherwise.
+      await vi.advanceTimersByTimeAsync(PASTE_FAILED_NOTICE_MS);
+      expect(coord.getState()).toBe<PipelineState>("idle");
+    });
+
+    it("a successful paste still goes straight to idle (no paste-failed detour)", async () => {
+      const deps = makeDeps(); // default inject resolves { pasted: true }
+      const coord = new PipelineCoordinator(deps);
+      const states: PipelineState[] = [];
+      coord.onStateChange((s) => states.push(s));
+
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+
+      expect(states).not.toContain<PipelineState>("paste-failed");
+      expect(coord.getState()).toBe<PipelineState>("idle");
+    });
+
+    it("startRecording works from 'paste-failed', and the pending auto-return timer does not knock the new run out of 'recording'", async () => {
+      vi.useFakeTimers();
+      const deps = makeDeps({
+        inject: vi.fn(async () => ({ pasted: false })),
+      });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+      expect(coord.getState()).toBe<PipelineState>("paste-failed");
+
+      coord.startRecording();
+      expect(coord.getState()).toBe<PipelineState>("recording");
+
+      // The guarded timer from the paste-failed run must no-op now that the
+      // state has moved on to a new "recording" run.
+      await vi.advanceTimersByTimeAsync(PASTE_FAILED_NOTICE_MS);
+      expect(coord.getState()).toBe<PipelineState>("recording");
+    });
+
+    it("startRecording works from 'error', and the pending auto-return timer does not knock the new run out of 'recording'", async () => {
+      vi.useFakeTimers();
+      const deps = makeDeps({
+        transcribe: vi.fn(async () => {
+          throw new Error("whisper crash");
+        }),
+      });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(8000), 16000, "auto");
+      expect(coord.getState()).toBe<PipelineState>("error");
+
+      coord.startRecording();
+      expect(coord.getState()).toBe<PipelineState>("recording");
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(coord.getState()).toBe<PipelineState>("recording");
+    });
+
+    it("still refuses startRecording during transcribing, cleaning, and injecting", async () => {
+      let resolveTranscribe!: (v: { text: string; language: string | null; durationMs: number }) => void;
+      let resolveClean!: (v: { text: string; usedFallback: boolean; durationMs: number }) => void;
+      let resolveInject!: (v: { pasted: boolean }) => void;
+      const deps = makeDeps({
+        transcribe: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveTranscribe = resolve;
+            }),
+        ),
+        clean: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveClean = resolve;
+            }),
+        ),
+        inject: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveInject = resolve;
+            }),
+        ),
+      });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      const finishPromise = coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+
+      // The state flips to "transcribing" a tick before deps.transcribe is
+      // actually invoked (an intervening logger.info await), so wait for the
+      // mock itself to be called rather than just the state.
+      for (let i = 0; i < 30 && (deps.transcribe as ReturnType<typeof vi.fn>).mock.calls.length === 0; i++) {
+        await Promise.resolve();
+      }
+      expect(coord.getState()).toBe<PipelineState>("transcribing");
+      coord.startRecording();
+      expect(coord.getState()).toBe<PipelineState>("transcribing");
+      resolveTranscribe({ text: "raw transcript", language: "en", durationMs: 1 });
+
+      for (let i = 0; i < 30 && coord.getState() !== "cleaning"; i++) {
+        await Promise.resolve();
+      }
+      expect(coord.getState()).toBe<PipelineState>("cleaning");
+      coord.startRecording();
+      expect(coord.getState()).toBe<PipelineState>("cleaning");
+      resolveClean({ text: "Cleaned transcript.", usedFallback: false, durationMs: 1 });
+
+      for (let i = 0; i < 30 && coord.getState() !== "injecting"; i++) {
+        await Promise.resolve();
+      }
+      expect(coord.getState()).toBe<PipelineState>("injecting");
+      coord.startRecording();
+      expect(coord.getState()).toBe<PipelineState>("injecting");
+      resolveInject({ pasted: true });
+
+      await finishPromise;
+      expect(coord.getState()).toBe<PipelineState>("idle");
+    });
   });
 });
