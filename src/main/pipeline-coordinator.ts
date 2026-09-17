@@ -24,7 +24,7 @@ export interface CleanFn {
 }
 
 export interface InjectFn {
-  (text: string): Promise<{ pasted: boolean; reason?: string }>;
+  (text: string, signal?: AbortSignal): Promise<{ pasted: boolean; reason?: string }>;
 }
 
 export interface CoordinatorLogger {
@@ -45,6 +45,9 @@ export class PipelineCoordinator {
   private state: PipelineState = "idle";
   private listeners: Array<(s: PipelineState) => void> = [];
   private cancelled = false;
+  // One AbortController per run, created fresh in startRecording so a
+  // cancelled run's abort can never leak into the next run's inject() call.
+  private abortController: AbortController | null = null;
 
   constructor(private readonly deps: CoordinatorDeps) {}
 
@@ -69,12 +72,18 @@ export class PipelineCoordinator {
   startRecording(): void {
     if (this.state !== "idle") return;
     this.cancelled = false;
+    this.abortController = new AbortController();
     this.setState("recording");
   }
 
   cancel(): void {
     if (this.state === "idle") return;
     this.cancelled = true;
+    // Abort whatever inject() call may be in flight so a stuck osascript
+    // gets killed immediately instead of firing a stray ⌘V later into
+    // whatever app happens to be focused by then. Harmless no-op if inject
+    // hasn't started yet or has already finished.
+    this.abortController?.abort();
     this.setState("idle");
   }
 
@@ -172,9 +181,16 @@ export class PipelineCoordinator {
       }
 
       this.setState("injecting");
-      const r = await this.deps.inject(textToInject);
+      const r = await this.deps.inject(textToInject, this.abortController?.signal);
       if (!r.pasted) {
+        // Also the landing spot for a cancel-triggered abort: TextInjector
+        // catches the kill and resolves pasted=false rather than throwing,
+        // so this is a warn, never the pipeline-failure error path below.
         await this.deps.logger.warn("paste failed, text left in clipboard", { reason: r.reason });
+      }
+      if (this.cancelled) {
+        this.setState("idle");
+        return;
       }
       await this.deps.logger.info("pipeline done", { totalMs: Date.now() - totalStart });
       this.setState("idle");

@@ -65,4 +65,54 @@ describe("TextInjector", () => {
     // after intermittent reports of prior-clipboard content being pasted.
     expect(deps.sleep).toHaveBeenCalledWith(500);
   });
+
+  it("passes the abort signal through to runPaste", async () => {
+    const controller = new AbortController();
+    const deps = makeDeps();
+    const injector = new TextInjector(deps);
+    await injector.inject("text", controller.signal);
+    expect(deps.runPaste).toHaveBeenCalledWith(controller.signal);
+  });
+
+  it("resolves to pasted=false without restoring clipboard when the signal aborts mid-paste", async () => {
+    // Simulates the real execFile behavior: on abort, Node kills the child
+    // and the promise rejects. runPaste never settles on its own here — only
+    // the abort listener rejects it, same as the real osascript child would.
+    const controller = new AbortController();
+    const deps = makeDeps({
+      runPaste: vi.fn(
+        (signal?: AbortSignal) =>
+          new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+          }),
+      ),
+    });
+    const injector = new TextInjector(deps);
+    const resultPromise = injector.inject("transcript text", controller.signal);
+    controller.abort();
+    const result = await resultPromise;
+
+    expect(result.pasted).toBe(false);
+    // clipboard must still hold the transcript — restore never ran
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
+    expect(deps.writeClipboard).toHaveBeenCalledWith("transcript text");
+    expect(deps.writeClipboard).not.toHaveBeenCalledWith("prior-clipboard");
+  });
+
+  it("returns pasted=false with reason and skips restore when the paste is killed by timeout", async () => {
+    // Simulates execFile's behavior when its `timeout` option fires: the
+    // child is killed and the promise rejects.
+    const deps = makeDeps({
+      runPaste: vi.fn(async () => {
+        throw new Error("Command failed: osascript ... (killed)");
+      }),
+    });
+    const injector = new TextInjector(deps);
+    const result = await injector.inject("transcript text");
+
+    expect(result.pasted).toBe(false);
+    expect(result.reason).toContain("killed");
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
+    expect(deps.writeClipboard).not.toHaveBeenCalledWith("prior-clipboard");
+  });
 });

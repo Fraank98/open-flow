@@ -51,7 +51,7 @@ describe("PipelineCoordinator", () => {
     ]);
     expect(deps.transcribe).toHaveBeenCalledOnce();
     expect(deps.clean).toHaveBeenCalledWith("raw transcript", expect.anything());
-    expect(deps.inject).toHaveBeenCalledWith("Cleaned transcript.");
+    expect(deps.inject).toHaveBeenCalledWith("Cleaned transcript.", expect.anything());
   });
 
   it("transitions to error when transcribe throws", async () => {
@@ -126,7 +126,68 @@ describe("PipelineCoordinator", () => {
       useLlmCleanup: false,
       dictionary: ["Slack"],
     });
-    expect(deps.inject).toHaveBeenCalledWith("ho usato Slack");
+    expect(deps.inject).toHaveBeenCalledWith("ho usato Slack", expect.anything());
+  });
+
+  it("aborts the injector's signal and does not log pipeline success when cancelled during injecting", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let resolveInject!: (v: { pasted: boolean; reason?: string }) => void;
+    const pending = new Promise<{ pasted: boolean; reason?: string }>((resolve) => {
+      resolveInject = resolve;
+    });
+    const deps = makeDeps({
+      inject: vi.fn((_text: string, signal?: AbortSignal) => {
+        capturedSignal = signal;
+        return pending;
+      }),
+    });
+    const coord = new PipelineCoordinator(deps);
+    const states: PipelineState[] = [];
+    coord.onStateChange((s) => states.push(s));
+
+    coord.startRecording();
+    const finishPromise = coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+
+    // Drain microtasks (no real timers) until the pipeline has reached
+    // "injecting" and is awaiting our controlled `pending` promise.
+    for (let i = 0; i < 30 && !states.includes("injecting"); i++) {
+      await Promise.resolve();
+    }
+    expect(states).toContain<PipelineState>("injecting");
+    expect(deps.inject).toHaveBeenCalledOnce();
+
+    coord.cancel();
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(coord.getState()).toBe<PipelineState>("idle");
+
+    // Simulate the real TextInjector's behavior once osascript is killed by
+    // the abort: it resolves to pasted=false, it never rejects.
+    resolveInject({ pasted: false, reason: "aborted" });
+    await finishPromise;
+
+    expect(coord.getState()).toBe<PipelineState>("idle");
+    expect(deps.logger.info).not.toHaveBeenCalledWith("pipeline done", expect.anything());
+    expect(deps.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("uses a fresh abort controller per run so a cancelled run does not poison the next", async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const deps = makeDeps({
+      inject: vi.fn((_text: string, signal?: AbortSignal) => {
+        signals.push(signal);
+        return Promise.resolve({ pasted: true });
+      }),
+    });
+    const coord = new PipelineCoordinator(deps);
+
+    coord.startRecording();
+    coord.cancel(); // aborts the first run's controller before it ever injects
+
+    coord.startRecording();
+    await coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
   });
 
   it("applies dictionary correction on the short-word lightTouchUp path", async () => {
@@ -142,6 +203,6 @@ describe("PipelineCoordinator", () => {
     // "slack" is a short single word → LLM is skipped and lightTouchUp runs on
     // the dictionary-corrected text, so inject gets "Slack." (capitalized + period).
     expect(deps.clean).not.toHaveBeenCalled();
-    expect(deps.inject).toHaveBeenCalledWith("Slack.");
+    expect(deps.inject).toHaveBeenCalledWith("Slack.", expect.anything());
   });
 });

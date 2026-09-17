@@ -1,10 +1,27 @@
 import { clipboard } from "electron";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileP = promisify(execFile);
+
+/**
+ * How long to give the ⌘V keystroke before giving up. System Events can go
+ * unresponsive on its own (observed in production logs as `media-control
+ * pause failed` WARNs at the same instants) and an un-timed-out osascript
+ * call then never resolves — the exec callback simply never fires, so
+ * `inject()` never settles and PipelineCoordinator.finishWithAudio awaits it
+ * forever with the overlay stuck on "Pasting…". 3000ms matches the timeout
+ * already used for AppleScript calls in media-control.ts. On timeout (or an
+ * external abort, see `signal` below) Node kills the child process itself —
+ * that's the point: no stray ⌘V fires later into whatever app happens to be
+ * focused by then.
+ */
+export const PASTE_TIMEOUT_MS = 3000;
 
 export interface InjectorDeps {
   readClipboard: () => string;
   writeClipboard: (text: string) => void;
-  runPaste: () => Promise<void>;
+  runPaste: (signal?: AbortSignal) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
 }
 
@@ -16,13 +33,15 @@ export interface InjectResult {
 export class TextInjector {
   constructor(private readonly deps: InjectorDeps) {}
 
-  async inject(text: string): Promise<InjectResult> {
+  async inject(text: string, signal?: AbortSignal): Promise<InjectResult> {
     const prior = this.deps.readClipboard();
     this.deps.writeClipboard(text);
     try {
-      await this.deps.runPaste();
+      await this.deps.runPaste(signal);
     } catch (err) {
-      // Leave text in clipboard so the user can paste manually
+      // Leave text in clipboard so the user can paste manually. Covers both
+      // a genuine paste failure and a timeout/abort kill — either way the
+      // transcript must NOT be clobbered by restoring `prior`.
       return {
         pasted: false,
         reason: err instanceof Error ? err.message : String(err),
@@ -48,13 +67,13 @@ export function createDefaultTextInjector(): TextInjector {
   return new TextInjector({
     readClipboard: () => clipboard.readText(),
     writeClipboard: (text) => clipboard.writeText(text),
-    runPaste: () =>
-      new Promise<void>((resolve, reject) => {
-        exec(
-          `osascript -e 'tell application "System Events" to keystroke "v" using command down'`,
-          (err) => (err ? reject(err) : resolve()),
-        );
-      }),
+    runPaste: async (signal) => {
+      await execFileP(
+        "osascript",
+        ["-e", `tell application "System Events" to keystroke "v" using command down`],
+        { timeout: PASTE_TIMEOUT_MS, signal },
+      );
+    },
     sleep: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
   });
 }

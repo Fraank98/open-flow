@@ -307,7 +307,7 @@ async function main(): Promise<void> {
       }
       return llm.clean(raw, languageHint);
     },
-    inject: async (text) => injector.inject(text),
+    inject: async (text, signal) => injector.inject(text, signal),
     logger,
   });
 
