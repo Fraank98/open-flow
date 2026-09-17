@@ -13,8 +13,18 @@ const execFileP = promisify(execFile);
  * forever with the overlay stuck on "Pasting…". 3000ms matches the timeout
  * already used for AppleScript calls in media-control.ts. On timeout (or an
  * external abort, see `signal` below) Node kills the child process itself —
- * that's the point: no stray ⌘V fires later into whatever app happens to be
- * focused by then.
+ * that unwedges US, the pipeline and the overlay, so they recover instead of
+ * hanging forever. It does NOT recall the keystroke. `osascript` hands the
+ * Apple Event to System Events over its Mach port and then blocks waiting
+ * for the reply; SIGTERM only kills that waiting sender, it cannot un-send
+ * an event that is already sitting in System Events' queue. If System
+ * Events was merely wedged and later comes back on its own, it can still
+ * execute that queued ⌘V into whatever app happens to be focused by then —
+ * confirmed experimentally (SIGSTOP System Events, timeout-kill an
+ * osascript call mid-flight, SIGCONT System Events: the command still
+ * runs). So this timeout buys back a stuck pipeline/overlay, not a
+ * guarantee that the paste never lands; that hazard predates this fix and
+ * is unchanged by it.
  */
 export const PASTE_TIMEOUT_MS = 3000;
 
@@ -28,6 +38,15 @@ export interface InjectorDeps {
 export interface InjectResult {
   pasted: boolean;
   reason?: string;
+  // Diagnostic properties lifted off the underlying error, when there is
+  // one, so a log reader can tell apart a timeout kill (killed: true,
+  // signal: "SIGTERM", code: null), a cancel-triggered abort (errorName:
+  // "AbortError", code: "ABORT_ERR"), and a genuine silent non-zero exit
+  // (none of the above set) instead of grepping the message string.
+  killed?: boolean;
+  signal?: string | null;
+  code?: string | number | null;
+  errorName?: string;
 }
 
 export class TextInjector {
@@ -42,9 +61,18 @@ export class TextInjector {
       // Leave text in clipboard so the user can paste manually. Covers both
       // a genuine paste failure and a timeout/abort kill — either way the
       // transcript must NOT be clobbered by restoring `prior`.
+      const diag = err as {
+        killed?: boolean;
+        signal?: string | null;
+        code?: string | number | null;
+      };
       return {
         pasted: false,
         reason: err instanceof Error ? err.message : String(err),
+        killed: diag?.killed,
+        signal: diag?.signal,
+        code: diag?.code,
+        errorName: err instanceof Error ? err.name : undefined,
       };
     }
     // Wait long enough for the receiving app to actually READ the clipboard
