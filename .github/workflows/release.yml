@@ -2,22 +2,76 @@ name: Release
 
 on:
   push:
+    # A version bump that lands on main cuts the release by itself: the
+    # `decide` job below compares package.json's version against the existing
+    # tags. Pushes to main that don't change the version do nothing beyond
+    # that one cheap check.
+    branches: [main]
+    # Pushing a tag by hand still works and still releases — unchanged.
     tags:
       - "v*"
   # Allow manual runs (e.g. to validate the build without cutting a release).
-  # On a non-tag run the publish step is skipped; the DMG is still uploaded as
-  # a build artifact.
+  # On a workflow_dispatch run the publish step is skipped; the DMG is still
+  # uploaded as a build artifact.
   workflow_dispatch: {}
 
-# softprops/action-gh-release creates a GitHub Release, which needs write access
-# to repo contents. The repo's default workflow token is read-only, so grant the
-# scope explicitly here (otherwise the publish step fails with HTTP 403
-# "Resource not accessible by integration").
+# softprops/action-gh-release creates a GitHub Release (and, on a main push,
+# the tag that goes with it), which needs write access to repo contents. The
+# repo's default workflow token is read-only, so grant the scope explicitly
+# here (otherwise the publish step fails with HTTP 403 "Resource not
+# accessible by integration").
 permissions:
   contents: write
 
 jobs:
+  # Cheap gate so an ordinary main push doesn't spin up a macOS runner for a
+  # build nobody will publish. Runs in seconds on ubuntu.
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need the full tag list to know what's released
+
+      - name: Decide whether this run publishes, and under which tag
+        id: check
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run — build only, no publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "Tag push ${{ github.ref_name }} — publishing that tag."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # main push: release iff package.json's version has no tag yet.
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "${tag} already exists — no version bump on this push, nothing to release."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "package.json is at ${version} and ${tag} does not exist — cutting ${tag}."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          fi
+
   build-dmg:
+    needs: decide
+    # Build for a real release, or for a manual run used to validate the
+    # build. A main push with no version bump stops at `decide`.
+    if: needs.decide.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -55,13 +109,21 @@ jobs:
           path: release/*.dmg
           if-no-files-found: error
 
-      # Only publish a GitHub Release on a version tag push. Manual
-      # (workflow_dispatch) runs build and upload the artifact but do not
-      # publish, so they can't create a bogus branch-named release.
+      # On a tag push this publishes that tag; on a version-bump push to main
+      # it creates the tag at this commit and publishes it. Manual runs build
+      # and upload the artifact but never publish, so they can't create a
+      # bogus branch-named release.
+      #
+      # Note the tag is deliberately created HERE rather than by a separate
+      # "push a tag" workflow: a tag pushed with GITHUB_TOKEN does not trigger
+      # further workflow runs, so that split would build the tag and never
+      # release it.
       - name: Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.decide.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.decide.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: release/*.dmg
           draft: false
           prerelease: false

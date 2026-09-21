@@ -39,7 +39,12 @@ html, body {
   flex-shrink: 0;
 }
 .content { flex: 1; min-width: 0; overflow: hidden; }
-.label { font-size: 14px; }
+.label {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .partial {
   font-size: 11px;
   opacity: 0.65;
@@ -69,6 +74,9 @@ button#cancel:hover { background: rgba(255, 255, 255, 0.22); }
 .state-cleaning .dot { background: #34c759; }
 .state-injecting .dot { background: #007aff; }
 .state-error .dot { background: #ff3b30; }
+/* Distinct from .state-error's red: the text is safe in the clipboard, this
+   is a warning, not a crash. */
+.state-paste-failed .dot { background: #ff9500; }
 
 @keyframes pulse {
   0%, 100% { transform: scale(1); opacity: 1; }

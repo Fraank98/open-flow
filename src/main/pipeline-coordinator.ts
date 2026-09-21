@@ -9,7 +9,14 @@ export type PipelineState =
   | "transcribing"
   | "cleaning"
   | "injecting"
-  | "error";
+  | "error"
+  | "paste-failed";
+
+// How long the "paste-failed" notice stays on screen before auto-returning to
+// idle. Longer than the 2000ms used for the generic "error" state: that one
+// is a short label ("Error"), this one is a full sentence
+// ("Paste failed — text in clipboard") and needs more time to actually read.
+export const PASTE_FAILED_NOTICE_MS = 4000;
 
 export interface TranscribeFn {
   (input: { wavBytes: Uint8Array; language: string }): Promise<{
@@ -24,7 +31,14 @@ export interface CleanFn {
 }
 
 export interface InjectFn {
-  (text: string): Promise<{ pasted: boolean; reason?: string }>;
+  (text: string, signal?: AbortSignal): Promise<{
+    pasted: boolean;
+    reason?: string;
+    killed?: boolean;
+    signal?: string | null;
+    code?: string | number | null;
+    errorName?: string;
+  }>;
 }
 
 export interface CoordinatorLogger {
@@ -45,6 +59,9 @@ export class PipelineCoordinator {
   private state: PipelineState = "idle";
   private listeners: Array<(s: PipelineState) => void> = [];
   private cancelled = false;
+  // One AbortController per run, created fresh in startRecording so a
+  // cancelled run's abort can never leak into the next run's inject() call.
+  private abortController: AbortController | null = null;
 
   constructor(private readonly deps: CoordinatorDeps) {}
 
@@ -67,14 +84,34 @@ export class PipelineCoordinator {
   }
 
   startRecording(): void {
-    if (this.state !== "idle") return;
+    // "error" and "paste-failed" are transient notices being displayed, not
+    // work in progress — refusing to start from them would silently eat a
+    // push-to-talk press for up to PASTE_FAILED_NOTICE_MS while the pill is
+    // still showing a stale message. The guarded auto-return timers for both
+    // states already no-op once the state has moved on (see below), so
+    // starting a new run out from under a pending notice is safe.
+    if (this.state !== "idle" && this.state !== "error" && this.state !== "paste-failed") return;
     this.cancelled = false;
+    this.abortController = new AbortController();
     this.setState("recording");
   }
 
   cancel(): void {
     if (this.state === "idle") return;
     this.cancelled = true;
+    // Abort whatever inject() call may be in flight so a stuck osascript
+    // gets killed immediately and the pipeline/overlay un-wedge instead of
+    // sitting on "Pasting…" until the 3000ms timeout would eventually have
+    // fired on its own. This does NOT guarantee the ⌘V never lands: killing
+    // osascript frees us, the sender, but osascript had already handed the
+    // Apple Event to System Events' Mach port and was merely blocked
+    // waiting for the reply — if System Events was wedged and later
+    // recovers, it may still execute that queued keystroke into whatever
+    // app is focused by then. Same pre-existing hazard documented at
+    // length on PASTE_TIMEOUT_MS in text-injector.ts; this abort is about
+    // un-wedging us, not about recalling the event. Harmless no-op if
+    // inject hasn't started yet or has already finished.
+    this.abortController?.abort();
     this.setState("idle");
   }
 
@@ -172,12 +209,59 @@ export class PipelineCoordinator {
       }
 
       this.setState("injecting");
-      const r = await this.deps.inject(textToInject);
+      const r = await this.deps.inject(textToInject, this.abortController?.signal);
       if (!r.pasted) {
-        await this.deps.logger.warn("paste failed, text left in clipboard", { reason: r.reason });
+        // Also the landing spot for a cancel-triggered abort: TextInjector
+        // catches the kill and resolves pasted=false rather than throwing,
+        // so this never reaches the pipeline-failure error path below.
+        // A user cancel is expected and not a failure, so it must not be
+        // logged as a warning — branch on `cancelled` and log it at info
+        // instead, keeping the warn string reserved for a genuine,
+        // unprompted paste failure. Either way, pass along the diagnostic
+        // fields TextInjector lifted off the error so a log reader can
+        // tell a timeout kill (killed/signal set), a cancel abort
+        // (errorName "AbortError"), and a silent non-zero exit (neither)
+        // apart instead of guessing from the message string.
+        const meta = {
+          reason: r.reason,
+          killed: r.killed,
+          signal: r.signal,
+          code: r.code,
+          errorName: r.errorName,
+        };
+        if (this.cancelled) {
+          await this.deps.logger.info("paste aborted by cancel, text left in clipboard", meta);
+        } else {
+          await this.deps.logger.warn("paste failed, text left in clipboard", meta);
+        }
+      } else if (this.cancelled) {
+        // Cancel can also arrive after inject() already resolved
+        // pasted=true — e.g. during TextInjector's 500ms post-paste
+        // clipboard-restore sleep, which doesn't listen to the abort
+        // signal at all. Without this branch that dictation ends with no
+        // terminal log line whatsoever: "cleaned" appears and then
+        // nothing, which reads in the logs like the pipeline silently
+        // died rather than a user cancel that happened to land just after
+        // a successful paste.
+        await this.deps.logger.info("cancelled after paste completed", { pasted: true });
+      }
+      if (this.cancelled) {
+        this.setState("idle");
+        return;
       }
       await this.deps.logger.info("pipeline done", { totalMs: Date.now() - totalStart });
-      this.setState("idle");
+      if (!r.pasted) {
+        // A genuine, unprompted paste failure (the cancel case already
+        // returned above). Show a transient notice instead of silently
+        // dropping back to idle — before this, the failure was invisible
+        // and the transcript just sat in the clipboard with no cue at all.
+        this.setState("paste-failed");
+        setTimeout(() => {
+          if (this.state === "paste-failed") this.setState("idle");
+        }, PASTE_FAILED_NOTICE_MS);
+      } else {
+        this.setState("idle");
+      }
     } catch (err) {
       await this.deps.logger.error("pipeline failure", {
         message: err instanceof Error ? err.message : String(err),
