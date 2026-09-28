@@ -282,7 +282,7 @@ async function main(): Promise<void> {
     endpoint: llmServer.getEndpoint(),
     timeoutMs: 15_000,
   });
-  const injector = createDefaultTextInjector();
+  const injector = createDefaultTextInjector(logger);
   const orchestrator = new AudioOrchestrator({ maxDurationMs: 60_000, sampleRate: SAMPLE_RATE });
 
   const coordinator = new PipelineCoordinator({

@@ -1,13 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { execFile } from "node:child_process";
-import { TextInjector, InjectorDeps, createDefaultTextInjector, PASTE_TIMEOUT_MS } from "../../src/main/text-injector.js";
+import {
+  TextInjector,
+  InjectorDeps,
+  createDefaultTextInjector,
+  PASTE_TIMEOUT_MS,
+  CLIPBOARD_READ_TIMEOUT_MS,
+} from "../../src/main/text-injector.js";
 
 // No test in this repo mocks electron yet. createDefaultTextInjector imports
-// `clipboard` from it at module scope purely to read/restore the prior
-// clipboard value, which this suite doesn't care about — it's here only so
-// that importing text-injector.ts (and therefore constructing the real
-// execFileP wired to the mocked node:child_process below) doesn't blow up
-// under vitest's Node environment, which has no real electron runtime.
+// `clipboard` from it at module scope purely to WRITE the clipboard (both the
+// transcript payload and, on the happy path, the restored prior value) —
+// which this suite doesn't care about — it's here only so that importing
+// text-injector.ts (and therefore constructing the real execFileP wired to
+// the mocked node:child_process below) doesn't blow up under vitest's Node
+// environment, which has no real electron runtime. Reading the prior
+// clipboard no longer goes through `clipboard.readText()` at all (that was
+// the synchronous main-thread AppKit call that could block for minutes on a
+// stuck pasteboard promise) — it now shells out to `pbpaste` instead, see
+// the node:child_process mock below.
 vi.mock("electron", () => ({
   clipboard: {
     readText: vi.fn(() => "prior-clipboard"),
@@ -18,10 +29,9 @@ vi.mock("electron", () => ({
 // Every other test in this file drives TextInjector through injected fake
 // deps (see makeDeps below) and never touches real execFile, so mocking
 // node:child_process here only affects the "createDefaultTextInjector"
-// describe block further down — it pins the actual execFile call that
-// production code makes, which no test previously exercised (deleting the
-// `timeout:` key from createDefaultTextInjector still passed every test in
-// this repo before this block was added).
+// describe block further down — it pins the actual execFile calls that
+// production code makes (both the `pbpaste` clipboard read and the
+// `osascript` paste), which no test previously exercised.
 vi.mock("node:child_process", () => ({
   execFile: vi.fn(
     (
@@ -38,10 +48,14 @@ vi.mock("node:child_process", () => ({
 function makeDeps(overrides: Partial<InjectorDeps> = {}): InjectorDeps {
   const clip = { value: "prior-clipboard" };
   return {
-    readClipboard: vi.fn(() => clip.value),
+    readClipboard: vi.fn(async () => clip.value),
     writeClipboard: vi.fn((v: string) => { clip.value = v; }),
     runPaste: vi.fn(async () => undefined),
     sleep: vi.fn(async () => undefined),
+    logger: {
+      info: vi.fn(async () => undefined),
+      warn: vi.fn(async () => undefined),
+    },
     ...overrides,
   };
 }
@@ -49,6 +63,10 @@ function makeDeps(overrides: Partial<InjectorDeps> = {}): InjectorDeps {
 describe("TextInjector", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("writes the text to clipboard before invoking paste", async () => {
@@ -123,6 +141,11 @@ describe("TextInjector", () => {
     });
     const injector = new TextInjector(deps);
     const resultPromise = injector.inject("transcript text", controller.signal);
+    // The prior-clipboard read now happens off-thread (async) before the
+    // paste is dispatched, so runPaste is no longer necessarily called
+    // synchronously within this task — wait for it (and its abort listener)
+    // to actually be registered before aborting.
+    await vi.waitFor(() => expect(deps.runPaste).toHaveBeenCalled());
     controller.abort();
     const result = await resultPromise;
 
@@ -182,11 +205,167 @@ describe("TextInjector", () => {
     expect(result.code).toBe("ABORT_ERR");
     expect(result.killed).toBeUndefined();
   });
+
+  // --- Off-thread, bounded clipboard read (the deadlock fix) ---------------
+  //
+  // Production symptom: readClipboard used to be `clipboard.readText()`, a
+  // synchronous AppKit call on the main thread. When the general pasteboard
+  // holds a promised item whose owner never delivers (observed: Xcode's
+  // DeviceHub/CoreDevice clipboard sync with an iOS simulator booted), that
+  // call can block the ENTIRE main thread for up to 120s — Node event loop,
+  // IPC, NSEvent monitor, everything — leaving the overlay frozen on
+  // "Pasting…" with no way to recover. The fix reads the prior clipboard out
+  // of process via `pbpaste`, bounded by our OWN AbortController (not
+  // execFile's `timeout` option — that only settles once the child actually
+  // exits, and a child wedged in Mach IPC on an undelivered pasteboard
+  // promise may never exit; `signal.abort()` on a still-alive child settles
+  // the promise immediately instead). If the read doesn't answer within
+  // CLIPBOARD_READ_TIMEOUT_MS, we give up on it and skip the restore rather
+  // than risk restoring a wrong/stale value.
+
+  it("calls the injected clipboard reader with a signal, bounded by its own timeout, and does not hang forever even if the reader never settles on its own", async () => {
+    vi.useFakeTimers();
+    let capturedSignal: AbortSignal | undefined;
+    const deps = makeDeps({
+      readClipboard: vi.fn((signal?: AbortSignal) => {
+        capturedSignal = signal;
+        // Simulates a `pbpaste` child truly wedged in Mach IPC: it never
+        // resolves or rejects on its own. Only our own abort() must be able
+        // to settle this.
+        return new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR" })),
+          );
+        });
+      }),
+    });
+    const injector = new TextInjector(deps);
+
+    const resultPromise = injector.inject("text");
+    // Flush pending microtasks (the logger.info await, etc.) under fake
+    // timers so readClipboard has actually been invoked and its abort
+    // listener registered, without yet advancing past the read timeout.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(deps.readClipboard).toHaveBeenCalledWith(expect.any(AbortSignal));
+    expect(capturedSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_READ_TIMEOUT_MS);
+
+    expect(capturedSignal?.aborted).toBe(true);
+
+    const result = await resultPromise;
+    expect(result.pasted).toBe(true);
+  });
+
+  it("still pastes and does NOT restore anything when the clipboard read aborts/times out", async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({
+      readClipboard: vi.fn(
+        (signal?: AbortSignal) =>
+          new Promise<string>((_resolve, reject) => {
+            signal?.addEventListener("abort", () =>
+              reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR" })),
+            );
+          }),
+      ),
+    });
+    const injector = new TextInjector(deps);
+
+    const resultPromise = injector.inject("transcript text");
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_READ_TIMEOUT_MS);
+    const result = await resultPromise;
+
+    expect(result.pasted).toBe(true);
+    // Only the payload write — restore must be skipped because we never
+    // found out what the prior clipboard actually held.
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
+    expect(deps.writeClipboard).toHaveBeenCalledWith("transcript text");
+    expect(deps.runPaste).toHaveBeenCalledOnce();
+  });
+
+  // Note: a third test asserting inject() "resolves, doesn't hang" on abort
+  // used to live here. It's dropped — both tests above already `await
+  // resultPromise` to completion without a catch/timeout escape hatch, so
+  // they already prove resolution; a dedicated test for that added nothing
+  // beyond what #10/#11 already pin.
+
+  it("logs read-failure diagnostics (errorName/code/killed/signal) when the clipboard read fails", async () => {
+    // Item 3: the catch around readClipboard used to swallow the error
+    // completely, so a production log could never distinguish "our own
+    // CLIPBOARD_READ_TIMEOUT_MS fired" from "pbpaste exited non-zero" from
+    // "ENOENT". Pin that the same diagnostic shape lifted off paste errors
+    // (see InjectResult) is also logged here.
+    const deps = makeDeps({
+      readClipboard: vi.fn(async () => {
+        throw Object.assign(new Error("The operation was aborted"), {
+          name: "AbortError",
+          code: "ABORT_ERR",
+        });
+      }),
+    });
+    const injector = new TextInjector(deps);
+    await injector.inject("text");
+
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/clipboard/i),
+      expect.objectContaining({ errorName: "AbortError", code: "ABORT_ERR" }),
+    );
+  });
+
+  it('restores a legitimately empty prior clipboard ("" is restorable, unlike null)', async () => {
+    // This is the exact behaviour the `string | null` split on `prior`
+    // exists to protect: an empty clipboard is a valid, restorable value,
+    // distinct from "we couldn't determine the value" (null). Nothing
+    // previously pinned it.
+    const deps = makeDeps({ readClipboard: vi.fn(async () => "") });
+    const injector = new TextInjector(deps);
+    await injector.inject("Hello.");
+
+    expect(deps.writeClipboard).toHaveBeenNthCalledWith(1, "Hello.");
+    expect(deps.writeClipboard).toHaveBeenNthCalledWith(2, "");
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips restore (but still pastes) when the clipboard read rejects for a non-abort reason", async () => {
+    // Distinct from the abort/timeout path covered above: this is an
+    // ordinary read failure with no AbortError shape at all (ENOENT,
+    // non-zero exit, maxBuffer exceeded, RTF sniff rejection, ...). Only the
+    // abort path was previously covered, three times over.
+    const deps = makeDeps({
+      readClipboard: vi.fn(async () => {
+        throw Object.assign(new Error("Command failed: pbpaste\n"), { code: 1 });
+      }),
+    });
+    const injector = new TextInjector(deps);
+    const result = await injector.inject("transcript text");
+
+    expect(result.pasted).toBe(true);
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
+    expect(deps.writeClipboard).toHaveBeenCalledWith("transcript text");
+  });
+
+  it("logs immediately before and after reading the prior clipboard", async () => {
+    const deps = makeDeps();
+    const injector = new TextInjector(deps);
+    await injector.inject("text");
+
+    const infoCalls = (deps.logger.info as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const beforeIdx = infoCalls.findIndex((msg: string) => /clipboard/i.test(msg) && /read/i.test(msg));
+    expect(beforeIdx).toBeGreaterThanOrEqual(0);
+    const afterIdx = infoCalls.findIndex(
+      (msg: string, i: number) => i > beforeIdx && /clipboard/i.test(msg) && /read/i.test(msg),
+    );
+    expect(afterIdx).toBeGreaterThan(beforeIdx);
+  });
 });
 
 describe("createDefaultTextInjector", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.mocked(execFile).mockClear();
+    const { clipboard } = await import("electron");
+    vi.mocked(clipboard.writeText).mockClear();
+    vi.mocked(clipboard.readText).mockClear();
   });
 
   it("calls execFile with the real osascript keystroke script and the paste timeout/signal", async () => {
@@ -196,16 +375,85 @@ describe("createDefaultTextInjector", () => {
     // asserts against the mocked node:child_process execFile directly, so
     // it fails if that option (or the script text, or the signal wiring)
     // regresses.
-    const injector = createDefaultTextInjector();
+    const logger = { info: vi.fn(async () => undefined), warn: vi.fn(async () => undefined) };
+    const injector = createDefaultTextInjector(logger);
     const controller = new AbortController();
 
     await injector.inject("hello", controller.signal);
 
     expect(execFile).toHaveBeenCalledWith(
-      "osascript",
+      "/usr/bin/osascript",
       ["-e", 'tell application "System Events" to keystroke "v" using command down'],
       expect.objectContaining({ timeout: PASTE_TIMEOUT_MS, signal: controller.signal }),
       expect.any(Function),
     );
+  });
+
+  it("reads the prior clipboard via pbpaste instead of the synchronous clipboard.readText()", async () => {
+    // clipboard.readText() is the AppKit call that can block the whole main
+    // thread for up to 120s on a stuck pasteboard promise (see production
+    // logs). The default injector must never call it.
+    const { clipboard } = await import("electron");
+    const logger = { info: vi.fn(async () => undefined), warn: vi.fn(async () => undefined) };
+    const injector = createDefaultTextInjector(logger);
+
+    await injector.inject("hello");
+
+    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(execFile).toHaveBeenCalledWith(
+      "/usr/bin/pbpaste",
+      expect.anything(),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.any(Function),
+    );
+  });
+
+  it("pins LC_ALL=en_US.UTF-8 and a 32MB maxBuffer on the pbpaste execFile call", async () => {
+    // Item 1 + item 4 regression guard, following the same pattern as the
+    // osascript `timeout:` test above (drives the real factory function
+    // against the mocked node:child_process execFile so option deletion is
+    // caught). (1) pbpaste's output encoding comes from locale env vars —
+    // without LC_ALL pinned to a UTF-8 locale it can silently emit MacRoman,
+    // which Node then mis-decodes as UTF-8 with no error (accented
+    // characters turn to mojibake). LC_ALL specifically, not LANG, because
+    // LC_ALL always wins. (2) execFile's default maxBuffer is 1MB; without
+    // raising it, a clipboard over that size rejects and the restore is
+    // silently skipped.
+    const logger = { info: vi.fn(async () => undefined), warn: vi.fn(async () => undefined) };
+    const injector = createDefaultTextInjector(logger);
+
+    await injector.inject("hello");
+
+    expect(execFile).toHaveBeenCalledWith(
+      "/usr/bin/pbpaste",
+      expect.anything(),
+      expect.objectContaining({
+        env: expect.objectContaining({ LC_ALL: "en_US.UTF-8" }),
+        maxBuffer: 32 * 1024 * 1024,
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("rejects the read (and skips restore) when pbpaste returns RTF markup instead of plain text", async () => {
+    // Item 2: against a genuinely RTF-only pasteboard, `man pbpaste` says
+    // `-Prefer txt` does NOT guarantee plain text back — it falls back to
+    // whatever format IS available, so it still returns the raw RTF source.
+    // Restoring that verbatim would leave the user's clipboard holding
+    // literal "{\rtf1..." markup instead of the rich content they copied.
+    vi.mocked(execFile).mockImplementationOnce(((...args: unknown[]) => {
+      const callback = args[3] as (err: unknown, result: { stdout: string; stderr: string }) => void;
+      callback(null, { stdout: "{\\rtf1\\ansi\\ansicpg1252 Hello}", stderr: "" });
+    }) as unknown as typeof execFile);
+    const { clipboard } = await import("electron");
+    const logger = { info: vi.fn(async () => undefined), warn: vi.fn(async () => undefined) };
+    const injector = createDefaultTextInjector(logger);
+
+    await injector.inject("hello");
+
+    // Only the transcript payload should have been written — the RTF source
+    // must never be written back as if it were plain text.
+    expect(clipboard.writeText).toHaveBeenCalledTimes(1);
+    expect(clipboard.writeText).toHaveBeenCalledWith("hello");
   });
 });
