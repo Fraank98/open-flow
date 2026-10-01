@@ -323,6 +323,10 @@ Napi::Value Keepalive(const Napi::CallbackInfo& info) {
   // the encoder), which would NOT warm the GPU. 1.5s is safely above that
   // threshold and forces a real encoder pass (~1s) that keeps the Metal
   // pipeline/clocks hot. Cost is ~constant regardless of exact length here.
+  // Like Finalize(): this pass must run to completion to actually warm the
+  // GPU. The host only queues it when nothing else is in flight, so there is
+  // no pass left that a stale abort (raised by cancel()) should still stop.
+  g_abort.store(false, std::memory_order_relaxed);
   std::vector<float> silence(24000, 0.0f);
   auto * worker = new ProcessWorker(cb, std::move(silence), "en", "", /*useVad=*/false);
   worker->Queue();
