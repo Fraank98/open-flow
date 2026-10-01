@@ -177,12 +177,21 @@ export class StreamingWhisperRunner extends EventEmitter {
   }
 
   /** Discard the current utterance. Stops the chunk loop. Any in-flight
-   *  inference's result is suppressed via the `cancelled` flag. */
+   *  inference's result is suppressed via the `cancelled` flag, and the pass
+   *  itself is aborted so the runner (and the host's busy flag) frees up right
+   *  away instead of waiting for whisper_full to run to completion. */
   cancel(): void {
     this.cancelled = true;
     this.active = false;
     this.stopChunkLoop();
     this.committed = "";
+    // Abort whatever native pass is running — the final pass in particular:
+    // without this a cancel from the overlay during finalize() sits through the
+    // whole pass while the host keeps the pipeline busy, so a dictation started
+    // right after the cancel is ignored. Only raise the flag when a pass is
+    // actually in flight: raising it idle would only make the next keepalive
+    // bail out for nothing.
+    if (this.inFlight) this.native.requestAbort();
   }
 
   /** Stop the chunk loop, wait for any in-flight tick to settle, then run
