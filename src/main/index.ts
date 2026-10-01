@@ -65,6 +65,16 @@ async function main(): Promise<void> {
   const logger = createLogger({ dir: LOG_DIR, debug: prefs.debugLogging, maxBytes: 5 * 1024 * 1024 });
   await logger.info("app starting", { setupComplete: prefs.setupComplete });
 
+  // Async event handlers (e.g. ptt.on("stop")) that throw produce a rejected
+  // promise nobody awaits; Node would drop it silently. Log it so such
+  // failures leave a trace instead of just a stuck UI.
+  process.on("unhandledRejection", (reason) => {
+    void logger.error("unhandled rejection", {
+      message: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+    });
+  });
+
   // Prevent macOS App Nap from suspending this background (menubar) app while
   // idle. App Nap throttles timers/threads and lets the GPU power down, which
   // intermittently makes the FIRST dictation after a long idle take 10-20s
@@ -452,6 +462,20 @@ async function main(): Promise<void> {
         spokenPunctuation: currentPrefs.spokenPunctuation,
         dictionary: currentPrefs.dictionary,
       });
+      menubar.setStatus("Idle");
+    } catch (err) {
+      // finishWithAudio has its own try/catch and never rethrows, so this
+      // only catches what escapes BEFORE it (EOS wait, snapshot, prefs load).
+      // EventEmitter ignores a rejected async handler, so without this the
+      // coordinator would stay in "recording" and the overlay on "Recording…"
+      // forever, with streaming finalize() never called. Reset everything.
+      await logger.error("stop handler failed", {
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      orchestrator.reset();
+      if (streamingWhisper) streamingWhisper.cancel();
+      coordinator.cancel();
       menubar.setStatus("Idle");
     } finally {
       pipelineBusy = false;
