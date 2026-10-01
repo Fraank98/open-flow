@@ -65,6 +65,22 @@ async function main(): Promise<void> {
   const logger = createLogger({ dir: LOG_DIR, debug: prefs.debugLogging, maxBytes: 5 * 1024 * 1024 });
   await logger.info("app starting", { setupComplete: prefs.setupComplete });
 
+  // Async event handlers (e.g. ptt.on("stop")) that throw produce a rejected
+  // promise nobody awaits; Node would drop it silently. Log it so such
+  // failures leave a trace instead of just a stuck UI.
+  process.on("unhandledRejection", (reason) => {
+    // Registering a listener suppresses Node's default stderr print, so keep it.
+    // eslint-disable-next-line no-console
+    console.error("unhandled rejection", reason);
+    // Swallow logger failures: a rejection here would re-enter this handler.
+    void logger
+      .error("unhandled rejection", {
+        message: reason instanceof Error ? reason.message : String(reason),
+        stack: reason instanceof Error ? reason.stack : undefined,
+      })
+      .catch(() => undefined);
+  });
+
   // Prevent macOS App Nap from suspending this background (menubar) app while
   // idle. App Nap throttles timers/threads and lets the GPU power down, which
   // intermittently makes the FIRST dictation after a long idle take 10-20s
@@ -355,6 +371,9 @@ async function main(): Promise<void> {
     await logger.info("pipeline:cancel from UI");
     recorderWin.webContents.send("audio:stop");
     orchestrator.reset();
+    // Stop the streaming chunk loop too, or a partial from this dictation
+    // leaks into the overlay of the next one.
+    if (streamingWhisper) streamingWhisper.cancel();
     coordinator.cancel();
     void mediaController.resume().catch(swallowMcError("resume"));
   });
@@ -453,6 +472,25 @@ async function main(): Promise<void> {
         dictionary: currentPrefs.dictionary,
       });
       menubar.setStatus("Idle");
+    } catch (err) {
+      // Reset FIRST: logger.error can reject (disk full, unwritable dir) and
+      // must never stop us from un-wedging the pipeline. finishWithAudio
+      // normally handles its own errors, so this mostly catches what escapes
+      // BEFORE it (EOS wait, snapshot, prefs load), but it can also rethrow
+      // if the logger throws inside its catch.
+      // EventEmitter ignores a rejected async handler, so without this the
+      // coordinator would stay in "recording" and the overlay on "Recording…"
+      // forever, with streaming finalize() never called.
+      orchestrator.reset();
+      if (streamingWhisper) streamingWhisper.cancel();
+      coordinator.cancel();
+      menubar.setStatus("Idle");
+      void logger
+        .error("stop handler failed", {
+          message: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        })
+        .catch(() => undefined);
     } finally {
       pipelineBusy = false;
       void mediaController.resume().catch(swallowMcError("resume"));
