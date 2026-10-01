@@ -5,7 +5,7 @@ export interface AudioOrchestratorOptions {
 
 export class AudioOrchestrator {
   private chunks: Float32Array[] = [];
-  private cachedTotal: number | null = 0;
+  private cachedTotal = 0;
   private readonly maxSamples: number;
 
   constructor(private readonly opts: AudioOrchestratorOptions) {
@@ -14,7 +14,7 @@ export class AudioOrchestrator {
 
   appendChunk(chunk: Float32Array): void {
     this.chunks.push(chunk);
-    this.cachedTotal = (this.cachedTotal ?? 0) + chunk.length;
+    this.cachedTotal += chunk.length;
     this.trimToMax();
   }
 
@@ -24,11 +24,6 @@ export class AudioOrchestrator {
   }
 
   totalSamples(): number {
-    if (this.cachedTotal === null) {
-      let n = 0;
-      for (const c of this.chunks) n += c.length;
-      this.cachedTotal = n;
-    }
     return this.cachedTotal;
   }
 
@@ -64,10 +59,11 @@ export class AudioOrchestrator {
       const overflow = this.totalSamples() - this.maxSamples;
       if (overflow >= first.length) {
         this.chunks.shift();
-        this.cachedTotal = null;
+        this.cachedTotal -= first.length;
       } else {
         this.chunks[0] = first.subarray(overflow);
-        this.cachedTotal = null;
+        // Must stay exact: snapshot() sizes its buffer from this count.
+        this.cachedTotal -= overflow;
         break;
       }
     }
