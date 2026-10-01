@@ -69,10 +69,16 @@ async function main(): Promise<void> {
   // promise nobody awaits; Node would drop it silently. Log it so such
   // failures leave a trace instead of just a stuck UI.
   process.on("unhandledRejection", (reason) => {
-    void logger.error("unhandled rejection", {
-      message: reason instanceof Error ? reason.message : String(reason),
-      stack: reason instanceof Error ? reason.stack : undefined,
-    });
+    // Registering a listener suppresses Node's default stderr print, so keep it.
+    // eslint-disable-next-line no-console
+    console.error("unhandled rejection", reason);
+    // Swallow logger failures: a rejection here would re-enter this handler.
+    void logger
+      .error("unhandled rejection", {
+        message: reason instanceof Error ? reason.message : String(reason),
+        stack: reason instanceof Error ? reason.stack : undefined,
+      })
+      .catch(() => undefined);
   });
 
   // Prevent macOS App Nap from suspending this background (menubar) app while
@@ -467,19 +473,24 @@ async function main(): Promise<void> {
       });
       menubar.setStatus("Idle");
     } catch (err) {
-      // finishWithAudio has its own try/catch and never rethrows, so this
-      // only catches what escapes BEFORE it (EOS wait, snapshot, prefs load).
+      // Reset FIRST: logger.error can reject (disk full, unwritable dir) and
+      // must never stop us from un-wedging the pipeline. finishWithAudio
+      // normally handles its own errors, so this mostly catches what escapes
+      // BEFORE it (EOS wait, snapshot, prefs load), but it can also rethrow
+      // if the logger throws inside its catch.
       // EventEmitter ignores a rejected async handler, so without this the
       // coordinator would stay in "recording" and the overlay on "Recording…"
-      // forever, with streaming finalize() never called. Reset everything.
-      await logger.error("stop handler failed", {
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
+      // forever, with streaming finalize() never called.
       orchestrator.reset();
       if (streamingWhisper) streamingWhisper.cancel();
       coordinator.cancel();
       menubar.setStatus("Idle");
+      void logger
+        .error("stop handler failed", {
+          message: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        })
+        .catch(() => undefined);
     } finally {
       pipelineBusy = false;
       void mediaController.resume().catch(swallowMcError("resume"));
