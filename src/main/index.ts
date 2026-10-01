@@ -459,8 +459,10 @@ async function main(): Promise<void> {
       const eosT0 = Date.now();
       // 500ms safety fallback in case the renderer hangs / crashes before
       // sending the ack — better to lose a partial sample than to wedge. The
-      // helper drops the listener on timeout, or a late/unrelated EOS would
-      // be consumed by it and short-circuit the next stop's wait.
+      // helper also drops its listener on timeout and clears the timer on EOS:
+      // a leftover once() listener would not steal a later EOS (emit reaches
+      // every listener), but listeners would pile up after repeated timeouts
+      // (MaxListenersExceededWarning) and the 500ms timer would stay pending.
       const eos = waitForEventOrTimeout(ipcMain, "audio:end-of-stream", 500);
       recorderWin.webContents.send("audio:stop");
       const gotEos = await eos;
