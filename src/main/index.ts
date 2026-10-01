@@ -365,6 +365,9 @@ async function main(): Promise<void> {
     await logger.info("pipeline:cancel from UI");
     recorderWin.webContents.send("audio:stop");
     orchestrator.reset();
+    // Stop the streaming chunk loop too, or a partial from this dictation
+    // leaks into the overlay of the next one.
+    if (streamingWhisper) streamingWhisper.cancel();
     coordinator.cancel();
     void mediaController.resume().catch(swallowMcError("resume"));
   });
