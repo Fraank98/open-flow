@@ -1,6 +1,6 @@
 appId: com.openflow.app
 productName: open-flow
-copyright: Copyright © 2026
+copyright: Copyright © 2026 Danilo Franco
 
 directories:
   output: release
