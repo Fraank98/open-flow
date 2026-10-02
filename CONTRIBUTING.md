@@ -1,46 +1,109 @@
 # Contributing to open-flow
 
-Thanks for your interest in improving open-flow!
+Thanks for your interest. Issues and pull requests are welcome.
 
-## License of the project
+## Licensing of contributions
 
-open-flow is **source-available, not open source**. It is licensed under the
-[PolyForm Noncommercial License 1.0.0](LICENSE.md): you may use, modify, and
-share it for **noncommercial purposes only** (personal use, study, hobby,
-experimentation). Any commercial use — selling it, offering it as a paid
-service (SaaS), or bundling it into a paid product — is reserved exclusively to
-the project owner.
+open-flow is released under the [MIT License](LICENSE). Contributions are
+accepted under the same terms (inbound = outbound): by submitting a pull
+request you agree that your contribution is licensed under the MIT License.
 
-## Contribution terms (please read before opening a pull request)
+- There is no copyright assignment and no CLA. You keep the copyright on your
+  contributions.
+- A DCO sign-off (`git commit -s`) is appreciated but not required.
+- Do not submit code you cannot license under MIT (for example code copied
+  from a project with an incompatible license).
 
-By submitting a contribution (a pull request, patch, or any other change) to
-this project, you agree that:
+## Development setup
 
-1. **You have the right to contribute it.** The contribution is your original
-   work, or you otherwise have the right to submit it under these terms, and it
-   does not knowingly infringe anyone else's rights.
+You need an Apple Silicon Mac with macOS 11 or later, Node 20+, the Xcode
+Command Line Tools, and:
 
-2. **You assign it to the project owner.** To the maximum extent permitted by
-   law, you assign all copyright and related rights in your contribution to the
-   project owner, Danilo (danilo806@icloud.com). To the extent any right cannot be
-   assigned, you grant the project owner a perpetual, worldwide, irrevocable,
-   royalty-free, **exclusive** license to use, reproduce, modify, distribute,
-   sublicense, **relicense, and sell** your contribution and works based on it,
-   for any purpose including commercial purposes, with the right to sublicense
-   these rights through multiple tiers.
+```bash
+brew install cmake git
+```
 
-3. **Others receive it under the project license.** Your contribution is made
-   available to everyone else under the same PolyForm Noncommercial License as
-   the rest of the project — so the community may use and build on it
-   noncommercially, but only the project owner may commercialize it.
+`ffmpeg` is only needed to regenerate test audio fixtures. Budget about 6 GB
+of disk for the engine build and the test models.
 
-4. **No warranty.** Your contribution is provided "as is", without warranty of
-   any kind.
+Run the commands in this order:
 
-This arrangement keeps the project owner the only party who can commercialize
-open-flow, while letting the community use and improve it for noncommercial
-purposes.
+```bash
+git clone https://github.com/Fraank98/open-flow.git && cd open-flow
+npm run fetch-binaries      # builds whisper.cpp and llama.cpp (5-15 min)
+npm install                 # compiles the native addons
+npm run fetch-test-models   # tiny models used by the tests
+npm run dev                 # launches the menubar app
+```
 
-> Note: this is a lightweight contribution agreement written for clarity, not
-> legal advice. For a formally enforceable Contributor License Agreement or a
-> signed copyright assignment, consult a lawyer.
+`npm run fetch-binaries` must come BEFORE `npm install`. Installing compiles
+the `whisper_stream` addon, which includes `whisper.h` from
+`resources/bin/build-tmp/whisper.cpp/include`, and that directory is produced
+by `fetch-binaries`. Done the other way round the install fails with
+`'whisper.h' file not found`. CI uses the same order.
+
+### Native addons and arm64
+
+If your `node` runs under Rosetta, `npm install` builds the addons for
+x86_64 and the arm64 Electron cannot load them. Rebuild for arm64:
+
+```bash
+npx electron-rebuild -f --arch arm64
+```
+
+Run it again after editing `native/**/*.mm` or `binding.gyp`. If you bump
+`WHISPER_TAG` or `LLAMA_TAG` in `scripts/fetch-binaries.sh`, delete
+`resources/bin/build-tmp` first so the engines are rebuilt from the new tag.
+
+## Before opening a PR
+
+```bash
+npm run lint && npm run typecheck && npm test
+```
+
+CI runs the same checks on `macos-14`. Unit tests (`npm run test:unit`) are
+fast and need nothing else; integration tests (`npm run test:integration`)
+use the fixture models from `npm run fetch-test-models`.
+
+If your change touches the hotkey, audio, overlay or paste behaviour, also
+walk through [docs/electron-smoke-checklist.md](docs/electron-smoke-checklist.md)
+and run the pipeline smoke test:
+
+```bash
+npm run smoke -- --wav test/fixtures/audio/en-short-clean.wav
+```
+
+Keep PRs small and focused, add or update tests, and write comments that
+explain *why* the code does something rather than what it does.
+
+## Commit messages
+
+We use [Conventional Commits](https://www.conventionalcommits.org/):
+`type(scope): summary`.
+
+- Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `build`, `ci`.
+- Scopes in use: `ptt`, `streaming`, `whisper`, `llama`, `paste`, `audio`,
+  `ui`, `prefs-ui`, `media-control`, `dictionary`, `native`, `build`,
+  `release`.
+
+## How releases work
+
+A release is triggered by the version in `package.json`. The PR that should
+ship bumps `version`; once it is merged to `main`, `release.yml` builds the
+DMG, tags `v<version>` and publishes it. No bump means no release.
+Contributors should not bump the version unless asked. Details in
+[docs/release-process.md](docs/release-process.md).
+
+## Reporting bugs
+
+Please include:
+
+- macOS version and Mac model
+- open-flow version
+- the quality tier you use (Fast, Balanced or Max)
+- the relevant lines from `~/Library/Logs/open-flow/error.log`
+- for hard-to-reproduce problems, turn on *Debug logging* in Preferences and
+  attach the relevant part of `debug.log` from the same folder
+
+Warning: the logs can contain transcript text, that is, things you said.
+Read them and remove anything private before pasting them into an issue.
