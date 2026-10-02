@@ -17,6 +17,7 @@ import { LLMCleaner } from "./llm-cleaner.js";
 import { LLMServer } from "./llm-server.js";
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { buildInitialPrompt } from "./utils/initial-prompt.js";
+import { waitForEventOrTimeout } from "./utils/wait-for-event.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
@@ -456,14 +457,16 @@ async function main(): Promise<void> {
       // sample buffer before sending EOS, so by the time we snapshot the
       // orchestrator we have every sample the mic produced.
       const eosT0 = Date.now();
-      const eosPromise = new Promise<void>((resolve) => {
-        ipcMain.once("audio:end-of-stream", () => resolve());
-      });
-      recorderWin.webContents.send("audio:stop");
       // 500ms safety fallback in case the renderer hangs / crashes before
-      // sending the ack — better to lose a partial sample than to wedge.
-      await Promise.race([eosPromise, new Promise<void>((r) => setTimeout(r, 500))]);
-      void logger.info("audio EOS received", { ms: Date.now() - eosT0 });
+      // sending the ack — better to lose a partial sample than to wedge. The
+      // helper also drops its listener on timeout and clears the timer on EOS:
+      // a leftover once() listener would not steal a later EOS (emit reaches
+      // every listener), but listeners would pile up after repeated timeouts
+      // (MaxListenersExceededWarning) and the 500ms timer would stay pending.
+      const eos = waitForEventOrTimeout(ipcMain, "audio:end-of-stream", 500);
+      recorderWin.webContents.send("audio:stop");
+      const gotEos = await eos;
+      void logger.info("audio EOS received", { ms: Date.now() - eosT0, timedOut: !gotEos });
       const samples = orchestrator.snapshot();
       const currentPrefs = await preferencesStore.load();
       await coordinator.finishWithAudio(samples, SAMPLE_RATE, currentPrefs.language, {
