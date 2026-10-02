@@ -102,7 +102,7 @@ Please include:
 - open-flow version
 - the quality tier you use (Fast, Balanced or Max)
 - the relevant lines from `~/Library/Logs/open-flow/error.log`
-- for hard-to-reproduce problems, turn on *Debug logging* in Preferences and
+- for hard-to-reproduce problems, turn on *Debug logging* in Preferences, relaunch, and
   attach the relevant part of `debug.log` from the same folder
 
 Warning: the logs can contain transcript text, that is, things you said.

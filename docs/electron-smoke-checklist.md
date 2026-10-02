@@ -14,31 +14,24 @@ non-trivial change to main process wiring, hotkey, audio, or overlay.
 
 1. `npm run dev`
 2. Verify a tray icon appears in the menubar (microphone-shaped, dark/light theme aware).
-3. Click the tray icon — context menu shows "open-flow — Idle", "Disable hotkey", "Quit open-flow".
+3. Click the tray icon — context menu shows "open-flow — Idle", "Disable hotkey", "Preferences…", "Quit open-flow".
 4. Dock icon should NOT be visible (menubar-only app).
 
 ## First dictation
 
 5. Focus a text field somewhere (TextEdit, Notes.app, browser address bar).
-6. Press `Option+Space` (Alt+Space). Overlay window appears at bottom-center with red pulsing dot and "Recording…".
+6. Hold either **Option** key (for at least ~150 ms). Overlay window appears at bottom-center with red pulsing dot and "Recording…" and a live transcript.
 7. Speak for ~3 seconds: *"Hello, this is a test of the open flow dictation system."*
-8. Press `Option+Space` again. Overlay updates through "Transcribing…" (yellow) → "Cleaning…" (green) → "Pasting…" (blue) → fades out.
+8. Release Option. Overlay updates through "Transcribing…" (yellow) → "Cleaning…" (green) → "Pasting…" (blue) → fades out.
 9. The cleaned text should appear pasted into the focused text field.
 
 ## Edge cases
 
 10. **Cancel via overlay:** Start recording, click the ✕ button on the overlay. Recording stops and pipeline does not run.
-11. **Empty audio:** Press hotkey, immediately press again. Pipeline runs but transcript should be empty or near-empty; no paste occurs.
+11. **Short tap:** Tap Option for less than ~150 ms. Nothing happens: no overlay, no paste. Holding Option and pressing another key (e.g. Option+arrow) must not dictate or must cancel a recording in progress.
 12. **Disable + re-enable:** Tray menu → "Disable hotkey". Hotkey now does nothing. Re-enable, dictation works again.
-13. **Quit:** Tray menu → "Quit open-flow". App exits cleanly; no orphan processes (`ps -ef | grep -E "(open-flow|electron|whisper-cli|llama-cli)"` should show none).
-
-## Known limitations (Plan 2 scope)
-
-- Hotkey is tap-to-toggle, not push-to-talk. PTT requires `uiohook-napi` (Plan 2b).
-- Models hard-coded to fixture paths (`test/fixtures/models/...`). Real model manager comes in Plan 3.
-- No permission prompts UI; failures are logged only.
-- Tray icon is a generated placeholder.
+13. **Quit:** Tray menu → "Quit open-flow". App exits cleanly; no orphan processes (`ps -ef | grep -E "(open-flow|electron|whisper-server|llama-server)"` should show none).
 
 ## If something fails
 
-Logs live in `~/Library/Logs/open-flow/error.log`. Set `OPEN_FLOW_DEBUG=1` to also write `debug.log`.
+Logs live in `~/Library/Logs/open-flow/error.log`. Turn on "Debug logging" in Preferences and relaunch the app (it is read at startup) to also write `debug.log`.
