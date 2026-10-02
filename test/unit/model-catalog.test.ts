@@ -39,6 +39,13 @@ describe("model catalog", () => {
     }
   });
 
+  it("Max tier states the real download size and the 3B model's non-commercial license", () => {
+    const max = getTier("max")!;
+    expect(max.description).toContain("~3.7 GB");
+    expect(max.description).not.toContain("~3.5 GB");
+    expect(max.description.toLowerCase()).toContain("non-commercial");
+  });
+
   it("getModelById returns the descriptor by id", () => {
     const first = WHISPER_MODELS[0]!;
     expect(getModelById("whisper", first.id)).toEqual(first);
