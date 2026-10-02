@@ -82,8 +82,6 @@ https://github.com/snakers4/silero-vad
 The voice-activity-detection model used by whisper.cpp, shipped as
 `ggml-silero-v6.2.0.bin`.
 
-<!-- To verify: the copyright line below was not checked against the upstream repository. -->
-
 ```text
 MIT License
 

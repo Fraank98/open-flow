@@ -21,12 +21,12 @@
 ## Features
 - **Push-to-talk on the Option key.** Hold either Option key anywhere, talk, release. No window to focus, no toggle to forget.
 - **Streaming transcription.** Whisper runs *while* you speak (in-process, via a native whisper.cpp addon with Metal acceleration), so most of the work is done by the time you let go. A small overlay shows the live transcript.
-- **Optional cleanup by a local LLM.** A Qwen2.5 model served by llama.cpp removes "uh", "ehm", false starts and adds punctuation. It is removal-only by design (an output sanitizer rejects anything the model invents) and is skipped entirely when the transcript has nothing to clean.
+- **Optional cleanup by a local LLM.** A Qwen2.5 model served by llama.cpp removes "uh", "ehm", false starts and filler words at the start of a sentence. It is removal-only by design: it is told not to touch punctuation or wording, an output sanitizer rejects anything it invents, and it is skipped entirely when the transcript has nothing to clean. Punctuation comes from Whisper itself.
 - **Spoken punctuation.** "comma", "new paragraph", "virgola", "point d'interrogation"… become symbols — in English, Italian, Spanish, French and German.
 - **Custom dictionary.** Preferred spellings for names, products and jargon: applied to every transcript and fed to Whisper as a hint.
 - **Language auto-detect**, or pin one of en / it / es / fr / de.
 - **Stays out of the way.** Menubar-only, pauses Spotify / Apple Music while you dictate and resumes them afterwards, restores your clipboard after pasting.
-- **Three quality tiers** from ~1 GB to ~3.7 GB of models, switchable in Preferences.
+- **Three quality tiers** from ~1 GB to ~3.7 GB of models, picked at setup; the Whisper and cleanup models can be changed separately in Preferences.
 
 ## Privacy
 Everything runs on your Mac. The only network traffic open-flow generates is the one-time download of the models you pick, from Hugging Face. There is no telemetry, no crash reporting, no account, no update check. Speech-to-text and cleanup talk to local processes on `127.0.0.1` only — you can confirm it in the sources: the only `fetch()` targets are `huggingface.co` and `127.0.0.1`.
@@ -58,7 +58,7 @@ A short setup window walks you through three things:
    - **Accessibility**, so the app can press <kbd>⌘V</kbd> to paste into the focused field.
 
    If you grant Accessibility after the app has already started, quit and relaunch open-flow: macOS applies the grant to new processes only. open-flow tells you with a dialog.
-2. **Quality tier.** Pick one of the tiers below; you can change it later in Preferences.
+2. **Quality tier.** Pick one of the tiers below. Later, Preferences lets you change the Whisper model and the cleanup model separately.
 3. **Download.** The models for the chosen tier are downloaded from Hugging Face into the models folder (see [Where things live](#where-things-live)), each one verified against its SHA-256 checksum. This happens once; a failed download can be retried or you can pick a different tier.
 
 When it finishes, a microphone icon appears in the menubar and you can start dictating.
@@ -75,7 +75,7 @@ When it finishes, a microphone icon appears in the menubar and you can start dic
 - **Dictate:** hold either **Option** key (at least ~150 ms), speak, release. The overlay shows *Recording…* with the live transcript, then *Transcribing… → Cleaning… → Pasting…*, and the text is pasted into the focused field.
 - **Cancel:** click the **✕** on the overlay, or press any other key while holding Option — Option used as a modifier (Option+arrow, Option+letter for accents) never triggers dictation. A tap shorter than ~150 ms is ignored.
 - **Length:** there is no fixed limit on how long you can dictate. The streaming transcript is built from the whole recording. (A separate 60-second audio window exists only for the fallback batch transcriber, which is used if the streaming engine fails to start.)
-- **Spoken punctuation:** off by default. With it on, *comma*, *period*, *question mark*, *new line*, *new paragraph*, *open/close quote* (and it/es/fr/de equivalents) always become symbols — so "my period" becomes "my ." too. Without it, the LLM still punctuates from context.
+- **Spoken punctuation:** off by default. With it on, *comma*, *period*, *question mark*, *new line*, *new paragraph*, *open/close quote* (and it/es/fr/de equivalents) always become symbols — so "my period" becomes "my ." too. Without it, you get the punctuation Whisper infers from your phrasing; the LLM cleanup does not change punctuation.
 - **Dictionary:** Preferences → Dictionary. Each term is normalised in every transcript (case-insensitive) and passed to Whisper as a spelling hint.
 - **Language:** *Auto-detect* by default; pin a language if detection flips on short phrases.
 - **LLM cleanup:** can be turned off in Preferences. Toggling it, or changing a model, needs a restart — the Save button becomes *Save & Restart*.
@@ -110,7 +110,7 @@ To uninstall: quit, delete `/Applications/open-flow.app` and the folders above, 
 - **"Paste failed — text in clipboard".** The ⌘V keystroke was refused or timed out. Your text is on the clipboard: paste it by hand.
 - **My previous clipboard was not restored.** If an iOS Simulator is running, reading the clipboard can time out, so open-flow cannot save the old contents to put them back.
 - **Only Spotify and Apple Music are paused** while you dictate. Other players are left alone.
-- **The setup window appeared again.** A model file for your chosen tier was deleted or changed, so open-flow downloads it again. Let it finish, or pick another tier.
+- **The setup window appeared again.** A model file for your chosen models is missing or has the wrong size, so open-flow downloads it again. Let it finish, or pick another tier.
 - **Cleanup garbles short phrases.** Small cleanup models can mangle very short or non-English input. Use the Balanced tier, pin the language, or turn LLM cleanup off in Preferences.
 
 ## Build from source

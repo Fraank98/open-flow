@@ -23,8 +23,8 @@ Command Line Tools, and:
 brew install cmake git
 ```
 
-`ffmpeg` is only needed to regenerate test audio fixtures. Budget about 6 GB
-of disk for the engine build and the test models.
+`ffmpeg` is only needed to regenerate test audio fixtures. Budget about 2 GB
+of disk for the engine build, `node_modules` and the test models.
 
 Run the commands in this order:
 
@@ -82,9 +82,9 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 `type(scope): summary`.
 
 - Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `build`, `ci`.
-- Scopes in use: `ptt`, `streaming`, `whisper`, `llama`, `paste`, `audio`,
-  `ui`, `prefs-ui`, `media-control`, `dictionary`, `native`, `build`,
-  `release`.
+- Scopes in use: `shell`, `core`, `dist`, `streaming`, `streaming-whisper`,
+  `ptt`, `paste`, `overlay`, `media-control`, `dictionary`, `prefs`,
+  `cleaner`, `native`, `ci`, `build`, `release`.
 
 ## How releases work
 

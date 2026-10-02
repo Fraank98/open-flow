@@ -75,7 +75,7 @@ Follow semver. Pre-1.0:
 
 ## What gets shipped in the .dmg
 
-- Electron runtime (~150 MB)
+- Electron runtime (~230 MB, `Contents/Frameworks/`)
 - The compiled app (`dist/`)
 - Renderer assets (`src/renderer/**/*.html|css|js`)
 - Native engines in `Contents/Resources/bin/` (arm64): `whisper-server`, `llama-server`, and the Silero VAD model `ggml-silero-v6.2.0.bin`
