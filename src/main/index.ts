@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { PipelineCoordinator } from "./pipeline-coordinator.js";
 import { AudioOrchestrator } from "./audio-orchestrator.js";
 import { PTTManager } from "./ptt-manager.js";
+import { createPttArmer, PttArmer } from "./utils/ptt-arming.js";
 import { OverlayWindow } from "./overlay-window.js";
 import { MenubarApp } from "./menubar-app.js";
 import { createDefaultTextInjector } from "./text-injector.js";
@@ -185,12 +186,16 @@ async function main(): Promise<void> {
     preferencesStore,
     restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
   });
+  // Assigned near the bottom, once the PTT handlers are registered.
+  let pttArmer: PttArmer | null = null;
   const menubar = new MenubarApp(
     {
       onToggleEnabled: () => {
         if (menubar.isEnabled()) {
-          ptt.start();
+          // Resuming: re-arm (or resume waiting for Accessibility).
+          pttArmer ? pttArmer.arm() : ptt.start();
         } else {
+          pttArmer?.stop();
           ptt.stop();
         }
       },
@@ -569,35 +574,46 @@ async function main(): Promise<void> {
     menubar.setStatus("Ready");
   });
 
+  // Arm push-to-talk without blocking: if Accessibility is missing, show the
+  // standard macOS prompt once, say so in the tray and poll until it is granted.
+  pttArmer = createPttArmer({
+    isTrusted: () => ptt.isTrusted(),
+    start: () => ptt.start(),
+    intervalMs: 2000,
+    onState: (state) => {
+      void logger.info("PTT arming", { state });
+      switch (state) {
+        case "armed":
+          menubar.setPermissionHint(null);
+          menubar.setStatus("Ready — hold ⌥ to dictate");
+          break;
+        case "waiting":
+          menubar.setStatus("Needs Accessibility permission");
+          menubar.setPermissionHint(
+            "Open System Settings › Privacy & Security › Accessibility and turn on open-flow",
+          );
+          break;
+        case "armed-after-grant":
+          menubar.setPermissionHint(null);
+          menubar.setStatus("Ready — if Option doesn't respond, choose Relaunch open-flow");
+          break;
+        case "relaunch-needed":
+          menubar.setPermissionHint(null);
+          menubar.setStatus("Permission granted — relaunch to activate");
+          break;
+      }
+    },
+  });
   // Respect a "Pause dictation" the user may have chosen while models loaded.
-  if (menubar.isEnabled()) ptt.start();
-  if (!ptt.isTrusted()) {
-    await logger.error("PTT start failed: not trusted for Accessibility");
-    const choice = dialog.showMessageBoxSync({
-      type: "warning",
-      title: "open-flow needs Accessibility access",
-      message: "Hold-to-dictate requires macOS Accessibility permission",
-      detail:
-        "Open System Settings → Privacy & Security → Accessibility and enable open-flow, then quit and relaunch the app.",
-      buttons: ["Open System Settings", "Quit", "Continue without hotkey"],
-      defaultId: 0,
-      cancelId: 2,
-    });
-    if (choice === 0) {
-      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
-      app.quit();
-      return;
-    } else if (choice === 1) {
-      app.quit();
-      return;
-    }
-    menubar.setStatus("Hotkey off — Accessibility permission needed");
+  if (menubar.isEnabled()) {
+    if (!ptt.isTrusted()) ptt.requestTrust(); // macOS prompt, once
+    pttArmer.arm();
   } else {
-    await logger.info("PTT armed");
-    menubar.setStatus(menubar.isEnabled() ? "Ready — hold ⌥ to dictate" : "Paused");
+    menubar.setStatus("Paused");
   }
 
   app.on("will-quit", () => {
+    pttArmer?.stop();
     ptt.stop();
     if (powerSaveBlocker.isStarted(powerSaveBlockerId)) powerSaveBlocker.stop(powerSaveBlockerId);
     // shutdown(), NOT release(): release() blocks on the native inference mutex,
