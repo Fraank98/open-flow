@@ -6,6 +6,7 @@ import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
 import { downloadErrorText } from "./utils/download-errors.js";
 import { createEmitGate } from "./utils/emit-gate.js";
+import { DownloadTracker } from "./utils/download-tracker.js";
 import { sanitizePrefsPatch } from "./utils/prefs-patch.js";
 import { getModelsDir } from "./utils/model-paths.js";
 import type { PermissionStatus } from "./permissions.js";
@@ -33,7 +34,8 @@ const LANGUAGES = [
   { id: "de", label: "Deutsch" },
 ];
 
-async function describeModel(manager: ModelManager, m: CatalogModel) {
+async function describeModel(manager: ModelManager, tracker: DownloadTracker, m: CatalogModel) {
+  const progress = tracker.progress(m.id);
   return {
     id: m.id,
     label: m.label,
@@ -42,6 +44,10 @@ async function describeModel(manager: ModelManager, m: CatalogModel) {
     ramBytes: m.ramBytes,
     installed: await manager.isInstalled(m),
     licenseNote: m.licenseNote,
+    // A download may be running from before this window was (re)opened: the card
+    // reopens in its progress state instead of offering Download again.
+    downloading: tracker.isActive(m.id),
+    progress,
   };
 }
 
@@ -66,8 +72,8 @@ export class PreferencesWindow {
   private win: BrowserWindow | null = null;
   private handlersRegistered = false;
   private readonly savedListeners: Array<(prefs: Preferences) => void> = [];
-  /** Downloads in flight, by model id, so Cancel can abort them. */
-  private readonly downloads = new Map<string, AbortController>();
+  /** Downloads in flight, by model id: Cancel aborts them and a reopened window re-attaches to them. */
+  private readonly downloads = new DownloadTracker();
   /** Serialises read-modify-write updates so quick successive toggles never clobber each other. */
   private updateQueue: Promise<unknown> = Promise.resolve();
 
@@ -162,8 +168,8 @@ export class PreferencesWindow {
     }));
 
     ipcMain.handle("prefs:list-models", async () => {
-      const whisper = await Promise.all(WHISPER_MODELS.map((m) => describeModel(this.deps.modelManager, m)));
-      const llm = await Promise.all(LLM_MODELS.map((m) => describeModel(this.deps.modelManager, m)));
+      const whisper = await Promise.all(WHISPER_MODELS.map((m) => describeModel(this.deps.modelManager, this.downloads, m)));
+      const llm = await Promise.all(LLM_MODELS.map((m) => describeModel(this.deps.modelManager, this.downloads, m)));
       return { whisper, llm, languages: LANGUAGES };
     });
 
@@ -171,29 +177,32 @@ export class PreferencesWindow {
       const list = args.kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
       const desc = list.find((m) => m.id === args.id);
       if (!desc) throw new Error(`Unknown model: ${args.kind}/${args.id}`);
-      if (this.downloads.has(desc.id)) return; // already running
-      const abort = new AbortController();
-      this.downloads.set(desc.id, abort);
-      // Once per stream chunk is far more than the card needs: ~10/s, plus the final 100%.
-      const gate = createEmitGate(100);
-      try {
-        await this.deps.modelManager.download(
-          desc,
-          (p) => {
-            if (gate(p.bytes >= p.total)) this.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total });
-          },
-          { signal: abort.signal },
-        );
-      } catch (err) {
-        // Never forward raw messages: they can carry URLs and 64-char hashes.
-        throw new Error(downloadErrorText(err));
-      } finally {
-        this.downloads.delete(desc.id);
-      }
+      // Already running (e.g. the window was closed and reopened mid-download):
+      // hand back the same promise, so the caller resolves when it really ends.
+      if (!this.downloads.isActive(desc.id) && (await this.deps.modelManager.isInstalled(desc))) return;
+      return this.downloads.start(desc.id, async (signal, report) => {
+        // Once per stream chunk is far more than the card needs: ~10/s, plus the final 100%.
+        const gate = createEmitGate(100);
+        try {
+          await this.deps.modelManager.download(
+            desc,
+            (p) => {
+              report(p);
+              if (gate(p.bytes >= p.total)) {
+                this.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total });
+              }
+            },
+            { signal },
+          );
+        } catch (err) {
+          // Never forward raw messages: they can carry URLs and 64-char hashes.
+          throw new Error(downloadErrorText(err));
+        }
+      });
     });
 
     ipcMain.on("prefs:cancel-download", (_e, id: unknown) => {
-      if (typeof id === "string") this.downloads.get(id)?.abort();
+      if (typeof id === "string") this.downloads.cancel(id);
     });
 
     ipcMain.on("prefs:relaunch", () => {

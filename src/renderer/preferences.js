@@ -300,17 +300,47 @@ async function init() {
     }
   }
 
-  async function startDownload(m, group) {
+  // The main process is the source of truth for what is on disk: after a
+  // download or delete settles, re-read it instead of assuming the outcome (a
+  // download that "returned" may have been a no-op on a partial file).
+  async function refreshModels() {
+    try {
+      const fresh = await api.listModels();
+      for (const f of [...fresh.whisper, ...fresh.llm]) {
+        const m = allModels().find((x) => x.id === f.id);
+        if (m) m.installed = f.installed;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function allModels() {
+    return [...catalog.whisper, ...catalog.llm];
+  }
+
+  // Follows one download to its end. A click starts it; on load it also
+  // re-attaches to a download already running in the main process (the window
+  // was closed and reopened): the main side hands back the same promise, so this
+  // resolves when the download really finishes.
+  async function trackDownload(m, group) {
     m.downloading = true;
     m.cancelling = false;
     m.downloadFailed = false;
-    m.progressPct = 0;
+    m.progressPct = m.progress && m.progress.total > 0 ? Math.min(100, Math.floor((m.progress.bytes / m.progress.total) * 100)) : 0;
     renderAllRows();
     try {
       await api.downloadModel(group.kind, m.id);
-      m.installed = true;
-      say("models", `Downloaded ${m.label}`, "ok");
+      const ok = await refreshModels();
+      if (ok && !m.installed) {
+        m.downloadFailed = true;
+        say("models", `${m.label} didn't finish downloading. Try again.`, "error");
+      } else {
+        say("models", `Downloaded ${m.label}`, "ok");
+      }
     } catch (err) {
+      await refreshModels();
       if (m.cancelling) {
         say("models", `Download of ${m.label} paused. Download again to resume.`);
       } else {
@@ -320,12 +350,18 @@ async function init() {
     } finally {
       m.downloading = false;
       m.cancelling = false;
+      m.progress = null;
       renderAllRows();
     }
   }
 
+  function startDownload(m, group) {
+    m.progress = null;
+    return trackDownload(m, group);
+  }
+
   api.onDownloadProgress((p) => {
-    const m = [...catalog.whisper, ...catalog.llm].find((x) => x.id === p.id);
+    const m = allModels().find((x) => x.id === p.id);
     if (!m || !m.downloading || !(p.total > 0)) return;
     const pct = Math.min(100, Math.floor((p.bytes / p.total) * 100));
     if (pct === m.progressPct) return;
@@ -345,6 +381,10 @@ async function init() {
     }
   }
   renderAllRows();
+  // Downloads still running from before this window opened: pick them up.
+  for (const group of groups) {
+    for (const m of group.models) if (m.downloading) void trackDownload(m, group);
+  }
 
   $("#reveal-models").addEventListener("click", () => api.revealModels());
 

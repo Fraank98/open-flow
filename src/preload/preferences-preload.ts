@@ -12,6 +12,10 @@ interface ModelInfo {
   ramBytes: number;
   installed: boolean;
   licenseNote: string | null;
+  /** A download is in flight (possibly started before this window opened). */
+  downloading: boolean;
+  /** Last progress of that download, when known. */
+  progress: { bytes: number; total: number } | null;
 }
 
 interface PrefsApi {
