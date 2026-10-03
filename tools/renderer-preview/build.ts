@@ -48,14 +48,15 @@ async function main(): Promise<void> {
       `  "${chrome}" --headless=new --hide-scrollbars --window-size=640,700 ` +
         `--screenshot=${OUT}/setup-${theme}.png "file://${OUT}/setup.html?theme=${theme}"`,
     );
-    for (const tab of ["general", "dictation", "models", "advanced"]) {
+    for (const tab of ["general", "dictation", "models", "reply", "advanced"]) {
       console.log(
         `  "${chrome}" --headless=new --hide-scrollbars --window-size=640,600 ` +
           `--screenshot=${OUT}/settings-${tab}-${theme}.png "file://${OUT}/preferences.html?theme=${theme}&tab=${tab}"`,
       );
     }
   }
-  console.log("\nSettings scenarios: fresh, installed, restart-pending, downloading.");
+  console.log("\nSettings scenarios: fresh, installed, restart-pending, downloading, reopened.");
+  console.log("Reply tab (&tab=reply): reply-off, reply-on, reply-downloading, reply-bad-shortcut, reply-failed.");
   console.log("\nNo Chrome? Use Safari: open -a Safari <file>.html (no headless screenshots).");
 }
 
