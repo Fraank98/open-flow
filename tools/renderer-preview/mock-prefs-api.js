@@ -1,6 +1,6 @@
 // Fake window.openFlowPrefs for browser previews.
 // Query: ?theme=light|dark &tab=general|dictation|models|advanced
-//        &scenario=fresh|installed|restart-pending|downloading
+//        &scenario=fresh|installed|restart-pending|downloading|reopened (window reopened mid-download)
 (function () {
   "use strict";
   const q = new URLSearchParams(location.search);
@@ -45,11 +45,20 @@
     restartStatus: () => Promise.resolve({
       fields: ["whisperModelId", "llmModelId", "useLlmCleanup"].filter((k) => prefs[k] !== boot[k]),
     }),
+    // Like the real API: `downloading` + last `progress` for a download that is in flight.
     listModels: () => Promise.resolve({
-      whisper: whisper.map((m) => ({ ...m })), llm: llm.map((m) => ({ ...m })), languages,
+      whisper: whisper.map((m) => (
+        scenario === "reopened" && m.id === "whisper-large-v3-turbo"
+          ? { ...m, downloading: true, progress: { bytes: m.sizeBytes * 0.4, total: m.sizeBytes } }
+          : { ...m, downloading: false, progress: null }
+      )),
+      llm: llm.map((m) => ({ ...m, downloading: false, progress: null })),
+      languages,
     }),
     downloadModel: (kind, id) => new Promise((resolve, reject) => {
       const m = find(id);
+      // Re-attaching to a download that never ends in the preview: stay pending.
+      if (scenario === "reopened") { timers[id] = { reject, t: 0 }; return; }
       let bytes = 0;
       const stallAt = scenario === "downloading" ? m.sizeBytes * 0.4 : Infinity;
       timers[id] = { reject, t: setInterval(() => {
