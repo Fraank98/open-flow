@@ -13,6 +13,7 @@ import {
 } from "./permissions.js";
 import { describeDownloadError } from "./utils/download-errors.js";
 import { ensureFreeSpace } from "./utils/disk-space.js";
+import { createEmitGate } from "./utils/emit-gate.js";
 import { getModelsDir } from "./utils/model-paths.js";
 import { PreferencesStore, SetupStep } from "./preferences-store.js";
 import type { WizardPipelineState } from "./utils/wizard-pipeline-state.js";
@@ -238,18 +239,24 @@ export class SetupWizard {
       }
       const abort = new AbortController();
       this.abort = abort;
+      // The stream reports once per chunk (tens of thousands of times for a big
+      // tier); the UI only needs ~10 updates/s, plus the final 100% of each file.
+      const gate = createEmitGate(100);
+      const report = (stage: string, bytes: number, total: number, fileIndex: number, fileCount: number): void => {
+        if (gate(bytes >= total)) this.emitProgress(stage, bytes, total, fileIndex, fileCount);
+      };
       try {
         const files = [whisper, llm] as const;
         for (const [i, desc] of files.entries()) {
           const stage = desc.label;
           const fileIndex = i + 1;
           if (await this.deps.modelManager.isInstalled(desc)) {
-            this.emitProgress(stage, desc.sizeBytes, desc.sizeBytes, fileIndex, files.length);
+            report(stage, desc.sizeBytes, desc.sizeBytes, fileIndex, files.length);
             continue;
           }
           await this.deps.modelManager.download(
             desc,
-            ({ bytes, total }) => this.emitProgress(stage, bytes, total, fileIndex, files.length),
+            ({ bytes, total }) => report(stage, bytes, total, fileIndex, files.length),
             { signal: abort.signal },
           );
         }

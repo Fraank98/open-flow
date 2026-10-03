@@ -260,6 +260,8 @@ function onProgress({ stage, bytes, total, fileIndex, fileCount }) {
     lastFileIndex = fileIndex;
   }
   samples.push({ t: Date.now(), bytes });
+  // Bounded to the stats window: see pruneSamples.
+  samples = Logic.pruneSamples(samples);
   $("#dl-stage").textContent = fileCount > 1 ? `${stage} (${fileIndex} of ${fileCount})` : stage;
   if (total > 0) {
     $("#dl-progress").value = Math.floor((bytes / total) * 100);

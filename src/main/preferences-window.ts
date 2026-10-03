@@ -5,6 +5,7 @@ import { WHISPER_MODELS, LLM_MODELS } from "./model-catalog.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
 import { downloadErrorText } from "./utils/download-errors.js";
+import { createEmitGate } from "./utils/emit-gate.js";
 import { sanitizePrefsPatch } from "./utils/prefs-patch.js";
 import { getModelsDir } from "./utils/model-paths.js";
 import type { PermissionStatus } from "./permissions.js";
@@ -173,10 +174,14 @@ export class PreferencesWindow {
       if (this.downloads.has(desc.id)) return; // already running
       const abort = new AbortController();
       this.downloads.set(desc.id, abort);
+      // Once per stream chunk is far more than the card needs: ~10/s, plus the final 100%.
+      const gate = createEmitGate(100);
       try {
         await this.deps.modelManager.download(
           desc,
-          (p) => this.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total }),
+          (p) => {
+            if (gate(p.bytes >= p.total)) this.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total });
+          },
           { signal: abort.signal },
         );
       } catch (err) {

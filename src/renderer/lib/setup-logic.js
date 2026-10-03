@@ -39,6 +39,20 @@
   var STATS_WINDOW_MS = 5000;
 
   /**
+   * Drops samples older than the stats window (relative to the last one), but
+   * always keeps the last two. The caller prunes on every progress event so the
+   * list stays a few hundred entries long instead of growing with the stream;
+   * without it downloadStats would rescan tens of thousands of samples per event.
+   */
+  function pruneSamples(samples) {
+    if (!samples || samples.length <= 2) return samples ? samples.slice() : [];
+    var limit = samples[samples.length - 1].t - STATS_WINDOW_MS;
+    var i = 0;
+    while (i < samples.length - 2 && samples[i].t < limit) i++;
+    return i === 0 ? samples : samples.slice(i);
+  }
+
+  /**
    * Speed and ETA from progress samples `{ t (ms), bytes }`, over a sliding
    * 5 s window ending at the last sample. No ETA until two samples show progress.
    */
@@ -131,6 +145,7 @@
     canContinuePermissions: canContinuePermissions,
     formatBytes: formatBytes,
     downloadStats: downloadStats,
+    pruneSamples: pruneSamples,
     formatEta: formatEta,
     estimateMinutes: estimateMinutes,
     resumeStep: resumeStep,

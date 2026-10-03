@@ -10,6 +10,9 @@ interface SetupLogic {
     samples: Array<{ t: number; bytes: number }>,
     total: number,
   ): { bytesPerSec: number; etaSec: number | null };
+  pruneSamples(
+    samples: Array<{ t: number; bytes: number }>,
+  ): Array<{ t: number; bytes: number }>;
   formatEta(sec: number | null): string;
   estimateMinutes(bytes: number, bytesPerSec: number): number;
   resumeStep(prefs: { setupStep?: string; setupTierId?: string | null }): string;
@@ -182,5 +185,38 @@ describe("pipelineView", () => {
     expect(L.pipelineView("recording", "idle")).toBe("idle");
     expect(L.pipelineView("idle", "recording")).toBe("recording");
     expect(L.pipelineView(undefined, "idle")).toBe("idle");
+  });
+});
+
+describe("pruneSamples", () => {
+  it("drops samples older than the 5 s window ending at the last one", () => {
+    const samples = [0, 1000, 2000, 6000, 7000, 8000].map((t) => ({ t, bytes: t }));
+    expect(L.pruneSamples(samples).map((s) => s.t)).toEqual([6000, 7000, 8000]);
+  });
+
+  it("keeps the samples inside the window, boundary included", () => {
+    const samples = [1000, 3000, 6000].map((t) => ({ t, bytes: t }));
+    expect(L.pruneSamples(samples).map((s) => s.t)).toEqual([1000, 3000, 6000]);
+  });
+
+  it("keeps at least the last two samples, so a stall still yields a (zero) speed", () => {
+    const samples = [0, 20_000].map((t) => ({ t, bytes: t }));
+    expect(L.pruneSamples(samples)).toHaveLength(2);
+    expect(L.pruneSamples([{ t: 0, bytes: 0 }])).toHaveLength(1);
+    expect(L.pruneSamples([])).toEqual([]);
+  });
+
+  it("keeps the array bounded over a long stream and leaves the stats unchanged", () => {
+    let samples: Array<{ t: number; bytes: number }> = [];
+    const full: Array<{ t: number; bytes: number }> = [];
+    for (let i = 0; i < 20_000; i++) {
+      const s = { t: i * 10, bytes: i * 1000 };
+      full.push(s);
+      samples.push(s);
+      samples = L.pruneSamples(samples);
+    }
+    // 5 s at one sample per 10 ms.
+    expect(samples.length).toBeLessThanOrEqual(502);
+    expect(L.downloadStats(samples, 50_000_000)).toEqual(L.downloadStats(full, 50_000_000));
   });
 });
