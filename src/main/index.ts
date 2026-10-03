@@ -19,7 +19,7 @@ import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { buildInitialPrompt } from "./utils/initial-prompt.js";
 import { waitForEventOrTimeout } from "./utils/wait-for-event.js";
 import { restartRequiredFields } from "./utils/restart-required.js";
-import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
+import { checkAccessibility, checkAutomationViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
 import { getModelById } from "./model-catalog.js";
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
 
   // First-launch: run setup wizard until setupComplete=true
   if (!prefs.setupComplete) {
-    const wizard = new SetupWizard({ modelManager, preferencesStore });
+    const wizard = new SetupWizard({ modelManager, preferencesStore, accessibility: ptt });
     const completed = await wizard.run();
     if (!completed) {
       await logger.warn("setup wizard closed without completion; quitting");
@@ -225,8 +225,9 @@ async function main(): Promise<void> {
   });
 
   const mic = await checkMicrophone();
-  const acc = await checkAccessibilityViaProbe();
-  await logger.info("permissions", { mic, accessibility: acc });
+  const acc = checkAccessibility(ptt);
+  const automation = await checkAutomationViaProbe();
+  await logger.info("permissions", { mic, accessibility: acc, automation });
 
   // Pauses Spotify / Apple Music when dictation starts (via AppleScript that
   // checks each app's player state first, so we never blindly toggle media

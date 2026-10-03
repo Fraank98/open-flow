@@ -1,9 +1,11 @@
-// Fake window.openFlowSetup for browser previews. Query: ?theme=light|dark&scenario=fresh|no-permissions|granted|download-error
+// Fake window.openFlowSetup for browser previews. Query: ?theme=light|dark&scenario=fresh|no-permissions|granted|download-error&step=permissions
 (function () {
   "use strict";
   const q = new URLSearchParams(location.search);
   if (q.get("theme")) document.documentElement.dataset.theme = q.get("theme");
   const scenario = q.get("scenario") || "fresh";
+  // Headless screenshots would otherwise catch the step-in fade mid-animation.
+  document.write("<style>*{animation:none!important;transition:none!important}</style>");
 
   const LICENSE = "The 3B cleanup model is licensed for non-commercial use only.";
   const tiers = [
@@ -17,11 +19,13 @@
       transcriptionNote: "Best accuracy. Needs 16 GB of RAM.", recommended: false,
       sizeBytes: 1624555275 + 2104932768, ramBytes: 5.1e9, installed: false, licenseNote: LICENSE },
   ];
+  // Statuses as the main process reports them. Accessibility is only ever
+  // granted/denied (live AX API); mic and automation can also be "unknown".
   const perms = scenario === "granted"
-    ? { mic: "granted", acc: "granted" }
+    ? { mic: "granted", acc: "granted", auto: "granted" }
     : scenario === "no-permissions"
-      ? { mic: "denied", acc: "denied" }
-      : { mic: "unknown", acc: "denied" };
+      ? { mic: "unknown", acc: "denied", auto: "unknown" }
+      : { mic: "unknown", acc: "denied", auto: "unknown" };
 
   const progressCbs = [];
   const doneCbs = [];
@@ -29,12 +33,22 @@
 
   window.openFlowSetup = {
     getInitialState: () => Promise.resolve({
-      micPermission: perms.mic, accessibilityPermission: perms.acc, tiers,
+      micPermission: perms.mic, accessibilityPermission: perms.acc,
+      automationPermission: scenario === "granted" ? "granted" : "unknown", tiers,
     }),
     requestMicPermission: () => { perms.mic = "granted"; return Promise.resolve("granted"); },
-    refreshAccessibilityStatus: () => Promise.resolve(perms.acc),
-    openAccessibilitySettings: () => { perms.acc = "granted"; },
-    openMicSettings: () => { perms.mic = "granted"; },
+    requestAccessibility: () => Promise.resolve(perms.acc),
+    // Like the real API: automation is null unless it was asked for.
+    refreshPermissions: (opts) => Promise.resolve({
+      mic: perms.mic, accessibility: perms.acc,
+      automation: opts && opts.automation ? perms.auto : null,
+    }),
+    // Pretend the user flips the switch in System Settings.
+    openSystemSettings: (pane) => {
+      if (pane === "accessibility") perms.acc = "granted";
+      else if (pane === "microphone") perms.mic = "granted";
+      else if (pane === "automation") perms.auto = "granted";
+    },
     startDownload: () => {
       const total = 490e6;
       let bytes = 0;
@@ -56,4 +70,13 @@
     onDownloadDone: (cb) => { doneCbs.push(cb); return () => doneCbs.splice(doneCbs.indexOf(cb), 1); },
     finish: () => console.log("[mock] finish"),
   };
+
+  // ?step=permissions jumps past the welcome step (listeners are attached
+  // synchronously by setup.js, so a click at DOMContentLoaded is safe).
+  if (q.get("step") === "permissions") {
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.querySelector('button[data-next="permissions"]');
+      if (btn) btn.click();
+    });
+  }
 })();

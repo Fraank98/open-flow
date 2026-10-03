@@ -3,16 +3,30 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ModelManager } from "./model-manager.js";
 import { TIERS, getModelById, getTier, tierTotals } from "./model-catalog.js";
-import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
+import {
+  AccessibilityNative,
+  checkAccessibility,
+  checkAutomationViaProbe,
+  checkMicrophone,
+  requestAccessibility,
+} from "./permissions.js";
 import { downloadErrorText } from "./utils/download-errors.js";
 import { PreferencesStore } from "./preferences-store.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const APP_ROOT = join(dirname(__filename), "..", "..");
 
+const SETTINGS_PANES: Record<string, string> = {
+  accessibility: "Privacy_Accessibility",
+  microphone: "Privacy_Microphone",
+  automation: "Privacy_Automation",
+};
+
 export interface SetupWizardDeps {
   modelManager: ModelManager;
   preferencesStore: PreferencesStore;
+  /** Live AX trust (the PTT manager). */
+  accessibility: AccessibilityNative;
 }
 
 export class SetupWizard {
@@ -54,7 +68,10 @@ export class SetupWizard {
   private registerHandlers(): void {
     ipcMain.handle("setup:get-initial-state", async () => ({
       micPermission: await checkMicrophone(),
-      accessibilityPermission: await checkAccessibilityViaProbe(),
+      accessibilityPermission: checkAccessibility(this.deps.accessibility),
+      // Not probed here: the osascript probe raises the macOS Automation prompt
+      // if it was never answered, which must only happen when the user asks.
+      automationPermission: "unknown" as const,
       tiers: await Promise.all(
         TIERS.map(async (t) => {
           const { sizeBytes, ramBytes } = tierTotals(t);
@@ -87,14 +104,20 @@ export class SetupWizard {
       return granted ? "granted" : "denied";
     });
 
-    ipcMain.handle("setup:refresh-accessibility", async () => checkAccessibilityViaProbe());
+    // Asks macOS for Accessibility: this is what lists open-flow in System Settings.
+    ipcMain.handle("setup:request-accessibility", () => requestAccessibility(this.deps.accessibility));
 
-    ipcMain.on("setup:open-accessibility-settings", () => {
-      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
-    });
+    // Mic and Accessibility are cheap and polled every second. Automation runs
+    // osascript (and may raise the macOS prompt), so it is only probed on request.
+    ipcMain.handle("setup:refresh-permissions", async (_e, opts?: { automation?: boolean }) => ({
+      mic: await checkMicrophone(),
+      accessibility: checkAccessibility(this.deps.accessibility),
+      automation: opts?.automation ? await checkAutomationViaProbe() : null,
+    }));
 
-    ipcMain.on("setup:open-mic-settings", () => {
-      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+    ipcMain.on("setup:open-system-settings", (_e, pane: string) => {
+      const suffix = SETTINGS_PANES[pane];
+      if (suffix) shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${suffix}`);
     });
 
     ipcMain.handle("setup:start-download", async (_e, tierId: string) => {
@@ -151,10 +174,10 @@ export class SetupWizard {
   private unregisterHandlers(): void {
     ipcMain.removeHandler("setup:get-initial-state");
     ipcMain.removeHandler("setup:request-mic");
-    ipcMain.removeHandler("setup:refresh-accessibility");
+    ipcMain.removeHandler("setup:request-accessibility");
+    ipcMain.removeHandler("setup:refresh-permissions");
     ipcMain.removeHandler("setup:start-download");
-    ipcMain.removeAllListeners("setup:open-accessibility-settings");
-    ipcMain.removeAllListeners("setup:open-mic-settings");
+    ipcMain.removeAllListeners("setup:open-system-settings");
     ipcMain.removeAllListeners("setup:finish");
   }
 

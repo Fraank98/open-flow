@@ -7,10 +7,43 @@ export type ExecFn = (cmd: string) => Promise<{ stdout: string; stderr: string }
 
 const execAsync = promisify(exec);
 
-// Probe accessibility by running a no-op AppleScript that requires keystroke
-// permission. macOS prompts the user OR throws a permission error.
-export async function checkAccessibilityViaProbe(execFn: ExecFn = execAsync): Promise<PermissionStatus> {
-  // A no-op System Events command requires Accessibility permission.
+/** The slice of the native PTT addon that reads/requests the AX trust. */
+export interface AccessibilityNative {
+  isTrusted(): boolean;
+  requestTrust(): boolean;
+}
+
+/** Accessibility, read live from the AX API (`AXIsProcessTrusted`) — the same call the PTT monitor depends on. */
+export function checkAccessibility(native: Pick<AccessibilityNative, "isTrusted">): PermissionStatus {
+  return native.isTrusted() ? "granted" : "denied";
+}
+
+/**
+ * Asks macOS for Accessibility (`AXIsProcessTrustedWithOptions(prompt)`), which
+ * is what makes open-flow appear in System Settings > Accessibility. Calls
+ * `requestTrust()` exactly once and returns the resulting status.
+ */
+export function requestAccessibility(native: AccessibilityNative): PermissionStatus {
+  native.requestTrust();
+  return checkAccessibility(native);
+}
+
+export interface PermissionSet {
+  mic: PermissionStatus;
+  accessibility: PermissionStatus;
+  automation: PermissionStatus;
+}
+
+/** Setup can continue only when all three are granted (Automation is required for the Cmd+V paste). */
+export function permissionsReady(p: PermissionSet): boolean {
+  return p.mic === "granted" && p.accessibility === "granted" && p.automation === "granted";
+}
+
+// Probe Automation (Apple Events to System Events) with a no-op AppleScript.
+// This is NOT the Accessibility permission: macOS either prompts the user once
+// or throws a "not authorized" error. The paste (Cmd+V via System Events)
+// needs both Accessibility and Automation.
+export async function checkAutomationViaProbe(execFn: ExecFn = execAsync): Promise<PermissionStatus> {
   const cmd = `osascript -e 'tell application "System Events" to get name of every process whose visible is true' 2>&1`;
   try {
     await execFn(cmd);

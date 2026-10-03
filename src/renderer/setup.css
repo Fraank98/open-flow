@@ -40,10 +40,11 @@ button.secondary { margin-right: auto; } /* push primary action to the right */
 .perm { padding: 14px; background: #2a2a2c; border-radius: 8px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .perm-info { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
 .perm strong { font-size: 14px; }
-.perm-hint { font-size: 12px; opacity: 0.65; }
+.perm-hint { font-size: 12px; opacity: 0.65; max-width: 330px; }
 .status { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: #4a4a4a; white-space: nowrap; }
 .status.granted { background: #2c6e2c; color: #fff; }
 .status.denied { background: #8a3a3a; color: #fff; }
+.status.pending { background: #4a4a4a; color: #fff; }
 
 /* Tier cards behave as radios */
 #tier-list { display: flex; flex-direction: column; gap: 10px; }

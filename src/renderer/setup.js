@@ -7,7 +7,16 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const STEPS = ["welcome", "permissions", "tier", "download", "done"];
 let currentStep = "welcome";
 
-let state = { micPermission: "unknown", accessibilityPermission: "unknown", tiers: [] };
+let state = {
+  micPermission: "unknown",
+  accessibilityPermission: "unknown",
+  automationPermission: "unknown",
+  tiers: [],
+};
+// The Automation probe can raise a macOS prompt, so it only runs after the user
+// has asked for it (button click); from then on it is re-checked on focus.
+let automationAsked = false;
+let permissionTimer = null;
 let selectedTierId = null;
 
 function buildStepper() {
@@ -37,15 +46,27 @@ function goto(stepId) {
   // new content instead of a now-hidden button.
   const heading = $("#step-" + stepId + " h2");
   if (heading) heading.focus();
+
+  // Poll the cheap permissions (mic, Accessibility) only while that step is visible.
+  clearInterval(permissionTimer);
+  permissionTimer = null;
+  if (stepId === "permissions") permissionTimer = setInterval(() => recheckPermissions(), 1000);
 }
 
 // ---- Permissions ----------------------------------------------------------
 
+const Logic = globalThis.OpenFlowSetupLogic;
+
+function renderBadge(sel, perm) {
+  const status = $(sel);
+  const badge = Logic.permissionBadge(perm);
+  status.textContent = badge.text;
+  status.classList.remove("granted", "denied", "pending");
+  status.classList.add(badge.cls);
+}
+
 function renderMic(perm) {
-  const status = $("#mic-status");
-  status.textContent = perm === "granted" ? "granted" : perm === "denied" ? "denied" : "not granted";
-  status.classList.toggle("granted", perm === "granted");
-  status.classList.toggle("denied", perm === "denied");
+  renderBadge("#mic-status", perm);
   // Once the OS prompt has been answered we can't re-prompt in-app: a denied
   // mic can only be fixed in System Settings, so swap the button accordingly.
   $("#mic-request").classList.toggle("hidden", perm !== "unknown");
@@ -53,23 +74,25 @@ function renderMic(perm) {
 }
 
 function renderAccessibility(perm) {
-  const status = $("#acc-status");
-  status.textContent = perm === "granted" ? "granted" : perm === "denied" ? "denied" : "not granted";
-  status.classList.toggle("granted", perm === "granted");
-  status.classList.toggle("denied", perm === "denied");
-  // Granted → nothing left to do here; hide the action buttons.
+  renderBadge("#acc-status", perm);
+  // Granted → nothing left to do here; hide the action button.
   $("#acc-open").classList.toggle("hidden", perm === "granted");
-  $("#acc-refresh").classList.toggle("hidden", perm === "granted");
+}
+
+function renderAutomation(perm) {
+  renderBadge("#auto-status", perm);
+  $("#auto-request").classList.toggle("hidden", perm !== "unknown");
+  $("#auto-open").classList.toggle("hidden", perm !== "denied");
 }
 
 function updateContinue() {
-  const ok = state.micPermission === "granted" && state.accessibilityPermission === "granted";
-  $("#perm-continue").disabled = !ok;
+  $("#perm-continue").disabled = !Logic.canContinuePermissions(state);
 }
 
 function applyPermissions() {
   renderMic(state.micPermission);
   renderAccessibility(state.accessibilityPermission);
+  renderAutomation(state.automationPermission);
   updateContinue();
 }
 
@@ -189,15 +212,24 @@ async function init() {
     } catch { state.micPermission = "denied"; }
     applyPermissions();
   });
-  $("#mic-open").addEventListener("click", () => window.openFlowSetup.openMicSettings());
+  $("#mic-open").addEventListener("click", () => window.openFlowSetup.openSystemSettings("microphone"));
 
-  $("#acc-open").addEventListener("click", () => window.openFlowSetup.openAccessibilitySettings());
-  $("#acc-refresh").addEventListener("click", recheckPermissions);
+  // Asking first is what makes open-flow show up in the Accessibility list.
+  $("#acc-open").addEventListener("click", async () => {
+    try {
+      state.accessibilityPermission = await window.openFlowSetup.requestAccessibility();
+    } catch { /* fall through to the settings pane */ }
+    applyPermissions();
+    if (state.accessibilityPermission !== "granted") window.openFlowSetup.openSystemSettings("accessibility");
+  });
 
-  // macOS Accessibility/Mic are toggled in System Settings, outside this window.
-  // Re-check whenever the user comes back so they don't have to hit "Re-check".
+  $("#auto-request").addEventListener("click", () => recheckPermissions({ automation: true }));
+  $("#auto-open").addEventListener("click", () => window.openFlowSetup.openSystemSettings("automation"));
+
+  // Settings are toggled outside this window; Automation is a process spawn, so
+  // it is re-checked on focus (not on the timer), and only once the user asked.
   window.addEventListener("focus", () => {
-    if (currentStep === "permissions") recheckPermissions();
+    if (currentStep === "permissions") recheckPermissions({ automation: automationAsked });
   });
 
   $("#tier-continue").addEventListener("click", async () => {
@@ -225,11 +257,13 @@ async function init() {
   $("#done-finish").addEventListener("click", () => window.openFlowSetup.finish());
 }
 
-async function recheckPermissions() {
+async function recheckPermissions({ automation = false } = {}) {
+  if (automation) automationAsked = true;
   try {
-    const fresh = await window.openFlowSetup.getInitialState();
-    state.micPermission = fresh.micPermission;
-    state.accessibilityPermission = fresh.accessibilityPermission;
+    const fresh = await window.openFlowSetup.refreshPermissions({ automation });
+    state.micPermission = fresh.mic;
+    state.accessibilityPermission = fresh.accessibility;
+    if (fresh.automation) state.automationPermission = fresh.automation;
     applyPermissions();
   } catch { /* transient; leave current state */ }
 }

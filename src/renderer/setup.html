@@ -27,22 +27,30 @@
         <div class="perm" id="perm-mic">
           <div class="perm-info">
             <strong>Microphone</strong>
-            <span class="perm-hint">Needed to record your voice.</span>
+            <span class="perm-hint">Records your voice only while you hold Option.</span>
           </div>
           <span class="status" id="mic-status" role="status" aria-live="polite">checking…</span>
-          <button id="mic-request">Request access</button>
+          <button id="mic-request">Allow microphone</button>
           <button id="mic-open" class="hidden">Open System Settings</button>
         </div>
         <div class="perm" id="perm-acc">
           <div class="perm-info">
             <strong>Accessibility</strong>
-            <span class="perm-hint">Lets the app press <kbd>⌘V</kbd> to paste into the focused field.</span>
+            <span class="perm-hint">Lets open-flow notice when you hold Option and paste with <kbd>⌘V</kbd>. It does not read what you type.</span>
           </div>
           <span class="status" id="acc-status" role="status" aria-live="polite">checking…</span>
           <button id="acc-open">Open System Settings</button>
-          <button id="acc-refresh">Re-check</button>
         </div>
-        <p class="muted">Both permissions are granted in macOS System Settings. We re-check automatically when you return to this window.</p>
+        <div class="perm" id="perm-auto">
+          <div class="perm-info">
+            <strong>Automation</strong>
+            <span class="perm-hint">Lets open-flow ask System Events to press <kbd>⌘V</kbd>. macOS will ask you once.</span>
+          </div>
+          <span class="status" id="auto-status" role="status" aria-live="polite">checking…</span>
+          <button id="auto-request">Allow automation</button>
+          <button id="auto-open" class="hidden">Open System Settings</button>
+        </div>
+        <p class="muted">Granted permissions turn green automatically — no need to come back and click anything.</p>
         <div class="actions">
           <button data-back="welcome" class="secondary">Back</button>
           <button data-next="tier" id="perm-continue" class="primary" disabled>Continue</button>
@@ -83,6 +91,7 @@
         </div>
       </section>
     </main>
+    <script src="./lib/setup-logic.js"></script>
     <script src="./setup.js"></script>
   </body>
 </html>

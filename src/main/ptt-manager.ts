@@ -115,6 +115,11 @@ export class PTTManager extends EventEmitter {
     return this.native.isTrusted();
   }
 
+  /** Asks macOS for Accessibility (shows the system prompt and lists the app in System Settings). */
+  requestTrust(): boolean {
+    return this.native.requestTrust();
+  }
+
   private handleState(state: NativePttState, detail?: string): void {
     this.emit("rawEvent", state, detail);
     // Observation only — a dropped-edge report must never arm, start or cancel

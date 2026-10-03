@@ -1,9 +1,17 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+type SettingsPane = "accessibility" | "microphone" | "automation";
+interface PermissionsSnapshot {
+  mic: string;
+  accessibility: string;
+  automation: string | null;
+}
+
 contextBridge.exposeInMainWorld("openFlowSetup", {
   getInitialState: (): Promise<{
     micPermission: string;
     accessibilityPermission: string;
+    automationPermission: string;
     tiers: Array<{
       id: string;
       label: string;
@@ -19,9 +27,11 @@ contextBridge.exposeInMainWorld("openFlowSetup", {
   }> => ipcRenderer.invoke("setup:get-initial-state"),
 
   requestMicPermission: (): Promise<string> => ipcRenderer.invoke("setup:request-mic"),
-  refreshAccessibilityStatus: (): Promise<string> => ipcRenderer.invoke("setup:refresh-accessibility"),
-  openAccessibilitySettings: (): void => ipcRenderer.send("setup:open-accessibility-settings"),
-  openMicSettings: (): void => ipcRenderer.send("setup:open-mic-settings"),
+  requestAccessibility: (): Promise<string> => ipcRenderer.invoke("setup:request-accessibility"),
+  /** `automation` is null unless `{ automation: true }` is passed (the probe can raise a macOS prompt). */
+  refreshPermissions: (opts?: { automation?: boolean }): Promise<PermissionsSnapshot> =>
+    ipcRenderer.invoke("setup:refresh-permissions", opts),
+  openSystemSettings: (pane: SettingsPane): void => ipcRenderer.send("setup:open-system-settings", pane),
 
   startDownload: (tierId: string): Promise<void> => ipcRenderer.invoke("setup:start-download", tierId),
   onDownloadProgress: (cb: (p: { stage: string; bytes: number; total: number }) => void): (() => void) => {
@@ -44,6 +54,7 @@ declare global {
       getInitialState: () => Promise<{
         micPermission: string;
         accessibilityPermission: string;
+        automationPermission: string;
         tiers: Array<{
       id: string;
       label: string;
@@ -58,9 +69,9 @@ declare global {
     }>;
       }>;
       requestMicPermission: () => Promise<string>;
-      refreshAccessibilityStatus: () => Promise<string>;
-      openAccessibilitySettings: () => void;
-      openMicSettings: () => void;
+      requestAccessibility: () => Promise<string>;
+      refreshPermissions: (opts?: { automation?: boolean }) => Promise<PermissionsSnapshot>;
+      openSystemSettings: (pane: SettingsPane) => void;
       startDownload: (tierId: string) => Promise<void>;
       onDownloadProgress: (cb: (p: { stage: string; bytes: number; total: number }) => void) => () => void;
       onDownloadDone: (cb: (result: { ok: boolean; error?: string }) => void) => () => void;
