@@ -111,7 +111,54 @@
     return { label: "Apps to read", warning: appCount > 0 ? null : "No app added: nothing will be read." };
   }
 
+  var MAC_MODIFIERS = { control: "⌃", ctrl: "⌃", shift: "⇧", command: "⌘", cmd: "⌘", commandorcontrol: "⌘", cmdorctrl: "⌘", super: "⌘", meta: "⌘" };
+  var MAC_KEYS = { up: "↑", down: "↓", left: "←", right: "→", return: "↩", enter: "↩", tab: "⇥", backspace: "⌫", delete: "⌦", escape: "⎋", esc: "⎋" };
+
+  /** "Command+Control+R" -> "⌃⌘R": modifiers in macOS order (⌃ ⌥ ⇧ ⌘), then the key. */
+  function acceleratorLabel(accelerator) {
+    var order = ["⌃", "⌥", "⇧", "⌘"];
+    var mods = [];
+    var key = "";
+    String(accelerator || "").split("+").forEach(function (part) {
+      var lower = part.trim().toLowerCase();
+      if (lower === "alt" || lower === "option") {
+        if (mods.indexOf("⌥") === -1) mods.push("⌥");
+      } else if (MAC_MODIFIERS[lower]) {
+        if (mods.indexOf(MAC_MODIFIERS[lower]) === -1) mods.push(MAC_MODIFIERS[lower]);
+      } else {
+        key = MAC_KEYS[lower] || (part.trim().length === 1 ? part.trim().toUpperCase() : part.trim());
+      }
+    });
+    mods.sort(function (a, b) { return order.indexOf(a) - order.indexOf(b); });
+    return mods.join("") + key;
+  }
+
+  /**
+   * The server state as one sentence for the Reply tab. tone drives the colour;
+   * action "retry" turns the sentence into a Retry button. Nothing is said while
+   * the feature is off or unavailable (the line under the toggle covers those).
+   */
+  function replyStatusView(status, accelerator) {
+    var none = { text: "", tone: "none", action: null };
+    if (!status.nativeOk) return none;
+    switch (status.serverState) {
+      case "ready":
+        if (!status.hotkeyRegistered) return { text: "Shortcut taken by another app — choose another", tone: "error", action: null };
+        return { text: "Model: ready · " + acceleratorLabel(accelerator) + " active", tone: "ok", action: null };
+      case "starting":
+        return { text: "Model: loading…", tone: "busy", action: null };
+      case "downloading":
+        return { text: "Model: downloading…", tone: "busy", action: null };
+      case "failed":
+        return { text: "Model: failed — Retry", tone: "error", action: "retry" };
+      default:
+        return none;
+    }
+  }
+
   return {
+    acceleratorLabel: acceleratorLabel,
+    replyStatusView: replyStatusView,
     replyGuardMessage: replyGuardMessage,
     replyAppsView: replyAppsView,
     restartBadgeFor: restartBadgeFor,

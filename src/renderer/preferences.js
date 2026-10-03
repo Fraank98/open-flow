@@ -264,7 +264,11 @@ async function init() {
   $("#replyHotkey").addEventListener("input", () => { void validateHotkeyField(); });
   // An invalid shortcut is never saved; the reason stays under the field.
   $("#replyHotkey").addEventListener("change", async () => {
-    if (await validateHotkeyField()) void save({ replySuggestionsHotkey: $("#replyHotkey").value.trim() }, "reply");
+    if (await validateHotkeyField()) {
+      await save({ replySuggestionsHotkey: $("#replyHotkey").value.trim() }, "reply");
+      showShortcutHint();
+      void refreshReplyStatus();
+    }
   });
 
   /**
@@ -293,16 +297,41 @@ async function init() {
   });
   refreshReplyGuards();
 
+  /** One sentence for the model/shortcut state; "failed" is a Retry button. */
+  function renderReplyState(view, detail) {
+    const el = $("#replyServerState");
+    el.textContent = "";
+    el.dataset.tone = view.tone;
+    if (!view.text) return;
+    if (view.action === "retry") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "link";
+      retry.textContent = view.text;
+      retry.addEventListener("click", () => {
+        // Re-saving the toggle makes the main process re-apply the reply server.
+        void save({ replySuggestionsEnabled: true }, "reply", "Retrying…");
+      });
+      el.appendChild(retry);
+    } else {
+      el.textContent = view.text;
+    }
+    // The raw error is for the tooltip only: it can be long and technical.
+    if (detail) el.title = detail; else el.removeAttribute("title");
+  }
+
+  function showShortcutHint() {
+    $("#replyShortcutHint").textContent = L.acceleratorLabel(prefs.replySuggestionsHotkey);
+  }
+  showShortcutHint();
+
   async function refreshReplyStatus() {
     const s = await api.replyStatus();
     if (s.nativeOk !== nativeOk) {
       nativeOk = s.nativeOk;
       refreshReplyGuards();
     }
-    const parts = [`State: ${s.serverState}`];
-    if (s.serverError) parts.push(`error: ${s.serverError}`);
-    if (s.serverState === "ready" && !s.hotkeyRegistered) parts.push("shortcut taken by another app");
-    $("#replyServerState").textContent = parts.join(" · ");
+    renderReplyState(L.replyStatusView(s, prefs.replySuggestionsHotkey), s.serverError);
     const btn = $("#replyAppAddBlocked");
     // lastBlockedBundleId is never cleared once set, so hide the button once
     // that app is already in the list.
