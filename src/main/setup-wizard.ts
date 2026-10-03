@@ -17,6 +17,7 @@ import { createEmitGate } from "./utils/emit-gate.js";
 import { getModelsDir } from "./utils/model-paths.js";
 import { PreferencesStore, SetupStep } from "./preferences-store.js";
 import type { WizardPipelineState } from "./utils/wizard-pipeline-state.js";
+import type { WizardReadyState } from "./utils/ready-state.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const APP_ROOT = join(dirname(__filename), "..", "..");
@@ -53,7 +54,8 @@ export class SetupWizard {
   private win: BrowserWindow | null = null;
   /** Resolves `run()`: true once setup is complete, false if the window closed first. */
   private resolver: ((completed: boolean) => void) | null = null;
-  private appReady = false;
+  /** What the final step shows about the app (loading, armed, blocked, paused). */
+  private readyState: WizardReadyState = "starting";
   /** Aborts the model download in flight (cancel button, or quitting setup). */
   private abort: AbortController | null = null;
   /** True once the models are on disk and setupComplete is saved. */
@@ -68,10 +70,10 @@ export class SetupWizard {
     return !!this.win && !this.win.isDestroyed();
   }
 
-  /** Tells the "ready" step that models are loaded and push-to-talk is armed. */
-  markAppReady(): void {
-    this.appReady = true;
-    this.send("setup:app-ready");
+  /** Tells the "ready" step where the app stands: armed, or why it is not (Accessibility off, relaunch needed, paused). */
+  setReadyState(state: WizardReadyState): void {
+    this.readyState = state;
+    this.send("setup:ready-state", state);
   }
 
   /** Forwards the dictation pipeline state to the live "try it" line. */
@@ -156,7 +158,7 @@ export class SetupWizard {
         setupTierId: prefs.setupTierId,
         launchAtLogin: prefs.launchAtLogin,
         freeBytes: await this.freeBytes(),
-        appReady: this.appReady,
+        readyState: this.readyState,
         tiers: await Promise.all(
           TIERS.map(async (t) => {
             const { sizeBytes, ramBytes } = tierTotals(t);
@@ -283,6 +285,15 @@ export class SetupWizard {
 
     ipcMain.on("setup:cancel-download", () => this.abort?.abort());
 
+    // The "relaunch needed" state of the final step: Accessibility was granted
+    // after the monitor failed to install, only a fresh process picks it up.
+    ipcMain.on("setup:relaunch", () => {
+      setImmediate(() => {
+        app.relaunch();
+        app.quit();
+      });
+    });
+
     // Finish only closes the window; run() already resolved when setup completed.
     ipcMain.on("setup:finish", () => {
       if (this.win && !this.win.isDestroyed()) {
@@ -302,6 +313,7 @@ export class SetupWizard {
     ipcMain.removeAllListeners("setup:cancel-download");
     ipcMain.removeAllListeners("setup:open-system-settings");
     ipcMain.removeAllListeners("setup:finish");
+    ipcMain.removeAllListeners("setup:relaunch");
   }
 
   /** Free bytes on the volume that holds the models; null when it can't be read. */

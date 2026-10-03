@@ -32,10 +32,11 @@ interface InitialState {
   /** Free bytes on the volume that holds the models, or null when unknown. */
   freeBytes: number | null;
   launchAtLogin: boolean;
-  /** True when the app finished starting before this window loaded. */
-  appReady: boolean;
+  /** Where the app stands, for the final step (it may have settled before this window loaded). */
+  readyState: ReadyState;
 }
 
+type ReadyState = "starting" | "ready" | "accessibility-off" | "relaunch-needed" | "paused";
 type PipelineViewState = "idle" | "recording" | "transcribing" | "cleaning" | "pasting";
 
 interface DownloadProgress {
@@ -79,12 +80,13 @@ contextBridge.exposeInMainWorld("openFlowSetup", {
     return () => ipcRenderer.removeListener("setup:download-done", handler);
   },
 
-  /** The models are loaded and push-to-talk is armed: the user can try dictating elsewhere. */
-  onAppReady: (cb: () => void): (() => void) => {
-    const handler = () => cb();
-    ipcRenderer.on("setup:app-ready", handler);
-    return () => ipcRenderer.removeListener("setup:app-ready", handler);
+  /** The app's state for the final step: armed (try dictating elsewhere), or why it isn't. */
+  onReadyState: (cb: (state: ReadyState) => void): (() => void) => {
+    const handler = (_e: unknown, state: ReadyState) => cb(state);
+    ipcRenderer.on("setup:ready-state", handler);
+    return () => ipcRenderer.removeListener("setup:ready-state", handler);
   },
+  relaunch: (): void => ipcRenderer.send("setup:relaunch"),
   onPipelineState: (cb: (state: PipelineViewState) => void): (() => void) => {
     const handler = (_e: unknown, state: PipelineViewState) => cb(state);
     ipcRenderer.on("setup:pipeline-state", handler);
@@ -108,7 +110,8 @@ declare global {
       cancelDownload: () => void;
       onDownloadProgress: (cb: (p: DownloadProgress) => void) => () => void;
       onDownloadDone: (cb: (result: DownloadResult) => void) => () => void;
-      onAppReady: (cb: () => void) => () => void;
+      onReadyState: (cb: (state: ReadyState) => void) => () => void;
+      relaunch: () => void;
       onPipelineState: (cb: (state: PipelineViewState) => void) => () => void;
       finish: () => void;
     };

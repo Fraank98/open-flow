@@ -1,7 +1,7 @@
 // Fake window.openFlowSetup for browser previews.
 // Query: ?theme=light|dark
 //        &step=welcome|permissions|tier|download|ready   (page to land on)
-//        &appReady=1 (ready step: the app finished starting)  &pipeline=recording|transcribing|cleaning|pasting|pasted
+//        &appReady=1 (ready step: the app finished starting)  &ready=accessibility-off|relaunch-needed|paused (ready step: why it isn't)  &pipeline=recording|transcribing|cleaning|pasting|pasted
 //        &scenario=fresh|mixed|granted|no-permissions|resume-download|downloading|download-error|no-space
 (function () {
   "use strict";
@@ -26,8 +26,12 @@
   ];
   // Statuses as the main process reports them. Accessibility is only ever
   // granted/denied (live AX API); mic and automation can also be "unknown".
+  // Past the permissions step the wizard only resumes with mic + Accessibility granted.
+  const pastPermissions = ["tier", "download", "ready"].includes(step);
   const perms = scenario === "granted"
     ? { mic: "granted", acc: "granted", auto: "granted" }
+    : pastPermissions
+      ? { mic: "granted", acc: "granted", auto: "unknown" }
     : scenario === "mixed"
       ? { mic: "granted", acc: "denied", auto: "unknown" }
       : { mic: "unknown", acc: "denied", auto: "unknown" };
@@ -38,7 +42,7 @@
   const savedTier = step === "download" || step === "ready" ? "balanced" : null;
   const autoStart = step === "ready" || ["downloading", "download-error", "no-space"].includes(scenario);
 
-  const appReadyCbs = [];
+  const readyStateCbs = [];
   const pipelineCbs = [];
   const progressCbs = [];
   const doneCbs = [];
@@ -70,7 +74,7 @@
       micPermission: perms.mic, accessibilityPermission: perms.acc,
       automationPermission: scenario === "granted" ? "granted" : "unknown", tiers,
       setupStep: savedStep, setupTierId: savedTier,
-      appReady: false,
+      readyState: "starting",
       freeBytes: scenario === "no-space" ? 0.9e9 : 42e9, launchAtLogin: true,
     }),
     requestMicPermission: () => { perms.mic = "granted"; return Promise.resolve("granted"); },
@@ -117,7 +121,8 @@
     },
     onDownloadProgress: (cb) => { progressCbs.push(cb); return () => progressCbs.splice(progressCbs.indexOf(cb), 1); },
     onDownloadDone: (cb) => { doneCbs.push(cb); return () => doneCbs.splice(doneCbs.indexOf(cb), 1); },
-    onAppReady: (cb) => { appReadyCbs.push(cb); return () => appReadyCbs.splice(appReadyCbs.indexOf(cb), 1); },
+    onReadyState: (cb) => { readyStateCbs.push(cb); return () => readyStateCbs.splice(readyStateCbs.indexOf(cb), 1); },
+    relaunch: () => console.log("[mock] relaunch"),
     onPipelineState: (cb) => { pipelineCbs.push(cb); return () => pipelineCbs.splice(pipelineCbs.indexOf(cb), 1); },
     finish: () => console.log("[mock] finish"),
   };
@@ -131,10 +136,11 @@
   }
 
   // The ready step goes live once the app reports ready (after the scripted download).
-  if (q.get("appReady") === "1") {
+  const readyParam = q.get("ready") || (q.get("appReady") === "1" ? "ready" : null);
+  if (readyParam) {
     document.addEventListener("DOMContentLoaded", () => {
       setTimeout(() => {
-        appReadyCbs.forEach((cb) => cb());
+        readyStateCbs.forEach((cb) => cb(readyParam));
         const seq = { recording: ["recording"], transcribing: ["recording", "transcribing"], cleaning: ["recording", "transcribing", "cleaning"],
           pasting: ["recording", "transcribing", "cleaning", "pasting"], pasted: ["recording", "transcribing", "cleaning", "pasting", "idle"] }[q.get("pipeline")] || [];
         seq.forEach((st) => pipelineCbs.forEach((cb) => cb(st)));

@@ -18,6 +18,7 @@ import { LLMCleaner } from "./llm-cleaner.js";
 import { LLMServer } from "./llm-server.js";
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { buildInitialPrompt } from "./utils/initial-prompt.js";
+import { readyStateForArmer } from "./utils/ready-state.js";
 import { waitForEventOrTimeout } from "./utils/wait-for-event.js";
 import { toWizardPipelineState } from "./utils/wizard-pipeline-state.js";
 import { restartRequiredFields } from "./utils/restart-required.js";
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
 
   // First-launch: run setup wizard until setupComplete=true. run() resolves as
   // soon as the models are downloaded; the window then stays open on its last
-  // step while the rest of the boot below goes on (see markAppReady). It is
+  // step while the rest of the boot below goes on (see setReadyState). It is
   // declared before everything that uses it later (coordinator and PTT-arming
   // callbacks), so none of those closures can hit it in the TDZ.
   let wizard: SetupWizard | null = null;
@@ -216,6 +217,7 @@ async function main(): Promise<void> {
         } else {
           pttArmer?.stop();
           ptt.stop();
+          if (wizard?.isOpen()) wizard.setReadyState("paused");
         }
       },
       onOpenSettings: () => {
@@ -640,11 +642,13 @@ async function main(): Promise<void> {
     intervalMs: 2000,
     onState: (state) => {
       void logger.info("PTT arming", { state });
+      // Whatever the state, the wizard's last step must show it (it would
+      // otherwise sit on "Starting up…" while blocked on Accessibility).
+      if (wizard?.isOpen()) wizard.setReadyState(readyStateForArmer(state));
       switch (state) {
         case "armed":
           menubar.setPermissionHint(null);
           menubar.setStatus("Ready — hold ⌥ to dictate");
-          if (wizard?.isOpen()) wizard.markAppReady();
           break;
         case "waiting":
           menubar.setStatus("Needs Accessibility permission");
@@ -655,7 +659,6 @@ async function main(): Promise<void> {
         case "armed-after-grant":
           menubar.setPermissionHint(null);
           menubar.setStatus("Ready — if Option doesn't respond, choose Relaunch open-flow");
-          if (wizard?.isOpen()) wizard.markAppReady();
           break;
         case "relaunch-needed":
           menubar.setPermissionHint(null);
@@ -670,6 +673,7 @@ async function main(): Promise<void> {
     pttArmer.arm();
   } else {
     menubar.setStatus("Paused");
+    if (wizard?.isOpen()) wizard.setReadyState("paused");
   }
 
   app.on("window-all-closed", () => {

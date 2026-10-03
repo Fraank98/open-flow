@@ -15,7 +15,17 @@ interface SetupLogic {
   ): Array<{ t: number; bytes: number }>;
   formatEta(sec: number | null): string;
   estimateMinutes(bytes: number, bytesPerSec: number): number;
-  resumeStep(prefs: { setupStep?: string; setupTierId?: string | null }): string;
+  resumeStep(prefs: {
+    setupStep?: string;
+    setupTierId?: string | null;
+    micPermission?: string;
+    accessibilityPermission?: string;
+  }): string;
+  readyView(state: string | undefined): {
+    live: boolean;
+    text: string;
+    action: "open-accessibility" | "relaunch" | null;
+  };
   tierCardLines(tier: TierView): string[];
   readyStepText(state: string | undefined): string;
   pipelineView(prev: string | undefined, next: string): string;
@@ -113,18 +123,75 @@ describe("estimateMinutes", () => {
 });
 
 describe("resumeStep", () => {
+  const granted = { micPermission: "granted", accessibilityPermission: "granted" };
+
   it("restarts from the saved step, never beyond download", () => {
-    expect(L.resumeStep({ setupStep: "permissions", setupTierId: null })).toBe("permissions");
-    expect(L.resumeStep({ setupStep: "tier", setupTierId: "balanced" })).toBe("tier");
-    expect(L.resumeStep({ setupStep: "download", setupTierId: "balanced" })).toBe("download");
-    expect(L.resumeStep({ setupStep: "ready", setupTierId: "balanced" })).toBe("download");
+    expect(L.resumeStep({ setupStep: "permissions", setupTierId: null, ...granted })).toBe("permissions");
+    expect(L.resumeStep({ setupStep: "tier", setupTierId: "balanced", ...granted })).toBe("tier");
+    expect(L.resumeStep({ setupStep: "download", setupTierId: "balanced", ...granted })).toBe("download");
+    expect(L.resumeStep({ setupStep: "ready", setupTierId: "balanced", ...granted })).toBe("download");
   });
 
   it("falls back to the tier step when no tier was chosen, and to welcome for junk", () => {
-    expect(L.resumeStep({ setupStep: "download", setupTierId: null })).toBe("tier");
-    expect(L.resumeStep({ setupStep: "ready", setupTierId: null })).toBe("tier");
+    expect(L.resumeStep({ setupStep: "download", setupTierId: null, ...granted })).toBe("tier");
+    expect(L.resumeStep({ setupStep: "ready", setupTierId: null, ...granted })).toBe("tier");
     expect(L.resumeStep({})).toBe("welcome");
     expect(L.resumeStep({ setupStep: "bogus" })).toBe("welcome");
+  });
+
+  it("goes back to permissions when mic or Accessibility is no longer granted", () => {
+    const base = { setupStep: "download", setupTierId: "balanced" };
+    expect(L.resumeStep({ ...base, micPermission: "denied", accessibilityPermission: "granted" })).toBe("permissions");
+    expect(L.resumeStep({ ...base, micPermission: "granted", accessibilityPermission: "denied" })).toBe("permissions");
+    expect(L.resumeStep({ setupStep: "tier", micPermission: "unknown", accessibilityPermission: "granted" })).toBe(
+      "permissions",
+    );
+    expect(L.resumeStep({ ...base })).toBe("permissions"); // unknown permissions are not granted
+  });
+
+  it("leaves the early steps alone whatever the permissions", () => {
+    const none = { micPermission: "denied", accessibilityPermission: "denied" };
+    expect(L.resumeStep({ setupStep: "welcome", ...none })).toBe("welcome");
+    expect(L.resumeStep({ setupStep: "permissions", ...none })).toBe("permissions");
+  });
+});
+
+describe("readyView", () => {
+  it("shows the wait text while starting (and for anything unknown)", () => {
+    for (const s of ["starting", undefined, "bogus"]) {
+      const v = L.readyView(s);
+      expect(v.live).toBe(false);
+      expect(v.action).toBeNull();
+      expect(v.text).toBe("Starting up… loading your models (this can take up to 30 s).");
+    }
+  });
+
+  it("goes live once ready", () => {
+    expect(L.readyView("ready")).toMatchObject({ live: true, action: null });
+  });
+
+  it("tells the user what is wrong when Accessibility is off, with a way to fix it", () => {
+    expect(L.readyView("accessibility-off")).toEqual({
+      live: false,
+      text: "Accessibility is off — turn it on in System Settings.",
+      action: "open-accessibility",
+    });
+  });
+
+  it("asks for a relaunch once the permission was granted too late", () => {
+    expect(L.readyView("relaunch-needed")).toEqual({
+      live: false,
+      text: "Permission granted — relaunch open-flow to activate dictation.",
+      action: "relaunch",
+    });
+  });
+
+  it("says dictation is paused, with no action", () => {
+    expect(L.readyView("paused")).toEqual({
+      live: false,
+      text: "Dictation is paused — resume it from the menubar icon.",
+      action: null,
+    });
   });
 });
 

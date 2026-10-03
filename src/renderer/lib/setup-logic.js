@@ -90,14 +90,41 @@
   /**
    * Where an interrupted setup restarts: the saved step, but never beyond
    * "download" (the window cannot show a finished setup it did not run), and
-   * back at "tier" when no quality level was ever chosen.
+   * back at "tier" when no quality level was ever chosen. Past "permissions" it
+   * returns to "permissions" if mic or Accessibility is no longer granted (the
+   * user may have revoked it meanwhile). Automation isn't checked: it is only
+   * probed on request.
    */
-  function resumeStep(prefs) {
-    var step = prefs && prefs.setupStep;
+  function resumeStep(state) {
+    var step = state && state.setupStep;
     if (STEP_ORDER.indexOf(step) === -1) return "welcome";
     if (step === "ready") step = "download";
-    if (step === "download" && !prefs.setupTierId) return "tier";
+    if (step === "tier" || step === "download") {
+      if (state.micPermission !== "granted" || state.accessibilityPermission !== "granted") return "permissions";
+    }
+    if (step === "download" && !state.setupTierId) return "tier";
     return step;
+  }
+
+  var READY_VIEWS = {
+    starting: { live: false, text: "Starting up… loading your models (this can take up to 30 s).", action: null },
+    ready: { live: true, text: "", action: null },
+    "accessibility-off": {
+      live: false,
+      text: "Accessibility is off — turn it on in System Settings.",
+      action: "open-accessibility",
+    },
+    "relaunch-needed": {
+      live: false,
+      text: "Permission granted — relaunch open-flow to activate dictation.",
+      action: "relaunch",
+    },
+    paused: { live: false, text: "Dictation is paused — resume it from the menubar icon.", action: null },
+  };
+
+  /** What the final step shows for the app's state: the live guide, or a message with an optional fix button. */
+  function readyView(state) {
+    return Object.prototype.hasOwnProperty.call(READY_VIEWS, state) ? READY_VIEWS[state] : READY_VIEWS.starting;
   }
 
   /** Text lines of a tier card: summary, size/RAM/time, transcription note, license note (if any). */
@@ -149,6 +176,7 @@
     formatEta: formatEta,
     estimateMinutes: estimateMinutes,
     resumeStep: resumeStep,
+    readyView: readyView,
     tierCardLines: tierCardLines,
     freeSpaceInfo: freeSpaceInfo,
   };

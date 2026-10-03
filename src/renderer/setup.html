@@ -98,7 +98,12 @@
 
       <section id="step-ready" class="step" aria-labelledby="ready-h">
         <h2 id="ready-h" tabindex="-1">You're all set</h2>
-        <p id="ready-starting">Starting up… loading the models you just downloaded (about 10 s).</p>
+        <!-- Wait / blocked message of the final step; setup.js fills it from readyView(). -->
+        <p id="ready-starting" role="status" aria-live="polite">Starting up… loading your models (this can take up to 30 s).</p>
+        <div id="ready-actions" class="actions inline hidden">
+          <button id="ready-open-acc" class="hidden">Open System Settings</button>
+          <button id="ready-relaunch" class="primary hidden">Relaunch open-flow</button>
+        </div>
         <div id="ready-live" class="hidden">
           <p>Switch to Notes or any text field, hold <kbd>⌥ Option</kbd>, speak, then release.</p>
           <p class="muted">Dictation works in other apps, not in this window.</p>

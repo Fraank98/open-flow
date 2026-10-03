@@ -289,9 +289,15 @@ function onDone({ ok, error }) {
 
 let lastPipelineState = "idle";
 
-function showAppReady() {
-  $("#ready-starting").classList.add("hidden");
-  $("#ready-live").classList.remove("hidden");
+// Final step: the live guide once armed, otherwise why dictation isn't active yet.
+function showReadyState(readyState) {
+  const view = Logic.readyView(readyState);
+  $("#ready-starting").classList.toggle("hidden", view.live);
+  $("#ready-starting").textContent = view.text;
+  $("#ready-live").classList.toggle("hidden", !view.live);
+  $("#ready-actions").classList.toggle("hidden", !view.action);
+  $("#ready-open-acc").classList.toggle("hidden", view.action !== "open-accessibility");
+  $("#ready-relaunch").classList.toggle("hidden", view.action !== "relaunch");
 }
 
 function showPipelineState(next) {
@@ -395,8 +401,10 @@ async function init() {
   window.openFlowSetup.onDownloadDone(onDone);
 
   // The wizard stays open while the app finishes starting; these keep the last step live.
-  if (state.appReady) showAppReady();
-  window.openFlowSetup.onAppReady(showAppReady);
+  showReadyState(state.readyState);
+  window.openFlowSetup.onReadyState(showReadyState);
+  $("#ready-open-acc").addEventListener("click", () => window.openFlowSetup.openSystemSettings("accessibility"));
+  $("#ready-relaunch").addEventListener("click", () => window.openFlowSetup.relaunch());
   window.openFlowSetup.onPipelineState(showPipelineState);
 
   $("#login-toggle").addEventListener("change", (e) => window.openFlowSetup.setLaunchAtLogin(e.target.checked));
