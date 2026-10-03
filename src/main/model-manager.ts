@@ -54,6 +54,14 @@ export const defaultFetcher: DownloadStreamFn = async ({ url, rangeStart, signal
   return { stream, contentLength, status: res.status };
 };
 
+async function unlinkIfExists(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+}
+
 export class ModelManager {
   private readonly fetcher: DownloadStreamFn;
   private readonly statfs: StatfsFn | undefined;
@@ -81,6 +89,29 @@ export class ModelManager {
     // Skip sha256 here — it's a cheap-vs-correct trade-off. Size guards most
     // corruption; full sha is verified at download time.
     return true;
+  }
+
+  /**
+   * Deletes a model file and any `<file>.partial` it left behind. A missing file
+   * is fine; any other failure (permissions, a directory in the way) is thrown so
+   * the caller can tell the user instead of showing a phantom success.
+   */
+  async deleteModel(desc: ModelDescriptor): Promise<void> {
+    const path = this.getInstalledPath(desc);
+    await unlinkIfExists(path);
+    await unlinkIfExists(`${path}.partial`);
+  }
+
+  /**
+   * Removes the `.partial` of every model in `all` that is not in `keep`. A
+   * download the user cancelled or abandoned for another tier leaves up to GBs
+   * behind that nothing would ever resume; finished files are never touched.
+   */
+  async removeOrphanPartials(keep: readonly ModelDescriptor[], all: readonly ModelDescriptor[]): Promise<void> {
+    const keepIds = new Set(keep.map((d) => d.id));
+    for (const desc of all) {
+      if (!keepIds.has(desc.id)) await unlinkIfExists(`${this.getInstalledPath(desc)}.partial`);
+    }
   }
 
   /**

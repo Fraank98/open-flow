@@ -25,6 +25,9 @@ let state = {
 // The Automation probe can raise a macOS prompt, so it only runs after the user
 // has asked for it (button click); from then on it is re-checked on focus.
 let automationAsked = false;
+// requestTrust() raises the macOS prompt and lists open-flow in Accessibility;
+// only the first click needs it, later ones just open the pane.
+let accessibilityRequested = false;
 let permissionTimer = null;
 let selectedTierId = null;
 
@@ -346,6 +349,11 @@ async function init() {
   $$("button[data-next]").forEach((b) => b.addEventListener("click", () => goto(b.dataset.next)));
   $$("button[data-back]").forEach((b) => b.addEventListener("click", () => goto(b.dataset.back)));
 
+  // Nothing is clickable until the initial state is in: a click on "Continue"
+  // before then would act on the empty defaults.
+  const idleButtons = $$("button").filter((b) => !b.disabled);
+  idleButtons.forEach((b) => { b.disabled = true; });
+
   let initial;
   try {
     initial = await window.openFlowSetup.getInitialState();
@@ -354,6 +362,7 @@ async function init() {
     return;
   }
   state = initial;
+  idleButtons.forEach((b) => { b.disabled = false; });
   applyPermissions();
   renderTiers();
   $("#login-toggle").checked = state.launchAtLogin !== false;
@@ -368,10 +377,13 @@ async function init() {
 
   // Asking first is what makes open-flow show up in the Accessibility list.
   $("#acc-open").addEventListener("click", async () => {
-    try {
-      state.accessibilityPermission = await window.openFlowSetup.requestAccessibility();
-    } catch { /* fall through to the settings pane */ }
-    applyPermissions();
+    if (!accessibilityRequested) {
+      accessibilityRequested = true;
+      try {
+        state.accessibilityPermission = await window.openFlowSetup.requestAccessibility();
+      } catch { /* fall through to the settings pane */ }
+      applyPermissions();
+    }
     if (state.accessibilityPermission !== "granted") window.openFlowSetup.openSystemSettings("accessibility");
   });
 

@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ModelManager } from "./model-manager.js";
-import { TIERS, getModelById, getTier, tierTotals } from "./model-catalog.js";
+import { LLM_MODELS, TIERS, WHISPER_MODELS, getModelById, getTier, tierTotals } from "./model-catalog.js";
 import {
   AccessibilityNative,
   checkAccessibility,
@@ -76,6 +76,13 @@ export class SetupWizard {
     this.send("setup:ready-state", state);
   }
 
+  /** Brings the window back to the front (hiding the dock icon steals focus from it). */
+  focus(): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.show();
+    this.win.focus();
+  }
+
   /** Forwards the dictation pipeline state to the live "try it" line. */
   sendPipelineState(state: WizardPipelineState): void {
     this.send("setup:pipeline-state", state);
@@ -130,9 +137,9 @@ export class SetupWizard {
     });
 
     this.registerHandlers();
-    await win.loadFile(join(APP_ROOT, "src", "renderer", "setup.html"));
-
-    return new Promise<boolean>((resolve) => {
+    // Hooked before loadFile: a window closed while the page is still loading
+    // must still resolve run() (and unregister the handlers).
+    const result = new Promise<boolean>((resolve) => {
       this.resolver = resolve;
       win.on("closed", () => {
         this.abort?.abort();
@@ -143,6 +150,8 @@ export class SetupWizard {
         this.unregisterHandlers();
       });
     });
+    await win.loadFile(join(APP_ROOT, "src", "renderer", "setup.html"));
+    return result;
   }
 
   private registerHandlers(): void {
@@ -272,6 +281,11 @@ export class SetupWizard {
           llmModelId: llm.id,
         });
         this.setupSaved = true;
+        // Partials of models outside the chosen tier (an abandoned or cancelled
+        // download) would otherwise sit on disk forever. Best effort.
+        await this.deps.modelManager
+          .removeOrphanPartials(files, [...WHISPER_MODELS, ...LLM_MODELS])
+          .catch(() => undefined);
         this.emitDone({ ok: true });
         // Setup is done: let the app carry on booting while this window stays open.
         this.resolver?.(true);

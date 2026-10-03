@@ -214,6 +214,13 @@ async function main(): Promise<void> {
     logDir: LOG_DIR,
     version: app.getVersion(),
   });
+  // The last "Ready — …" line the armer chose, so after a dictation the tray
+  // goes back to it instead of a generic "Ready" (which would drop the
+  // "if Option doesn't respond, choose Relaunch" advice).
+  // Declared up here, with the other state the handlers close over, so no
+  // handler can reach it before it exists.
+  let readyStatus = "Ready";
+
   // Assigned near the bottom, once the PTT handlers are registered.
   let pttArmer: PttArmer | null = null;
   const menubar = new MenubarApp(
@@ -225,6 +232,9 @@ async function main(): Promise<void> {
         } else {
           pttArmer?.stop();
           ptt.stop();
+          // The "needs Accessibility" hint is moot while paused; resuming
+          // re-arms, and the armer re-adds it if it is still needed.
+          menubar.setPermissionHint(null);
           if (wizard?.isOpen()) wizard.setReadyState("paused");
         }
       },
@@ -248,6 +258,9 @@ async function main(): Promise<void> {
   );
   menubar.create();
   menubar.setStatus("Loading models…");
+  // create() hides the dock icon, which drops focus from a wizard window that is
+  // still open (the first-run case): bring it back.
+  if (wizard?.isOpen()) wizard.focus();
 
   // The tray's Quit/Relaunch exist from here on, while the slow loads below can
   // take tens of seconds — so the cleanup must be registered NOW, not at the end
@@ -604,7 +617,7 @@ async function main(): Promise<void> {
         spokenPunctuation: currentPrefs.spokenPunctuation,
         dictionary: currentPrefs.dictionary,
       });
-      menubar.setStatus("Ready");
+      menubar.setStatus(readyStatus);
     } catch (err) {
       // Reset FIRST: logger.error can reject (disk full, unwritable dir) and
       // must never stop us from un-wedging the pipeline. finishWithAudio
@@ -617,7 +630,7 @@ async function main(): Promise<void> {
       orchestrator.reset();
       if (streamingWhisper) streamingWhisper.cancel();
       coordinator.cancel();
-      menubar.setStatus("Ready");
+      menubar.setStatus(readyStatus);
       void logger
         .error("stop handler failed", {
           message: err instanceof Error ? err.message : String(err),
@@ -639,7 +652,7 @@ async function main(): Promise<void> {
     // stuck at "Recording…" because state change → idle is what hides it.
     coordinator.cancel();
     void mediaController.resume().catch(swallowMcError("resume"));
-    menubar.setStatus("Ready");
+    menubar.setStatus(readyStatus);
   });
 
   // Arm push-to-talk without blocking: if Accessibility is missing, show the
@@ -656,7 +669,8 @@ async function main(): Promise<void> {
       switch (state) {
         case "armed":
           menubar.setPermissionHint(null);
-          menubar.setStatus("Ready — hold ⌥ to dictate");
+          readyStatus = "Ready — hold ⌥ to dictate";
+          menubar.setStatus(readyStatus);
           break;
         case "waiting":
           menubar.setStatus("Needs Accessibility permission");
@@ -666,7 +680,8 @@ async function main(): Promise<void> {
           break;
         case "armed-after-grant":
           menubar.setPermissionHint(null);
-          menubar.setStatus("Ready — if Option doesn't respond, choose Relaunch open-flow");
+          readyStatus = "Ready — if Option doesn't respond, choose Relaunch open-flow";
+          menubar.setStatus(readyStatus);
           break;
         case "relaunch-needed":
           menubar.setPermissionHint(null);

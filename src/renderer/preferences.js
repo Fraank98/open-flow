@@ -289,9 +289,12 @@ async function init() {
         del.textContent = "Deleting…";
         try {
           await api.deleteModel(group.kind, m.id);
-          m.installed = false;
-          say("models", `Deleted ${m.label}`, "ok");
+          // Re-read what is on disk rather than assuming the delete worked.
+          await refreshModels();
+          if (m.installed) say("models", `Couldn't delete ${m.label}: the file is still there.`, "error");
+          else say("models", `Deleted ${m.label}`, "ok");
         } catch (err) {
+          await refreshModels();
           say("models", "Couldn't delete: " + L.cleanIpcError(err), "error");
         }
         renderAllRows();

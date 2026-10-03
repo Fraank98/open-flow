@@ -210,9 +210,11 @@ export class PreferencesWindow {
       if (selectedKey === args.id) {
         throw new Error("Can't delete the active model. Choose another model first.");
       }
-      const path = this.deps.modelManager.getInstalledPath(desc);
-      const { unlink } = await import("node:fs/promises");
-      await unlink(path).catch(() => undefined);
+      if (this.downloads.isActive(desc.id)) {
+        throw new Error("This model is downloading. Cancel the download first.");
+      }
+      // Also drops a leftover <file>.partial; errors other than "not found" propagate to the UI.
+      await this.deps.modelManager.deleteModel(desc);
     });
 
     ipcMain.handle("prefs:permissions-status", (_e, opts?: { automation?: boolean }) =>
