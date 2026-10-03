@@ -128,5 +128,17 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          # Installation instructions go on every release; the generated
+          # changelog is added after this text.
+          append_body: true
+          body: |
+            ## Opening the app the first time
+
+            open-flow is not signed with an Apple Developer ID, so macOS will say it "cannot be opened".
+
+            1. Drag open-flow.app to Applications and open it once (you'll get the warning).
+            2. Open **System Settings › Privacy & Security**, scroll down and click **Open Anyway** next to open-flow, then open the app again. On macOS 14 or earlier, right-click the app › Open also works.
+
+            Terminal alternative: `xattr -dr com.apple.quarantine /Applications/open-flow.app`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

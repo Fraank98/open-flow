@@ -2,9 +2,9 @@
   "name": "open-flow",
   "version": "0.3.0",
   "description": "Local-first dictation app for macOS — Whisper + LLM cleanup",
-  "author": "open-flow",
+  "author": "Danilo Franco",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE.md",
+  "license": "MIT",
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
