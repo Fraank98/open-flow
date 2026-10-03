@@ -106,7 +106,27 @@
     return { text: "Free space on this Mac: " + formatBytes(freeBytes), low: low };
   }
 
+  var READY_TEXT = {
+    recording: "Listening…",
+    transcribing: "Transcribing…",
+    cleaning: "Cleaning up…",
+    pasting: "Pasting…",
+    pasted: "Pasted — nice.",
+  };
+
+  /** Live line of the final step; `pasted` is the view state after a successful paste. */
+  function readyStepText(state) {
+    return READY_TEXT[state] || "Waiting for you…";
+  }
+
+  /** The view state for a pipeline transition: pasting -> idle means the text landed. */
+  function pipelineView(prev, next) {
+    return prev === "pasting" && next === "idle" ? "pasted" : next;
+  }
+
   return {
+    readyStepText: readyStepText,
+    pipelineView: pipelineView,
     permissionBadge: permissionBadge,
     canContinuePermissions: canContinuePermissions,
     formatBytes: formatBytes,

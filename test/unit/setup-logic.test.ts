@@ -14,6 +14,8 @@ interface SetupLogic {
   estimateMinutes(bytes: number, bytesPerSec: number): number;
   resumeStep(prefs: { setupStep?: string; setupTierId?: string | null }): string;
   tierCardLines(tier: TierView): string[];
+  readyStepText(state: string | undefined): string;
+  pipelineView(prev: string | undefined, next: string): string;
   freeSpaceInfo(freeBytes: number | null, tier: TierView | undefined): { text: string; low: boolean } | null;
 }
 interface TierView {
@@ -159,5 +161,26 @@ describe("freeSpaceInfo", () => {
     expect(L.freeSpaceInfo(900_000_000, tier)).toEqual({ text: "Free space on this Mac: 900 MB", low: true });
     expect(L.freeSpaceInfo(900_000_000, { ...tier, installed: true })?.low).toBe(false);
     expect(L.freeSpaceInfo(null, tier)).toBeNull();
+  });
+});
+
+describe("readyStepText", () => {
+  it("describes each pipeline state in a few words", () => {
+    expect(L.readyStepText("recording")).toBe("Listening…");
+    expect(L.readyStepText("transcribing")).toBe("Transcribing…");
+    expect(L.readyStepText("cleaning")).toBe("Cleaning up…");
+    expect(L.readyStepText("pasting")).toBe("Pasting…");
+    expect(L.readyStepText("pasted")).toBe("Pasted — nice.");
+    expect(L.readyStepText("idle")).toBe("Waiting for you…");
+    expect(L.readyStepText(undefined)).toBe("Waiting for you…");
+  });
+});
+
+describe("pipelineView", () => {
+  it("turns pasting -> idle into the pasted confirmation, and passes other states through", () => {
+    expect(L.pipelineView("pasting", "idle")).toBe("pasted");
+    expect(L.pipelineView("recording", "idle")).toBe("idle");
+    expect(L.pipelineView("idle", "recording")).toBe("recording");
+    expect(L.pipelineView(undefined, "idle")).toBe("idle");
   });
 });

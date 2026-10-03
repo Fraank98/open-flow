@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -15,6 +15,7 @@ import { describeDownloadError } from "./utils/download-errors.js";
 import { ensureFreeSpace } from "./utils/disk-space.js";
 import { getModelsDir } from "./utils/model-paths.js";
 import { PreferencesStore, SetupStep } from "./preferences-store.js";
+import type { WizardPipelineState } from "./utils/wizard-pipeline-state.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const APP_ROOT = join(dirname(__filename), "..", "..");
@@ -49,7 +50,9 @@ export interface SetupWizardDeps {
 
 export class SetupWizard {
   private win: BrowserWindow | null = null;
+  /** Resolves `run()`: true once setup is complete, false if the window closed first. */
   private resolver: ((completed: boolean) => void) | null = null;
+  private appReady = false;
   /** Aborts the model download in flight (cancel button, or quitting setup). */
   private abort: AbortController | null = null;
   /** True once the models are on disk and setupComplete is saved. */
@@ -59,6 +62,27 @@ export class SetupWizard {
 
   constructor(private readonly deps: SetupWizardDeps) {}
 
+  /** True while the wizard window exists (it stays open after setup, on the "ready" step). */
+  isOpen(): boolean {
+    return !!this.win && !this.win.isDestroyed();
+  }
+
+  /** Tells the "ready" step that models are loaded and push-to-talk is armed. */
+  markAppReady(): void {
+    this.appReady = true;
+    this.send("setup:app-ready");
+  }
+
+  /** Forwards the dictation pipeline state to the live "try it" line. */
+  sendPipelineState(state: WizardPipelineState): void {
+    this.send("setup:pipeline-state", state);
+  }
+
+  /**
+   * Opens the wizard. Resolves true as soon as setup is complete (models
+   * downloaded, setupComplete saved) — the window stays open on the "ready"
+   * step while the app keeps booting — or false if it is closed before that.
+   */
   async run(): Promise<boolean> {
     const win = new BrowserWindow({
       width: 640,
@@ -131,6 +155,7 @@ export class SetupWizard {
         setupTierId: prefs.setupTierId,
         launchAtLogin: prefs.launchAtLogin,
         freeBytes: await this.freeBytes(),
+        appReady: this.appReady,
         tiers: await Promise.all(
           TIERS.map(async (t) => {
             const { sizeBytes, ramBytes } = tierTotals(t);
@@ -168,6 +193,13 @@ export class SetupWizard {
     ipcMain.on("setup:set-launch-at-login", (_e, enabled: unknown) => {
       if (typeof enabled !== "boolean") return;
       void this.deps.preferencesStore.update({ launchAtLogin: enabled }).catch(() => undefined);
+      // The app's own launch-at-login sync ran when setup completed, before this
+      // toggle could change: apply the choice right away.
+      try {
+        app.setLoginItemSettings({ openAtLogin: enabled });
+      } catch {
+        /* unsigned apps may need a one-time approval in System Settings */
+      }
     });
 
     ipcMain.handle("setup:request-mic", async () => {
@@ -230,6 +262,9 @@ export class SetupWizard {
         });
         this.setupSaved = true;
         this.emitDone({ ok: true });
+        // Setup is done: let the app carry on booting while this window stays open.
+        this.resolver?.(true);
+        this.resolver = null;
       } catch (err) {
         // describeDownloadError never forwards raw messages: they can carry URLs and 64-char hashes.
         const { title, hint, retryable, code } = describeDownloadError(err);
@@ -241,11 +276,8 @@ export class SetupWizard {
 
     ipcMain.on("setup:cancel-download", () => this.abort?.abort());
 
+    // Finish only closes the window; run() already resolved when setup completed.
     ipcMain.on("setup:finish", () => {
-      if (this.resolver) {
-        this.resolver(true);
-        this.resolver = null;
-      }
       if (this.win && !this.win.isDestroyed()) {
         this.win.close();
       }
@@ -274,6 +306,10 @@ export class SetupWizard {
     } catch {
       return null;
     }
+  }
+
+  private send(channel: string, ...args: unknown[]): void {
+    if (this.win && !this.win.isDestroyed()) this.win.webContents.send(channel, ...args);
   }
 
   private emitProgress(stage: string, bytes: number, total: number, fileIndex: number, fileCount: number): void {

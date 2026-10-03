@@ -19,6 +19,7 @@ import { LLMServer } from "./llm-server.js";
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { buildInitialPrompt } from "./utils/initial-prompt.js";
 import { waitForEventOrTimeout } from "./utils/wait-for-event.js";
+import { toWizardPipelineState } from "./utils/wizard-pipeline-state.js";
 import { restartRequiredFields } from "./utils/restart-required.js";
 import { checkAccessibility, checkAutomationViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
@@ -120,9 +121,14 @@ async function main(): Promise<void> {
     void logger.error("PTT requires Accessibility — prompt shown to user");
   });
 
-  // First-launch: run setup wizard until setupComplete=true
+  // First-launch: run setup wizard until setupComplete=true. run() resolves as
+  // soon as the models are downloaded; the window then stays open on its last
+  // step while the rest of the boot below goes on (see markAppReady). It is
+  // declared before everything that uses it later (coordinator and PTT-arming
+  // callbacks), so none of those closures can hit it in the TDZ.
+  let wizard: SetupWizard | null = null;
   if (!prefs.setupComplete) {
-    const wizard = new SetupWizard({ modelManager, preferencesStore, accessibility: ptt });
+    wizard = new SetupWizard({ modelManager, preferencesStore, accessibility: ptt });
     const completed = await wizard.run();
     if (!completed) {
       await logger.warn("setup wizard closed without completion; quitting");
@@ -415,6 +421,7 @@ async function main(): Promise<void> {
   const overlay = new OverlayWindow();
   await overlay.create();
   coordinator.onStateChange((state) => {
+    if (wizard?.isOpen()) wizard.sendPipelineState(toWizardPipelineState(state));
     overlay.sendState(state);
     if (state === "idle") {
       setTimeout(() => overlay.hide(), 500);
@@ -586,6 +593,7 @@ async function main(): Promise<void> {
         case "armed":
           menubar.setPermissionHint(null);
           menubar.setStatus("Ready — hold ⌥ to dictate");
+          if (wizard?.isOpen()) wizard.markAppReady();
           break;
         case "waiting":
           menubar.setStatus("Needs Accessibility permission");
@@ -596,6 +604,7 @@ async function main(): Promise<void> {
         case "armed-after-grant":
           menubar.setPermissionHint(null);
           menubar.setStatus("Ready — if Option doesn't respond, choose Relaunch open-flow");
+          if (wizard?.isOpen()) wizard.markAppReady();
           break;
         case "relaunch-needed":
           menubar.setPermissionHint(null);

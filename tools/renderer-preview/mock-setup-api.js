@@ -1,6 +1,7 @@
 // Fake window.openFlowSetup for browser previews.
 // Query: ?theme=light|dark
 //        &step=welcome|permissions|tier|download|ready   (page to land on)
+//        &appReady=1 (ready step: the app finished starting)  &pipeline=recording|transcribing|cleaning|pasting|pasted
 //        &scenario=fresh|mixed|granted|no-permissions|resume-download|downloading|download-error|no-space
 (function () {
   "use strict";
@@ -37,6 +38,8 @@
   const savedTier = step === "download" || step === "ready" ? "balanced" : null;
   const autoStart = step === "ready" || ["downloading", "download-error", "no-space"].includes(scenario);
 
+  const appReadyCbs = [];
+  const pipelineCbs = [];
   const progressCbs = [];
   const doneCbs = [];
   let timer = null;
@@ -67,6 +70,7 @@
       micPermission: perms.mic, accessibilityPermission: perms.acc,
       automationPermission: scenario === "granted" ? "granted" : "unknown", tiers,
       setupStep: savedStep, setupTierId: savedTier,
+      appReady: false,
       freeBytes: scenario === "no-space" ? 0.9e9 : 42e9, launchAtLogin: true,
     }),
     requestMicPermission: () => { perms.mic = "granted"; return Promise.resolve("granted"); },
@@ -113,6 +117,8 @@
     },
     onDownloadProgress: (cb) => { progressCbs.push(cb); return () => progressCbs.splice(progressCbs.indexOf(cb), 1); },
     onDownloadDone: (cb) => { doneCbs.push(cb); return () => doneCbs.splice(doneCbs.indexOf(cb), 1); },
+    onAppReady: (cb) => { appReadyCbs.push(cb); return () => appReadyCbs.splice(appReadyCbs.indexOf(cb), 1); },
+    onPipelineState: (cb) => { pipelineCbs.push(cb); return () => pipelineCbs.splice(pipelineCbs.indexOf(cb), 1); },
     finish: () => console.log("[mock] finish"),
   };
 
@@ -121,6 +127,18 @@
   if (autoStart) {
     document.addEventListener("DOMContentLoaded", () => {
       setTimeout(() => { const b = document.getElementById("dl-resume"); if (b) b.click(); }, 150);
+    });
+  }
+
+  // The ready step goes live once the app reports ready (after the scripted download).
+  if (q.get("appReady") === "1") {
+    document.addEventListener("DOMContentLoaded", () => {
+      setTimeout(() => {
+        appReadyCbs.forEach((cb) => cb());
+        const seq = { recording: ["recording"], transcribing: ["recording", "transcribing"], cleaning: ["recording", "transcribing", "cleaning"],
+          pasting: ["recording", "transcribing", "cleaning", "pasting"], pasted: ["recording", "transcribing", "cleaning", "pasting", "idle"] }[q.get("pipeline")] || [];
+        seq.forEach((st) => pipelineCbs.forEach((cb) => cb(st)));
+      }, 400);
     });
   }
 })();

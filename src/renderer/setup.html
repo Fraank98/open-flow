@@ -98,7 +98,13 @@
 
       <section id="step-ready" class="step" aria-labelledby="ready-h">
         <h2 id="ready-h" tabindex="-1">You're all set</h2>
-        <p id="ready-text">Hold <kbd>Option</kbd> (left or right) over any text field, speak, then release to paste the cleaned text.</p>
+        <p id="ready-starting">Starting up… loading the models you just downloaded (about 10 s).</p>
+        <div id="ready-live" class="hidden">
+          <p>Switch to Notes or any text field, hold <kbd>⌥ Option</kbd>, speak, then release.</p>
+          <p class="muted">Dictation works in other apps, not in this window.</p>
+          <p id="live-status" class="live-status" role="status" aria-live="polite">Waiting for you…</p>
+          <p class="muted">Tip: click the microphone icon in the menubar for Pause, Settings and Quit.</p>
+        </div>
         <label class="toggle"><input type="checkbox" id="login-toggle" checked /> Open open-flow at login</label>
         <p class="muted">It's a menubar app — it stays out of your way.</p>
         <div class="actions">

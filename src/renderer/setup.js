@@ -283,6 +283,23 @@ function onDone({ ok, error }) {
   else showDownloadView("error", error || { title: "Download failed", hint: "", retryable: true });
 }
 
+// ---- Ready: live "try it" guide ---------------------------------------------
+
+let lastPipelineState = "idle";
+
+function showAppReady() {
+  $("#ready-starting").classList.add("hidden");
+  $("#ready-live").classList.remove("hidden");
+}
+
+function showPipelineState(next) {
+  const view = Logic.pipelineView(lastPipelineState, next);
+  lastPipelineState = next;
+  const el = $("#live-status");
+  el.textContent = Logic.readyStepText(view);
+  el.classList.toggle("pasted", view === "pasted");
+}
+
 // ---- Init -----------------------------------------------------------------
 
 function showFatal(msg) {
@@ -374,6 +391,11 @@ async function init() {
 
   window.openFlowSetup.onDownloadProgress(onProgress);
   window.openFlowSetup.onDownloadDone(onDone);
+
+  // The wizard stays open while the app finishes starting; these keep the last step live.
+  if (state.appReady) showAppReady();
+  window.openFlowSetup.onAppReady(showAppReady);
+  window.openFlowSetup.onPipelineState(showPipelineState);
 
   $("#login-toggle").addEventListener("change", (e) => window.openFlowSetup.setLaunchAtLogin(e.target.checked));
   $("#ready-finish").addEventListener("click", () => window.openFlowSetup.finish());
