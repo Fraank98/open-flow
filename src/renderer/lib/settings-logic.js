@@ -134,6 +134,15 @@
   }
 
   /**
+   * Whether the "Suggest replies" toggle is locked. Only turning it ON is gated
+   * by the guard message; a toggle that is already on can always be switched off,
+   * whatever the guard says (e.g. the model was deleted after it was enabled).
+   */
+  function replyToggleDisabled(guardMessage, checked) {
+    return guardMessage !== "" && !checked;
+  }
+
+  /**
    * The server state as one sentence for the Reply tab. tone drives the colour;
    * action "retry" turns the sentence into a Retry button. Nothing is said while
    * the feature is off or unavailable (the line under the toggle covers those).
@@ -215,6 +224,7 @@
     acceleratorLabel: acceleratorLabel,
     replyStatusView: replyStatusView,
     replyGuardMessage: replyGuardMessage,
+    replyToggleDisabled: replyToggleDisabled,
     replyAppsView: replyAppsView,
     restartBadgeFor: restartBadgeFor,
     bannerVisible: bannerVisible,

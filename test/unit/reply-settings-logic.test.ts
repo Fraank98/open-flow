@@ -17,6 +17,7 @@ interface ReplyLogic {
   }): string | null;
   hotkeyReasonText(reason: string | undefined): string;
   appRowLabel(bundleId: string, info?: { name: string | null } | null): { primary: string; secondary: string | null };
+  replyToggleDisabled(guardMessage: string, checked: boolean): boolean;
   replyAppsView(mode: string, appCount: number): { label: string; warning: string | null };
 }
 const L = (globalThis as unknown as { OpenFlowSettingsLogic: ReplyLogic }).OpenFlowSettingsLogic;
@@ -47,6 +48,21 @@ describe("replyGuardMessage", () => {
     expect(L.replyGuardMessage({ ...ok, nativeOk: false })).toBe(
       "Reply suggestions are unavailable in this session: the helper that reads conversations didn't load.",
     );
+  });
+});
+
+describe("replyToggleDisabled", () => {
+  it("blocks turning the feature on while something is missing", () => {
+    expect(L.replyToggleDisabled("To turn this on: enter your name.", false)).toBe(true);
+  });
+
+  it("never blocks turning it off, even when the guard still has something to say", () => {
+    expect(L.replyToggleDisabled("To turn this on: enter your name.", true)).toBe(false);
+  });
+
+  it("is enabled when nothing is missing", () => {
+    expect(L.replyToggleDisabled("", false)).toBe(false);
+    expect(L.replyToggleDisabled("", true)).toBe(false);
   });
 });
 

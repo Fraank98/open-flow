@@ -332,9 +332,10 @@ async function init() {
 
   /**
    * The feature cannot be switched on without a name and without the selected
-   * model on disk. The toggle is only ever disabled, never forced off: a
-   * preference already saved as "on" (e.g. the model was deleted afterwards)
-   * keeps its value, with the impediment spelled out.
+   * model on disk. The toggle is never forced off, and it is only disabled
+   * while it is off: a preference already saved as "on" (e.g. the model was
+   * deleted afterwards) keeps its value and can still be switched off, with the
+   * impediment spelled out.
    */
   function refreshReplyGuards() {
     const model = selectedReplyModel();
@@ -344,7 +345,7 @@ async function init() {
       tierLabel: model.label,
       nativeOk,
     });
-    $("#replyEnabled").disabled = message !== "";
+    $("#replyEnabled").disabled = L.replyToggleDisabled(message, $("#replyEnabled").checked);
     $("#replyGuard").textContent = message;
   }
   $("#userDisplayName").addEventListener("input", refreshReplyGuards);
@@ -353,6 +354,7 @@ async function init() {
   });
   $("#replyEnabled").addEventListener("change", () => {
     void save({ replySuggestionsEnabled: $("#replyEnabled").checked }, "reply");
+    refreshReplyGuards(); // an unmet requirement locks the toggle once it is off
   });
   refreshReplyGuards();
 
