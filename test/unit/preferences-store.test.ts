@@ -75,6 +75,28 @@ describe("PreferencesStore", () => {
     expect(prefs.setupStep).toBe("download");
   });
 
+  it("does not lose fields when two updates run concurrently", async () => {
+    const store = new PreferencesStore(join(dir, "prefs.json"));
+    await Promise.all([
+      store.update({ language: "it" }),
+      store.update({ debugLogging: true }),
+      store.update({ setupStep: "tier" }),
+    ]);
+    const prefs = await store.load();
+    expect(prefs.language).toBe("it");
+    expect(prefs.debugLogging).toBe(true);
+    expect(prefs.setupStep).toBe("tier");
+  });
+
+  it("keeps serving updates after one fails", async () => {
+    const store = new PreferencesStore(join(dir, "missing-dir-is-created", "prefs.json"));
+    // A failing save (here: a circular value) rejects its own caller only.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(store.update({ dictionary: circular as unknown as string[] })).rejects.toThrow();
+    await expect(store.update({ language: "fr" })).resolves.toMatchObject({ language: "fr" });
+  });
+
   it("falls back to defaults on corrupt JSON", async () => {
     const path = join(dir, "prefs.json");
     const { writeFile } = await import("node:fs/promises");

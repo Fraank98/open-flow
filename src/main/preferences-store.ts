@@ -45,6 +45,9 @@ export const DEFAULT_PREFS: Preferences = {
 };
 
 export class PreferencesStore {
+  /** Tail of the update chain: read-modify-write cycles run strictly one after another. */
+  private updateQueue: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly path: string) {}
 
   async load(): Promise<Preferences> {
@@ -64,10 +67,22 @@ export class PreferencesStore {
     await rename(tmp, this.path);
   }
 
-  async update(partial: Partial<Preferences>): Promise<Preferences> {
-    const current = await this.load();
-    const next = { ...current, ...partial };
-    await this.save(next);
-    return next;
+  /**
+   * Merges `partial` into the saved prefs. Updates are serialised here, in the
+   * store, because several writers (the wizard, Settings, boot) share it: two
+   * overlapping load -> merge -> save cycles would each start from the same
+   * snapshot and the later write would silently drop the earlier one's fields.
+   */
+  update(partial: Partial<Preferences>): Promise<Preferences> {
+    const run = async (): Promise<Preferences> => {
+      const current = await this.load();
+      const next = { ...current, ...partial };
+      await this.save(next);
+      return next;
+    };
+    // A failed update rejects its own caller but must not wedge the queue.
+    const result = this.updateQueue.then(run, run);
+    this.updateQueue = result.catch(() => undefined);
+    return result;
   }
 }

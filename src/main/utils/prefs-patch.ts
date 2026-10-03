@@ -1,4 +1,5 @@
 import { getModelById } from "../model-catalog.js";
+import { isSupportedLanguage } from "./languages.js";
 import type { Preferences } from "../preferences-store.js";
 
 /** Fields the Settings window may write. Everything else (setup state, hotkey) is main-owned. */
@@ -30,7 +31,8 @@ export function sanitizePrefsPatch(input: unknown): SettingsPatch {
   for (const key of BOOLEAN_FIELDS) {
     if (typeof raw[key] === "boolean") out[key] = raw[key] as boolean;
   }
-  if (typeof raw.language === "string" && raw.language) out.language = raw.language;
+  // An id outside the list would reach Whisper as a language it may not know.
+  if (typeof raw.language === "string" && isSupportedLanguage(raw.language)) out.language = raw.language;
   if (typeof raw.whisperModelId === "string" && getModelById("whisper", raw.whisperModelId)) {
     out.whisperModelId = raw.whisperModelId;
   }

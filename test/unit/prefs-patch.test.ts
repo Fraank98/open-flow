@@ -27,6 +27,14 @@ describe("sanitizePrefsPatch", () => {
     expect(sanitizePrefsPatch({ dictionary: ["ok", 4] })).toEqual({});
   });
 
+  it("drops a language that is not in the supported list", () => {
+    expect(sanitizePrefsPatch({ language: "xx" })).toEqual({});
+    expect(sanitizePrefsPatch({ language: "" })).toEqual({});
+    for (const id of ["auto", "en", "it", "es", "fr", "de"]) {
+      expect(sanitizePrefsPatch({ language: id })).toEqual({ language: id });
+    }
+  });
+
   it("drops model ids that are not in the catalog", () => {
     expect(sanitizePrefsPatch({ whisperModelId: "nope", llmModelId: "qwen-1.5b" })).toEqual({ llmModelId: "qwen-1.5b" });
   });

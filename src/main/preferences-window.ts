@@ -5,6 +5,7 @@ import { WHISPER_MODELS, LLM_MODELS } from "./model-catalog.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
 import { downloadErrorText } from "./utils/download-errors.js";
+import { LANGUAGES } from "./utils/languages.js";
 import { createEmitGate } from "./utils/emit-gate.js";
 import { DownloadTracker } from "./utils/download-tracker.js";
 import { sanitizePrefsPatch } from "./utils/prefs-patch.js";
@@ -24,15 +25,6 @@ const BG_LIGHT = "#f5f5f7";
 const BG_DARK = "#1e1e1e";
 
 const APP_ROOT = join(dirname(__filename), "..", "..");
-
-const LANGUAGES = [
-  { id: "auto", label: "Auto-detect" },
-  { id: "en", label: "English" },
-  { id: "it", label: "Italiano" },
-  { id: "es", label: "Español" },
-  { id: "fr", label: "Français" },
-  { id: "de", label: "Deutsch" },
-];
 
 async function describeModel(manager: ModelManager, tracker: DownloadTracker, m: CatalogModel) {
   const progress = tracker.progress(m.id);
@@ -74,8 +66,6 @@ export class PreferencesWindow {
   private readonly savedListeners: Array<(prefs: Preferences) => void> = [];
   /** Downloads in flight, by model id: Cancel aborts them and a reopened window re-attaches to them. */
   private readonly downloads = new DownloadTracker();
-  /** Serialises read-modify-write updates so quick successive toggles never clobber each other. */
-  private updateQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: PreferencesWindowDeps) {}
 
@@ -123,33 +113,29 @@ export class PreferencesWindow {
     if (this.win && !this.win.isDestroyed()) this.win.webContents.send(channel, ...args);
   }
 
-  private applyUpdate(rawPatch: unknown): Promise<Preferences> {
-    const run = async (): Promise<Preferences> => {
-      const patch = sanitizePrefsPatch(rawPatch);
-      const next = await this.deps.preferencesStore.update(patch);
-      // Apply launch-at-login immediately so the user sees feedback in
-      // System Settings → General → Login Items without restarting.
-      if (patch.launchAtLogin !== undefined) {
-        try {
-          if (app.getLoginItemSettings().openAtLogin !== next.launchAtLogin) {
-            app.setLoginItemSettings({ openAtLogin: next.launchAtLogin });
-          }
-        } catch {
-          // ignore — pref is saved, will be re-applied on next launch
+  private async applyUpdate(rawPatch: unknown): Promise<Preferences> {
+    const patch = sanitizePrefsPatch(rawPatch);
+    // Concurrent updates are serialised inside the store.
+    const next = await this.deps.preferencesStore.update(patch);
+    // Apply launch-at-login immediately so the user sees feedback in
+    // System Settings → General → Login Items without restarting.
+    if (patch.launchAtLogin !== undefined) {
+      try {
+        if (app.getLoginItemSettings().openAtLogin !== next.launchAtLogin) {
+          app.setLoginItemSettings({ openAtLogin: next.launchAtLogin });
         }
+      } catch {
+        // ignore — pref is saved, will be re-applied on next launch
       }
-      for (const cb of this.savedListeners) {
-        try {
-          cb(next);
-        } catch {
-          // a misbehaving listener must not fail the save
-        }
+    }
+    for (const cb of this.savedListeners) {
+      try {
+        cb(next);
+      } catch {
+        // a misbehaving listener must not fail the save
       }
-      return next;
-    };
-    const result = this.updateQueue.then(run, run);
-    this.updateQueue = result.catch(() => undefined);
-    return result;
+    }
+    return next;
   }
 
   private registerHandlers(): void {
