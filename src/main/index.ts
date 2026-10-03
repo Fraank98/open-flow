@@ -185,19 +185,34 @@ async function main(): Promise<void> {
     preferencesStore,
     restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
   });
-  const menubar = new MenubarApp({
-    onToggleEnabled: () => {
-      if (menubar.isEnabled()) {
-        ptt.start();
-      } else {
-        ptt.stop();
-      }
+  const menubar = new MenubarApp(
+    {
+      onToggleEnabled: () => {
+        if (menubar.isEnabled()) {
+          ptt.start();
+        } else {
+          ptt.stop();
+        }
+      },
+      onOpenSettings: () => {
+        void prefsWindow.open();
+      },
+      // Until the Settings window grows a Permissions section, jump straight
+      // to the Accessibility pane — the permission people most often miss.
+      onCheckPermissions: () => {
+        void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+      },
+      onOpenLogs: () => {
+        void shell.openPath(LOG_DIR);
+      },
+      onRelaunch: () => {
+        app.relaunch();
+        app.quit();
+      },
+      onQuit: () => app.quit(),
     },
-    onOpenPreferences: () => {
-      void prefsWindow.open();
-    },
-    onQuit: () => app.quit(),
-  });
+    { version: app.getVersion() },
+  );
   menubar.create();
   menubar.setStatus("Loading models…");
   // Keep the in-memory snapshot in sync so `arm` (language, dictionary) reads
