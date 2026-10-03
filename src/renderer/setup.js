@@ -3,8 +3,16 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+const Logic = globalThis.OpenFlowSetupLogic;
+
 // Ordered list of steps; drives the stepper and progress highlighting.
-const STEPS = ["welcome", "permissions", "tier", "download", "done"];
+const STEPS = [
+  { id: "welcome", label: "Welcome" },
+  { id: "permissions", label: "Permissions" },
+  { id: "tier", label: "Quality" },
+  { id: "download", label: "Download" },
+  { id: "ready", label: "Ready" },
+];
 let currentStep = "welcome";
 
 let state = {
@@ -12,6 +20,7 @@ let state = {
   accessibilityPermission: "unknown",
   automationPermission: "unknown",
   tiers: [],
+  freeBytes: null,
 };
 // The Automation probe can raise a macOS prompt, so it only runs after the user
 // has asked for it (button click); from then on it is re-checked on focus.
@@ -22,30 +31,44 @@ let selectedTierId = null;
 function buildStepper() {
   const ol = $("#stepper");
   ol.innerHTML = "";
-  for (const id of STEPS) {
+  for (const step of STEPS) {
     const li = document.createElement("li");
-    li.dataset.id = id;
+    li.dataset.id = step.id;
+    li.textContent = step.label;
     ol.appendChild(li);
   }
 }
 
-function goto(stepId) {
+// Steps up to "download" are remembered so an interrupted setup can resume;
+// "ready" is saved by the main process when the models are in place.
+function saveProgress(stepId) {
+  if (stepId === "ready") return;
+  try {
+    window.openFlowSetup.saveStep({ step: stepId, tierId: selectedTierId });
+  } catch { /* progress is best effort */ }
+}
+
+function goto(stepId, { save = true } = {}) {
   currentStep = stepId;
   $$(".step").forEach((el) => el.classList.remove("active"));
   $("#step-" + stepId).classList.add("active");
 
   // Reflect progress in the stepper.
-  const idx = STEPS.indexOf(stepId);
+  const idx = STEPS.findIndex((st) => st.id === stepId);
   $$("#stepper li").forEach((li, i) => {
     li.classList.toggle("done", i < idx);
     li.classList.toggle("current", i === idx);
     li.classList.toggle("upcoming", i > idx);
+    if (i === idx) li.setAttribute("aria-current", "step");
+    else li.removeAttribute("aria-current");
   });
 
   // Move focus to the step heading so keyboard/screen-reader users land on the
   // new content instead of a now-hidden button.
   const heading = $("#step-" + stepId + " h2");
   if (heading) heading.focus();
+
+  if (save) saveProgress(stepId);
 
   // Poll the cheap permissions (mic, Accessibility) only while that step is visible.
   clearInterval(permissionTimer);
@@ -54,8 +77,6 @@ function goto(stepId) {
 }
 
 // ---- Permissions ----------------------------------------------------------
-
-const Logic = globalThis.OpenFlowSetupLogic;
 
 function renderBadge(sel, perm) {
   const status = $(sel);
@@ -98,7 +119,20 @@ function applyPermissions() {
 
 // ---- Tiers (keyboard-accessible radiogroup) -------------------------------
 
-function selectTier(id, { focus = false } = {}) {
+function selectedTier() {
+  return state.tiers.find((t) => t.id === selectedTierId);
+}
+
+function renderFreeSpace() {
+  const el = $("#free-space");
+  const info = Logic.freeSpaceInfo(state.freeBytes, selectedTier());
+  el.classList.toggle("hidden", !info);
+  if (!info) return;
+  el.textContent = info.text;
+  el.classList.toggle("low", info.low);
+}
+
+function selectTier(id, { focus = false, persist = true } = {}) {
   selectedTierId = id;
   $$(".tier").forEach((el) => {
     const on = el.dataset.id === id;
@@ -107,25 +141,49 @@ function selectTier(id, { focus = false } = {}) {
     if (on && focus) el.focus();
   });
   $("#tier-continue").disabled = false;
+  renderFreeSpace();
+  if (persist) saveProgress("tier");
+}
+
+function addBadge(parent, text, cls) {
+  const b = document.createElement("span");
+  b.className = "badge" + (cls ? " " + cls : "");
+  b.textContent = text;
+  parent.appendChild(b);
 }
 
 function renderTiers() {
   const list = $("#tier-list");
   list.innerHTML = "";
-  state.tiers.forEach((t, i) => {
+  state.tiers.forEach((t) => {
     const el = document.createElement("button");
     el.type = "button";
     el.className = "tier";
     el.setAttribute("role", "radio");
     el.setAttribute("aria-checked", "false");
-    el.tabIndex = i === 0 ? 0 : -1;
+    el.tabIndex = -1;
     el.dataset.id = t.id;
-    el.innerHTML = `<strong></strong><span class="desc"></span>`;
-    el.querySelector("strong").textContent = t.label;
-    // Interim copy until the wizard rewrite: model pair, size and the notes.
-    el.querySelector(".desc").textContent =
-      `${t.summary} · ${formatSize(t.sizeBytes)} download. ${t.transcriptionNote}` +
-      (t.licenseNote ? ` ${t.licenseNote}` : "");
+
+    const head = document.createElement("span");
+    head.className = "tier-head";
+    const title = document.createElement("span");
+    title.className = "tier-title";
+    title.textContent = t.label;
+    head.appendChild(title);
+    if (t.recommended) addBadge(head, "Recommended");
+    if (t.installed) addBadge(head, "Already on this Mac", "soft");
+    el.appendChild(head);
+
+    const lines = Logic.tierCardLines(t);
+    lines.forEach((text, i) => {
+      const line = document.createElement("span");
+      line.className = "tier-line";
+      if (i === 0) line.classList.add("tier-summary");
+      if (t.licenseNote && i === lines.length - 1) line.classList.add("license-note");
+      line.textContent = text;
+      el.appendChild(line);
+    });
+
     el.addEventListener("click", () => selectTier(t.id));
     list.appendChild(el);
   });
@@ -141,55 +199,120 @@ function renderTiers() {
     const next = (start + delta + ids.length) % ids.length;
     selectTier(ids[next], { focus: true });
   });
+
+  // Preselect the saved choice, else the recommended level.
+  const saved = state.tiers.find((t) => t.id === state.setupTierId);
+  const preferred = saved || state.tiers.find((t) => t.recommended) || state.tiers[0];
+  if (preferred) selectTier(preferred.id, { persist: false });
 }
 
 // ---- Download -------------------------------------------------------------
 
-function formatSize(bytes) {
-  if (!bytes || bytes < 0) return "0 MB";
-  const gb = bytes / 1073741824;
-  if (gb >= 1) return gb.toFixed(2) + " GB";
-  return (bytes / 1048576).toFixed(1) + " MB";
+// "running" | "paused" | "error": decides which parts of the step are visible.
+let downloadView = "running";
+let cancelling = false;
+let samples = [];
+let lastFileIndex = 0;
+
+function showDownloadView(view, error) {
+  downloadView = view;
+  const running = view === "running";
+  $("#dl-progress-box").classList.toggle("hidden", !running);
+  $("#dl-hint").classList.toggle("hidden", !running);
+  $("#dl-cancel").classList.toggle("hidden", !running);
+  $("#dl-paused").classList.toggle("hidden", view !== "paused");
+  $("#dl-resume").classList.toggle("hidden", view !== "paused");
+  $("#dl-smaller").classList.toggle("hidden", view !== "paused");
+  $("#dl-error").classList.toggle("hidden", view !== "error");
+  const retryable = !!(error && error.retryable);
+  $("#dl-retry").classList.toggle("hidden", !(view === "error" && retryable));
+  $("#dl-other").classList.toggle("hidden", view !== "error");
+  if (view === "error") {
+    $("#dl-error-title").textContent = error.title || "Download failed";
+    $("#dl-error-hint").textContent = error.hint || "";
+  }
 }
 
 async function startDownload() {
-  $("#dl-error").classList.add("hidden");
-  $("#dl-actions").classList.add("hidden");
-  $("#dl-hint").classList.remove("hidden");
+  samples = [];
+  lastFileIndex = 0;
+  cancelling = false;
+  $("#dl-cancel").disabled = false;
+  showDownloadView("running");
   $("#dl-stage").textContent = "Preparing…";
   $("#dl-progress").removeAttribute("value"); // indeterminate until first progress
   $("#dl-bytes").textContent = "";
   try {
     await window.openFlowSetup.startDownload(selectedTierId);
   } catch (err) {
-    showDownloadError(err && err.message ? err.message : String(err));
+    showDownloadView("error", {
+      title: "Download failed",
+      hint: err && err.message ? err.message : String(err),
+      retryable: true,
+    });
   }
 }
 
-function showDownloadError(msg) {
-  $("#dl-hint").classList.add("hidden");
-  const box = $("#dl-error");
-  box.textContent = "Download failed: " + (msg || "unknown error");
-  box.classList.remove("hidden");
-  $("#dl-actions").classList.remove("hidden");
+function onProgress({ stage, bytes, total, fileIndex, fileCount }) {
+  if (downloadView !== "running") return;
+  if (fileIndex !== lastFileIndex) {
+    samples = []; // speed is per file
+    lastFileIndex = fileIndex;
+  }
+  samples.push({ t: Date.now(), bytes });
+  $("#dl-stage").textContent = fileCount > 1 ? `${stage} (${fileIndex} of ${fileCount})` : stage;
+  if (total > 0) {
+    $("#dl-progress").value = Math.floor((bytes / total) * 100);
+    const stats = Logic.downloadStats(samples, total);
+    const parts = [`${Logic.formatBytes(bytes)} of ${Logic.formatBytes(total)}`];
+    if (stats.bytesPerSec > 0) parts.push(`${Logic.formatBytes(stats.bytesPerSec)}/s`);
+    const eta = Logic.formatEta(stats.etaSec);
+    if (eta) parts.push(eta);
+    $("#dl-bytes").textContent = parts.join(" · ");
+  } else {
+    $("#dl-progress").removeAttribute("value");
+  }
+}
+
+function onDone({ ok, error }) {
+  if (ok) {
+    goto("ready", { save: false });
+    return;
+  }
+  if (error && error.code === "aborted") showDownloadView("paused");
+  else showDownloadView("error", error || { title: "Download failed", hint: "", retryable: true });
 }
 
 // ---- Init -----------------------------------------------------------------
 
 function showFatal(msg) {
   const root = $("#root");
-  root.innerHTML =
-    `<header><h1>open-flow</h1></header>` +
-    `<section class="step active"><h2>Something went wrong</h2>` +
-    `<p class="muted">${msg}</p>` +
-    `<div class="actions"><button class="primary" id="fatal-reload">Try again</button></div></section>`;
-  const btn = document.getElementById("fatal-reload");
-  if (btn) btn.addEventListener("click", () => location.reload());
+  root.textContent = "";
+  const header = document.createElement("header");
+  const h1 = document.createElement("h1");
+  h1.textContent = "open-flow";
+  header.appendChild(h1);
+  const section = document.createElement("section");
+  section.className = "step active";
+  const h2 = document.createElement("h2");
+  h2.textContent = "Something went wrong";
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = msg;
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const btn = document.createElement("button");
+  btn.className = "primary";
+  btn.textContent = "Try again";
+  btn.addEventListener("click", () => location.reload());
+  actions.appendChild(btn);
+  section.append(h2, p, actions);
+  root.append(header, section);
 }
 
 async function init() {
   buildStepper();
-  goto("welcome");
+  goto("welcome", { save: false });
 
   // Step navigation (generic next/back buttons).
   $$("button[data-next]").forEach((b) => b.addEventListener("click", () => goto(b.dataset.next)));
@@ -205,6 +328,7 @@ async function init() {
   state = initial;
   applyPermissions();
   renderTiers();
+  $("#login-toggle").checked = state.launchAtLogin !== false;
 
   $("#mic-request").addEventListener("click", async () => {
     try {
@@ -238,23 +362,27 @@ async function init() {
   });
 
   $("#dl-retry").addEventListener("click", startDownload);
-  $("#dl-back").addEventListener("click", () => goto("tier"));
-
-  window.openFlowSetup.onDownloadProgress(({ stage, bytes, total }) => {
-    $("#dl-stage").textContent = stage;
-    if (total > 0) {
-      $("#dl-progress").value = Math.floor((bytes / total) * 100);
-      $("#dl-bytes").textContent = `${formatSize(bytes)} / ${formatSize(total)}`;
-    } else {
-      $("#dl-progress").removeAttribute("value");
-    }
+  $("#dl-resume").addEventListener("click", startDownload);
+  $("#dl-cancel").addEventListener("click", () => {
+    if (cancelling) return;
+    cancelling = true;
+    $("#dl-cancel").disabled = true;
+    window.openFlowSetup.cancelDownload();
   });
-  window.openFlowSetup.onDownloadDone(({ ok, error }) => {
-    if (ok) goto("done");
-    else showDownloadError(error);
-  });
+  $("#dl-smaller").addEventListener("click", () => goto("tier"));
+  $("#dl-other").addEventListener("click", () => goto("tier"));
 
-  $("#done-finish").addEventListener("click", () => window.openFlowSetup.finish());
+  window.openFlowSetup.onDownloadProgress(onProgress);
+  window.openFlowSetup.onDownloadDone(onDone);
+
+  $("#login-toggle").addEventListener("change", (e) => window.openFlowSetup.setLaunchAtLogin(e.target.checked));
+  $("#ready-finish").addEventListener("click", () => window.openFlowSetup.finish());
+
+  // Pick up where an interrupted setup stopped. A saved download is shown as
+  // paused: it resumes only when the user says so.
+  const step = Logic.resumeStep(state);
+  goto(step, { save: false });
+  if (step === "download") showDownloadView("paused");
 }
 
 async function recheckPermissions({ automation = false } = {}) {

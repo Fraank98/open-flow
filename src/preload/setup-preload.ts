@@ -1,30 +1,55 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 type SettingsPane = "accessibility" | "microphone" | "automation";
+type SetupStepId = "welcome" | "permissions" | "tier" | "download" | "ready";
+
 interface PermissionsSnapshot {
   mic: string;
   accessibility: string;
   automation: string | null;
 }
 
+interface TierInfo {
+  id: string;
+  label: string;
+  description: string;
+  summary: string;
+  transcriptionNote: string;
+  recommended: boolean;
+  sizeBytes: number;
+  ramBytes: number;
+  installed: boolean;
+  licenseNote: string | null;
+}
+
+interface InitialState {
+  micPermission: string;
+  accessibilityPermission: string;
+  automationPermission: string;
+  tiers: TierInfo[];
+  setupStep: SetupStepId;
+  setupTierId: string | null;
+  /** Free bytes on the volume that holds the models, or null when unknown. */
+  freeBytes: number | null;
+  launchAtLogin: boolean;
+}
+
+interface DownloadProgress {
+  stage: string;
+  bytes: number;
+  total: number;
+  fileIndex: number;
+  fileCount: number;
+}
+
+interface DownloadResult {
+  ok: boolean;
+  /** UI-safe text; `code` is "aborted" when the user cancelled. */
+  error?: { title: string; hint: string; retryable: boolean; code: string };
+}
+
 contextBridge.exposeInMainWorld("openFlowSetup", {
-  getInitialState: (): Promise<{
-    micPermission: string;
-    accessibilityPermission: string;
-    automationPermission: string;
-    tiers: Array<{
-      id: string;
-      label: string;
-      description: string;
-      summary: string;
-      transcriptionNote: string;
-      recommended: boolean;
-      sizeBytes: number;
-      ramBytes: number;
-      installed: boolean;
-      licenseNote: string | null;
-    }>;
-  }> => ipcRenderer.invoke("setup:get-initial-state"),
+  getInitialState: (): Promise<InitialState> => ipcRenderer.invoke("setup:get-initial-state"),
 
   requestMicPermission: (): Promise<string> => ipcRenderer.invoke("setup:request-mic"),
   requestAccessibility: (): Promise<string> => ipcRenderer.invoke("setup:request-accessibility"),
@@ -33,14 +58,19 @@ contextBridge.exposeInMainWorld("openFlowSetup", {
     ipcRenderer.invoke("setup:refresh-permissions", opts),
   openSystemSettings: (pane: SettingsPane): void => ipcRenderer.send("setup:open-system-settings", pane),
 
+  /** Remembers the step (and the chosen quality level) so a closed wizard can resume. */
+  saveStep: (p: { step: SetupStepId; tierId?: string | null }): void => ipcRenderer.send("setup:save-step", p),
+  setLaunchAtLogin: (enabled: boolean): void => ipcRenderer.send("setup:set-launch-at-login", enabled),
+
   startDownload: (tierId: string): Promise<void> => ipcRenderer.invoke("setup:start-download", tierId),
-  onDownloadProgress: (cb: (p: { stage: string; bytes: number; total: number }) => void): (() => void) => {
-    const handler = (_e: unknown, payload: { stage: string; bytes: number; total: number }) => cb(payload);
+  cancelDownload: (): void => ipcRenderer.send("setup:cancel-download"),
+  onDownloadProgress: (cb: (p: DownloadProgress) => void): (() => void) => {
+    const handler = (_e: unknown, payload: DownloadProgress) => cb(payload);
     ipcRenderer.on("setup:download-progress", handler);
     return () => ipcRenderer.removeListener("setup:download-progress", handler);
   },
-  onDownloadDone: (cb: (result: { ok: boolean; error?: string }) => void): (() => void) => {
-    const handler = (_e: unknown, payload: { ok: boolean; error?: string }) => cb(payload);
+  onDownloadDone: (cb: (result: DownloadResult) => void): (() => void) => {
+    const handler = (_e: unknown, payload: DownloadResult) => cb(payload);
     ipcRenderer.on("setup:download-done", handler);
     return () => ipcRenderer.removeListener("setup:download-done", handler);
   },
@@ -51,30 +81,17 @@ contextBridge.exposeInMainWorld("openFlowSetup", {
 declare global {
   interface Window {
     openFlowSetup: {
-      getInitialState: () => Promise<{
-        micPermission: string;
-        accessibilityPermission: string;
-        automationPermission: string;
-        tiers: Array<{
-      id: string;
-      label: string;
-      description: string;
-      summary: string;
-      transcriptionNote: string;
-      recommended: boolean;
-      sizeBytes: number;
-      ramBytes: number;
-      installed: boolean;
-      licenseNote: string | null;
-    }>;
-      }>;
+      getInitialState: () => Promise<InitialState>;
       requestMicPermission: () => Promise<string>;
       requestAccessibility: () => Promise<string>;
       refreshPermissions: (opts?: { automation?: boolean }) => Promise<PermissionsSnapshot>;
       openSystemSettings: (pane: SettingsPane) => void;
+      saveStep: (p: { step: SetupStepId; tierId?: string | null }) => void;
+      setLaunchAtLogin: (enabled: boolean) => void;
       startDownload: (tierId: string) => Promise<void>;
-      onDownloadProgress: (cb: (p: { stage: string; bytes: number; total: number }) => void) => () => void;
-      onDownloadDone: (cb: (result: { ok: boolean; error?: string }) => void) => () => void;
+      cancelDownload: () => void;
+      onDownloadProgress: (cb: (p: DownloadProgress) => void) => () => void;
+      onDownloadDone: (cb: (result: DownloadResult) => void) => () => void;
       finish: () => void;
     };
   }

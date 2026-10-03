@@ -1,9 +1,13 @@
-// Fake window.openFlowSetup for browser previews. Query: ?theme=light|dark&scenario=fresh|no-permissions|granted|download-error&step=permissions
+// Fake window.openFlowSetup for browser previews.
+// Query: ?theme=light|dark
+//        &step=welcome|permissions|tier|download|ready   (page to land on)
+//        &scenario=fresh|mixed|granted|no-permissions|resume-download|downloading|download-error|no-space
 (function () {
   "use strict";
   const q = new URLSearchParams(location.search);
   if (q.get("theme")) document.documentElement.dataset.theme = q.get("theme");
   const scenario = q.get("scenario") || "fresh";
+  const step = q.get("step") || "welcome";
   // Headless screenshots would otherwise catch the step-in fade mid-animation.
   document.write("<style>*{animation:none!important;transition:none!important}</style>");
 
@@ -23,18 +27,47 @@
   // granted/denied (live AX API); mic and automation can also be "unknown".
   const perms = scenario === "granted"
     ? { mic: "granted", acc: "granted", auto: "granted" }
-    : scenario === "no-permissions"
-      ? { mic: "unknown", acc: "denied", auto: "unknown" }
+    : scenario === "mixed"
+      ? { mic: "granted", acc: "denied", auto: "unknown" }
       : { mic: "unknown", acc: "denied", auto: "unknown" };
+
+  // The wizard resumes from the saved step; "ready" cannot be resumed, so it is
+  // reached by "resuming" the download and letting it finish instantly.
+  const savedStep = step === "ready" ? "download" : step;
+  const savedTier = step === "download" || step === "ready" ? "balanced" : null;
+  const autoStart = step === "ready" || ["downloading", "download-error", "no-space"].includes(scenario);
 
   const progressCbs = [];
   const doneCbs = [];
   let timer = null;
 
+  const emitProgress = (stage, bytes, total, fileIndex) =>
+    progressCbs.forEach((cb) => cb({ stage, bytes, total, fileIndex, fileCount: 2 }));
+  const emitDone = (r) => doneCbs.forEach((cb) => cb(r));
+
+  // Deterministic progress for screenshots: a fake clock moving 12 MB/s.
+  function scriptedDownload() {
+    let fake = 1e12;
+    Date.now = () => fake;
+    const total = 487601967;
+    for (let bytes = 20e6; bytes <= 220e6; bytes += 20e6) {
+      fake += 1667;
+      emitProgress("Whisper Small", bytes, total, 1);
+    }
+    if (scenario === "download-error") {
+      emitDone({ ok: false, error: { title: "No internet connection",
+        hint: "Check your network and try again. Downloads resume where they left off.", retryable: true, code: "network" } });
+    } else if (step === "ready") {
+      emitDone({ ok: true });
+    }
+  }
+
   window.openFlowSetup = {
     getInitialState: () => Promise.resolve({
       micPermission: perms.mic, accessibilityPermission: perms.acc,
       automationPermission: scenario === "granted" ? "granted" : "unknown", tiers,
+      setupStep: savedStep, setupTierId: savedTier,
+      freeBytes: scenario === "no-space" ? 0.9e9 : 42e9, launchAtLogin: true,
     }),
     requestMicPermission: () => { perms.mic = "granted"; return Promise.resolve("granted"); },
     requestAccessibility: () => Promise.resolve(perms.acc),
@@ -49,34 +82,45 @@
       else if (pane === "microphone") perms.mic = "granted";
       else if (pane === "automation") perms.auto = "granted";
     },
+    saveStep: (p) => console.log("[mock] saveStep", JSON.stringify(p)),
+    setLaunchAtLogin: (on) => console.log("[mock] launchAtLogin", on),
     startDownload: () => {
-      const total = 490e6;
-      let bytes = 0;
+      if (scenario === "no-space") {
+        emitDone({ ok: false, error: { title: "Not enough disk space",
+          hint: "You need 1.6 GB free but only 0.9 GB is available. Free up space and try again.", retryable: true, code: "no-space" } });
+        return Promise.resolve();
+      }
+      if (autoStart) { scriptedDownload(); return Promise.resolve(); }
+      // Interactive preview: Whisper then the cleanup model, with real timing.
       clearInterval(timer);
+      const files = [["Whisper Small", 487601967], ["Qwen 2.5 1.5B", 1117320736]];
+      let i = 0;
+      let bytes = 0;
       timer = setInterval(() => {
         bytes += 20e6;
-        progressCbs.forEach((cb) => cb({ stage: "Downloading Whisper model", bytes: Math.min(bytes, total), total }));
-        if (scenario === "download-error" && bytes >= 200e6) {
-          clearInterval(timer);
-          doneCbs.forEach((cb) => cb({ ok: false, error: "fetch failed" }));
-        } else if (bytes >= total) {
-          clearInterval(timer);
-          doneCbs.forEach((cb) => cb({ ok: true }));
+        const total = files[i][1];
+        emitProgress(files[i][0], Math.min(bytes, total), total, i + 1);
+        if (bytes >= total) {
+          i += 1; bytes = 0;
+          if (i === files.length) { clearInterval(timer); emitDone({ ok: true }); }
         }
       }, 250);
       return Promise.resolve();
+    },
+    cancelDownload: () => {
+      clearInterval(timer);
+      emitDone({ ok: false, error: { title: "Download paused", hint: "", retryable: true, code: "aborted" } });
     },
     onDownloadProgress: (cb) => { progressCbs.push(cb); return () => progressCbs.splice(progressCbs.indexOf(cb), 1); },
     onDownloadDone: (cb) => { doneCbs.push(cb); return () => doneCbs.splice(doneCbs.indexOf(cb), 1); },
     finish: () => console.log("[mock] finish"),
   };
 
-  // ?step=permissions jumps past the welcome step (listeners are attached
-  // synchronously by setup.js, so a click at DOMContentLoaded is safe).
-  if (q.get("step") === "permissions") {
+  // Scenarios that show a download in flight press Resume once setup.js has
+  // finished its async init (listeners are attached after getInitialState).
+  if (autoStart) {
     document.addEventListener("DOMContentLoaded", () => {
-      const btn = document.querySelector('button[data-next="permissions"]');
-      if (btn) btn.click();
+      setTimeout(() => { const b = document.getElementById("dl-resume"); if (b) b.click(); }, 150);
     });
   }
 })();

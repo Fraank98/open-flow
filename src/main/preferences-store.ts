@@ -1,8 +1,15 @@
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
+/** Wizard steps in order; saved so an interrupted setup resumes where it stopped. */
+export type SetupStep = "welcome" | "permissions" | "tier" | "download" | "ready";
+
 export interface Preferences {
   setupComplete: boolean;
+  /** Last wizard step reached while setup is incomplete. */
+  setupStep: SetupStep;
+  /** Quality level chosen in the wizard, or null before the choice. */
+  setupTierId: string | null;
   whisperModelId: string;
   llmModelId: string;
   hotkeyAccelerator: string;
@@ -18,6 +25,8 @@ export interface Preferences {
 
 export const DEFAULT_PREFS: Preferences = {
   setupComplete: false,
+  setupStep: "welcome",
+  setupTierId: null,
   whisperModelId: "whisper-small",
   llmModelId: "qwen-1.5b",
   hotkeyAccelerator: "Hold Option",

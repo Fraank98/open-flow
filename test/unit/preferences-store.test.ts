@@ -41,6 +41,24 @@ describe("PreferencesStore", () => {
     expect(prefs.setupComplete).toBe(false);
   });
 
+  it("defaults setupStep to welcome and setupTierId to null", async () => {
+    const store = new PreferencesStore(join(dir, "prefs.json"));
+    const prefs = await store.load();
+    expect(prefs.setupStep).toBe("welcome");
+    expect(prefs.setupTierId).toBeNull();
+  });
+
+  it("loads an old file without setupStep", async () => {
+    const path = join(dir, "prefs.json");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(path, JSON.stringify({ setupComplete: true, language: "it" }));
+    const prefs = await new PreferencesStore(path).load();
+    expect(prefs.setupComplete).toBe(true);
+    expect(prefs.language).toBe("it");
+    expect(prefs.setupStep).toBe("welcome");
+    expect(prefs.setupTierId).toBeNull();
+  });
+
   it("falls back to defaults on corrupt JSON", async () => {
     const path = join(dir, "prefs.json");
     const { writeFile } = await import("node:fs/promises");
