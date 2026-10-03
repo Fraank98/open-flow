@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { WHISPER_MODELS, LLM_MODELS } from "./model-catalog.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
+import { downloadErrorText } from "./utils/download-errors.js";
 import type { CatalogModel } from "./model-catalog.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -118,11 +119,16 @@ export class PreferencesWindow {
       const list = args.kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
       const desc = list.find((m) => m.id === args.id);
       if (!desc) throw new Error(`Unknown model: ${args.kind}/${args.id}`);
-      await this.deps.modelManager.download(desc, (p) => {
-        if (this.win && !this.win.isDestroyed()) {
-          this.win.webContents.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total });
-        }
-      });
+      try {
+        await this.deps.modelManager.download(desc, (p) => {
+          if (this.win && !this.win.isDestroyed()) {
+            this.win.webContents.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total });
+          }
+        });
+      } catch (err) {
+        // Never forward raw messages: they can carry URLs and 64-char hashes.
+        throw new Error(downloadErrorText(err));
+      }
     });
 
     ipcMain.on("prefs:relaunch", () => {

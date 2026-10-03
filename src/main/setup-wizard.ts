@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { ModelManager } from "./model-manager.js";
 import { TIERS, getModelById, getTier, tierTotals } from "./model-catalog.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
+import { downloadErrorText } from "./utils/download-errors.js";
 import { PreferencesStore } from "./preferences-store.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -130,7 +131,8 @@ export class SetupWizard {
       } catch (err) {
         this.emitDone({
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          // Never forward raw messages: they can carry URLs and 64-char hashes.
+          error: downloadErrorText(err),
         });
       }
     });

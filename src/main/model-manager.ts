@@ -3,6 +3,7 @@ import { access, mkdir, rename, unlink } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import { dirname } from "node:path";
+import { ensureFreeSpace, StatfsFn } from "./utils/disk-space.js";
 import { modelFilePath, sha256OfFile, fileSize, ModelDescriptor } from "./utils/model-paths.js";
 
 export interface ProgressEvent {
@@ -12,27 +13,57 @@ export interface ProgressEvent {
 
 export type ProgressCallback = (p: ProgressEvent) => void;
 
-export interface DownloadResponse {
-  stream: Readable;
-  contentLength: number;
+export interface DownloadRequest {
+  url: string;
+  /** First byte to fetch; 0 for a fresh download. */
+  rangeStart: number;
+  signal?: AbortSignal;
 }
 
-export type DownloadStreamFn = (url: string) => Promise<DownloadResponse>;
+export interface DownloadResponse {
+  stream: Readable;
+  /** Length of THIS response body (remaining bytes when status is 206). */
+  contentLength: number;
+  /** 206 when the server honoured the Range request, 200 when it sent the whole file. */
+  status: number;
+}
+
+export type DownloadStreamFn = (req: DownloadRequest) => Promise<DownloadResponse>;
+
+export interface DownloadOptions {
+  signal?: AbortSignal;
+}
+
+export interface ModelManagerOptions {
+  fetcher?: DownloadStreamFn;
+  statfs?: StatfsFn;
+}
 
 // Default fetcher uses Node's global fetch (Node 20+).
-export const defaultFetcher: DownloadStreamFn = async (url) => {
-  const res = await fetch(url);
+export const defaultFetcher: DownloadStreamFn = async ({ url, rangeStart, signal }) => {
+  const res = await fetch(url, {
+    headers: rangeStart > 0 ? { Range: `bytes=${rangeStart}-` } : {},
+    signal,
+  });
   if (!res.ok || !res.body) {
     throw new Error(`HTTP ${res.status} fetching ${url}`);
   }
   const contentLength = Number(res.headers.get("content-length") ?? "0");
   // Convert WHATWG ReadableStream to Node Readable
   const stream = Readable.fromWeb(res.body as unknown as import("stream/web").ReadableStream);
-  return { stream, contentLength };
+  return { stream, contentLength, status: res.status };
 };
 
 export class ModelManager {
-  constructor(private readonly fetcher: DownloadStreamFn = defaultFetcher) {}
+  private readonly fetcher: DownloadStreamFn;
+  private readonly statfs: StatfsFn | undefined;
+
+  /** Accepts options, or a bare fetcher function for backwards compatibility. */
+  constructor(opts: ModelManagerOptions | DownloadStreamFn = {}) {
+    const o = typeof opts === "function" ? { fetcher: opts } : opts;
+    this.fetcher = o.fetcher ?? defaultFetcher;
+    this.statfs = o.statfs;
+  }
 
   getInstalledPath(desc: ModelDescriptor): string {
     return modelFilePath(desc);
@@ -52,28 +83,50 @@ export class ModelManager {
     return true;
   }
 
-  async download(desc: ModelDescriptor, onProgress?: ProgressCallback): Promise<void> {
+  /**
+   * Downloads into `<file>.partial`, resuming from it when present. The partial
+   * survives aborts and network errors; it is deleted only when the finished
+   * file fails the size or sha256 check.
+   */
+  async download(desc: ModelDescriptor, onProgress?: ProgressCallback, opts: DownloadOptions = {}): Promise<void> {
     const finalPath = this.getInstalledPath(desc);
     const tmpPath = `${finalPath}.partial`;
-    await mkdir(dirname(finalPath), { recursive: true });
+    const dir = dirname(finalPath);
+    await mkdir(dir, { recursive: true });
 
-    const { stream, contentLength } = await this.fetcher(desc.url);
-    const total = contentLength > 0 ? contentLength : desc.sizeBytes;
-    let received = 0;
-
-    const progress = new Transform({
-      transform(chunk: Buffer, _enc, cb) {
-        received += chunk.length;
-        if (onProgress) onProgress({ bytes: received, total });
-        cb(null, chunk);
-      },
-    });
-
-    try {
-      await pipeline(stream, progress, createWriteStream(tmpPath));
-    } catch (err) {
+    let partialSize = await fileSize(tmpPath).catch(() => 0);
+    if (partialSize > desc.sizeBytes && desc.sizeBytes > 0) {
       await unlink(tmpPath).catch(() => undefined);
-      throw err;
+      partialSize = 0;
+    }
+    await ensureFreeSpace(dir, Math.max(0, desc.sizeBytes - partialSize), this.statfs);
+
+    // A partial that already has every byte only needs verification (a Range
+    // request past the end would come back as 416).
+    if (partialSize === 0 || partialSize < desc.sizeBytes) {
+      opts.signal?.throwIfAborted();
+      const { stream, contentLength, status } = await this.fetcher({
+        url: desc.url,
+        rangeStart: partialSize,
+        signal: opts.signal,
+      });
+      const resumed = partialSize > 0 && status === 206;
+      const startBytes = resumed ? partialSize : 0;
+      const total = contentLength > 0 ? startBytes + contentLength : desc.sizeBytes;
+      let received = startBytes;
+
+      const progress = new Transform({
+        transform(chunk: Buffer, _enc, cb) {
+          received += chunk.length;
+          if (onProgress) onProgress({ bytes: received, total });
+          cb(null, chunk);
+        },
+      });
+
+      // Append when the server honoured the Range; otherwise start the file over.
+      await pipeline(stream, progress, createWriteStream(tmpPath, { flags: resumed ? "a" : "w" }), {
+        signal: opts.signal,
+      });
     }
 
     // Verify size then sha256
