@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WHISPER_MODELS, LLM_MODELS, REPLY_MODELS, getModelById, replyCards } from "./model-catalog.js";
 import { validateReplyAccelerator, isSystemReservedKeyEvent } from "./utils/reply-hotkey.js";
-import { appNameFromPath, findAppPathByBundleId, isBundleId, readBundleId, type ExecFn } from "./utils/app-bundle.js";
+import { appNameFromPath, findAppPathByBundleId, isBundleId, mapWithLimit, readBundleId, type ExecFn } from "./utils/app-bundle.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
 import type { ReplyServerState } from "../shared/reply-types.js";
@@ -317,13 +317,12 @@ export class PreferencesWindow {
     ipcMain.handle("prefs:resolve-apps", async (_e, ids: unknown): Promise<AppInfo[]> => {
       if (!Array.isArray(ids)) return [];
       const unique = [...new Set(ids.filter((id): id is string => typeof id === "string" && isBundleId(id)))].slice(0, 100);
-      return Promise.all(
-        unique.map(async (bundleId) => {
-          const appPath = await findAppPathByBundleId(bundleId, execCommand);
-          if (!appPath) return { bundleId, name: null, icon: null };
-          return { bundleId, name: appNameFromPath(appPath), icon: await this.iconFor(appPath) };
-        }),
-      );
+      // A handful of Spotlight queries at a time: up to 100 mdfind processes at once would stall the app.
+      return mapWithLimit(unique, 4, async (bundleId) => {
+        const appPath = await findAppPathByBundleId(bundleId, execCommand);
+        if (!appPath) return { bundleId, name: null, icon: null };
+        return { bundleId, name: appNameFromPath(appPath), icon: await this.iconFor(appPath) };
+      });
     });
 
     ipcMain.handle("prefs:retry-reply", () => this.deps.replyRetry());

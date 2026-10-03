@@ -1,4 +1,5 @@
-import { basename } from "node:path";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 
 /** Runs a command without a shell and resolves with its stdout. */
 export type ExecFn = (file: string, args: string[]) => Promise<string>;
@@ -35,13 +36,36 @@ export async function readBundleId(appPath: string, exec: ExecFn): Promise<strin
   return tryExec(exec, "plutil", ["-extract", "CFBundleIdentifier", "raw", `${appPath.replace(/\/+$/, "")}/Contents/Info.plist`]);
 }
 
-/** Finds where an app with this bundle id is installed (Spotlight), or null. */
-export async function findAppPathByBundleId(bundleId: string, exec: ExecFn): Promise<string | null> {
+/**
+ * Finds where an app with this bundle id is installed (Spotlight), or null.
+ * The search is limited to the application folders: an unrestricted mdfind also
+ * walks every build output and backup copy of the app on the disk, which is slow.
+ */
+export async function findAppPathByBundleId(bundleId: string, exec: ExecFn, home: string = homedir()): Promise<string | null> {
   if (!isBundleId(bundleId)) return null;
   try {
-    const out = await exec("mdfind", [`kMDItemCFBundleIdentifier == '${bundleId}'`]);
+    const out = await exec("mdfind", [
+      "-onlyin", "/Applications",
+      "-onlyin", join(home, "Applications"),
+      "-onlyin", "/System/Applications",
+      `kMDItemCFBundleIdentifier == '${bundleId}'`,
+    ]);
     return out.split("\n").map((l) => l.trim()).find((l) => l.endsWith(".app")) ?? null;
   } catch {
     return null;
   }
+}
+
+/** Like Promise.all(items.map(fn)), but with at most `limit` calls in flight; results keep the input order. */
+export async function mapWithLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }

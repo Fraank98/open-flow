@@ -3,6 +3,7 @@ import {
   appNameFromPath,
   findAppPathByBundleId,
   isBundleId,
+  mapWithLimit,
   readBundleId,
   type ExecFn,
 } from "../../src/main/utils/app-bundle.js";
@@ -49,8 +50,13 @@ describe("readBundleId", () => {
 describe("findAppPathByBundleId", () => {
   it("asks Spotlight for the app and returns the first .app path", async () => {
     const exec = vi.fn<Parameters<ExecFn>, ReturnType<ExecFn>>(async () => "/Users/me/Library/foo.plugin\n/Applications/Mail.app\n");
-    expect(await findAppPathByBundleId("com.apple.mail", exec)).toBe("/Applications/Mail.app");
-    expect(exec).toHaveBeenCalledWith("mdfind", ["kMDItemCFBundleIdentifier == 'com.apple.mail'"]);
+    expect(await findAppPathByBundleId("com.apple.mail", exec, "/Users/me")).toBe("/Applications/Mail.app");
+    expect(exec).toHaveBeenCalledWith("mdfind", [
+      "-onlyin", "/Applications",
+      "-onlyin", "/Users/me/Applications",
+      "-onlyin", "/System/Applications",
+      "kMDItemCFBundleIdentifier == 'com.apple.mail'",
+    ]);
   });
 
   it("returns null when nothing is found or the lookup fails", async () => {
@@ -66,6 +72,26 @@ describe("findAppPathByBundleId", () => {
     const exec = vi.fn<Parameters<ExecFn>, ReturnType<ExecFn>>(async () => "");
     expect(await findAppPathByBundleId("x' || kMDItemKind == '*", exec)).toBeNull();
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe("mapWithLimit", () => {
+  it("keeps the order of the results and never runs more than `limit` at once", async () => {
+    let running = 0;
+    let peak = 0;
+    const out = await mapWithLimit([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4, async (n) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running -= 1;
+      return n * 2;
+    });
+    expect(out).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18, 20]);
+    expect(peak).toBe(4);
+  });
+
+  it("handles an empty list", async () => {
+    expect(await mapWithLimit([], 4, async (n: number) => n)).toEqual([]);
   });
 });
 
