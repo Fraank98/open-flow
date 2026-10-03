@@ -12,6 +12,7 @@
   const scenario = q.get("scenario") || "installed";
   const isReply = scenario.indexOf("reply-") === 0;
   // The reply scenarios share the "installed" data of the other tabs.
+  const isReplyOn = ["reply-on", "reply-bad-shortcut", "reply-shift-only", "reply-failed", "reply-booting"].indexOf(scenario) !== -1;
   const base = isReply ? "installed" : scenario;
   // The preview never has a remembered tab: the query string decides.
   try { localStorage.removeItem("openflow.settings.tab"); } catch (e) { /* ignore */ }
@@ -25,7 +26,7 @@
     hotkeyAccelerator: "Hold Option", language: base === "fresh" ? "auto" : "it", debugLogging: false,
     useLlmCleanup: true, launchAtLogin: true, spokenPunctuation: false,
     dictionary: base === "fresh" ? [] : ["Kubernetes", "open-flow", "Qwen"],
-    replySuggestionsEnabled: scenario === "reply-on" || scenario === "reply-bad-shortcut" || scenario === "reply-failed",
+    replySuggestionsEnabled: isReplyOn,
     userDisplayName: scenario === "reply-off" ? "" : "Danilo Franco",
     replySuggestionsHotkey: "Command+Control+R",
     replyModelId: "gemma-3-4b",
@@ -46,7 +47,7 @@
   const BENCH_STD = "In the benchmark of the classifier alone, Gemma 3 4B misread 4 of 8 questions that were really asking for something only you know (for example \"how often do you go to the gym?\"). With the deterministic pre-gate that runs before the classifier (active in this build) that drops to 1 of 8. Still check a proposal before you accept it.";
   const BENCH_MAX = "In the benchmark, Gemma 4 E4B never mistook a question asking for a fact for one that needs a decision (0 false positives out of 8). It is slower (about 900 ms) and in 3 cases out of 12 it did not offer a reply that would have been appropriate. Recommended from 24 GB of RAM.";
   const reply = [
-    { id: "gemma-3-4b", tierId: "default", label: "Standard", description: "Gemma 3 4B. Faster, a good fit for most Macs.", sizeBytes: 2489894016, ramBytes: 3.1e9, installed: scenario === "reply-on" || scenario === "reply-bad-shortcut" || scenario === "reply-failed", licenseNote: null, details: BENCH_STD },
+    { id: "gemma-3-4b", tierId: "default", label: "Standard", description: "Gemma 3 4B. Faster, a good fit for most Macs.", sizeBytes: 2489894016, ramBytes: 3.1e9, installed: isReplyOn, licenseNote: "Subject to Google's Gemma Terms of Use and Prohibited Use Policy.", details: BENCH_STD },
     { id: "gemma-4-e4b", tierId: "max", label: "Maximum quality", description: "Gemma 4 E4B. Slower, best with 24 GB of RAM or more.", sizeBytes: 4977171584, ramBytes: 5.8e9, installed: false, licenseNote: null, details: BENCH_MAX },
   ];
   // A flat colour square stands in for the app icon the main process would send.
@@ -133,7 +134,7 @@
     appInfo: () => Promise.resolve({ version: "0.3.0" }),
     onShowTab: () => () => undefined,
     replyStatus: () => Promise.resolve({
-      serverState: scenario === "reply-on" || scenario === "reply-bad-shortcut" ? "ready" : scenario === "reply-failed" ? "failed" : "off",
+      serverState: scenario === "reply-on" || scenario === "reply-bad-shortcut" || scenario === "reply-shift-only" ? "ready" : scenario === "reply-failed" ? "failed" : "off",
       serverError: scenario === "reply-failed" ? "llama-server exited (code 1)" : null,
       hotkeyRegistered: scenario !== "reply-booting", nativeOk: scenario !== "reply-booting", booting: scenario === "reply-booting",
       lastBlockedBundleId: scenario === "reply-on" ? "com.apple.Safari" : null,
@@ -163,6 +164,15 @@
   }
 
   // Scenario "reply-bad-shortcut": press Command+Option+R in the recorder, which Option makes invalid.
+  if (scenario === "reply-shift-only") {
+    const poll = setInterval(() => {
+      const field = document.getElementById("replyHotkey");
+      if (!field || !field.value) return;
+      clearInterval(poll);
+      field.focus();
+      field.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", key: "K", shiftKey: true, bubbles: true, cancelable: true }));
+    }, 80);
+  }
   if (scenario === "reply-bad-shortcut") {
     const poll = setInterval(() => {
       const field = document.getElementById("replyHotkey");

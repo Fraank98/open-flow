@@ -56,7 +56,7 @@ async function main(): Promise<void> {
     }
   }
   console.log("\nSettings scenarios: fresh, installed, restart-pending, downloading, reopened.");
-  console.log("Reply tab (&tab=reply): reply-off, reply-on, reply-downloading, reply-bad-shortcut, reply-failed.");
+  console.log("Reply tab (&tab=reply): reply-off, reply-on, reply-downloading, reply-bad-shortcut, reply-shift-only, reply-booting, reply-failed.");
   console.log("\nNo Chrome? Use Safari: open -a Safari <file>.html (no headless screenshots).");
 }
 
