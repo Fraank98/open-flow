@@ -85,6 +85,8 @@ export interface PreferencesWindowDeps {
   preferencesStore: PreferencesStore;
   /** Read-only snapshot for the reply section. */
   replyStatus: () => ReplyUiStatus;
+  /** Re-applies the reply server with the saved preferences (Retry). */
+  replyRetry: () => Promise<void>;
   /** Restart-required fields that differ from the prefs the app booted with. */
   restartStatus: () => Promise<string[]>;
   /** Current permissions; `probeAutomation` runs the osascript probe (it can raise the macOS prompt). */
@@ -314,6 +316,8 @@ export class PreferencesWindow {
         }),
       );
     });
+
+    ipcMain.handle("prefs:retry-reply", () => this.deps.replyRetry());
 
     ipcMain.handle("prefs:reply-status", (): ReplyUiStatus => this.deps.replyStatus());
 

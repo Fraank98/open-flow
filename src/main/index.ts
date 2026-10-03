@@ -39,7 +39,7 @@ import { filterVariants } from "./utils/variant-filter.js";
 import { ReplyServerManager } from "./reply-server-manager.js";
 import { ReplyCoordinator, hasExplicitProposal, VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR } from "./reply-coordinator.js";
 import { HotkeyManager } from "./hotkey-manager.js";
-import { reconcileReplyAccelerator } from "./utils/reply-hotkey.js";
+import { reconcileReplyAccelerator, replyChangesToApply } from "./utils/reply-hotkey.js";
 import { IpcChannels } from "../shared/ipc-channels.js";
 import type { ReplyUiStatus } from "./preferences-window.js";
 
@@ -239,10 +239,13 @@ async function main(): Promise<void> {
     lastBlockedBundleId: null,
     booting: true,
   });
+  // Replaced by the reply-suggestions wiring further down.
+  let replyRetry: () => Promise<void> = async () => {};
   const prefsWindow = new PreferencesWindow({
     modelManager,
     preferencesStore,
     replyStatus: () => replyUiStatus(),
+    replyRetry: () => replyRetry(),
     restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
     permissionsStatus: async (probeAutomation) => {
       if (probeAutomation) automationStatus = await checkAutomationViaProbe();
@@ -789,18 +792,37 @@ async function main(): Promise<void> {
     for (const acc of [...VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR]) globalShortcut.unregister(acc);
   };
 
-  prefsWindow.onSaved((next) => {
-    // Mirrors the startup guard below (`prefs.replySuggestionsEnabled &&
-    // replyCoordinator`): without `replyCoordinator !== null` here, checking
-    // the box when the native addon failed to load starts the 2.5-5 GB
-    // model server for a feature applyReplyHotkey can never register a
-    // hotkey for (found by review — Important 2).
-    void replyServerManager.apply({ enabled: next.replySuggestionsEnabled && replyCoordinator !== null, replyModelId: next.replyModelId })
+  // Applies the saved reply preferences: the server only when the toggle or the
+  // model changed, the hotkey only when the toggle or the shortcut changed.
+  // Mirrors the startup guard below (`prefs.replySuggestionsEnabled &&
+  // replyCoordinator`): without `replyCoordinator !== null` here, checking
+  // the box when the native addon failed to load starts the 2.5-5 GB
+  // model server for a feature applyReplyHotkey can never register a
+  // hotkey for (found by review — Important 2).
+  const applyReplyServer = (p: { replySuggestionsEnabled: boolean; replyModelId: string }): Promise<void> =>
+    replyServerManager.apply({ enabled: p.replySuggestionsEnabled && replyCoordinator !== null, replyModelId: p.replyModelId })
       .then(applyReplyHotkey)
       .catch((err: unknown) => logger.error("reply server apply failed", {
         message: err instanceof Error ? err.message : String(err),
       }));
+  let lastReplyPrefs = { ...prefs };
+  prefsWindow.onSaved((next) => {
+    const change = replyChangesToApply(lastReplyPrefs, next);
+    lastReplyPrefs = { ...next };
+    if (change.server) {
+      void applyReplyServer(next);
+    } else if (change.hotkey) {
+      void applyReplyHotkey().catch((err: unknown) => logger.error("reply hotkey apply failed", {
+        message: err instanceof Error ? err.message : String(err),
+      }));
+    }
   });
+  // The explicit Retry after a failed start: the saved values did not change, so
+  // onSaved would (rightly) skip it.
+  replyRetry = async () => {
+    const saved = await preferencesStore.load();
+    await applyReplyServer(saved);
+  };
 
   // `quitting` is checked like for whisper/llama: a quit during boot must not
   // start a model server that the will-quit teardown has already passed.

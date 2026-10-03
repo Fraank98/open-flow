@@ -65,6 +65,8 @@ interface PrefsApi {
   appInfo: () => Promise<{ version: string }>;
   onShowTab: (cb: (tab: string) => void) => () => void;
   replyStatus: () => Promise<ReplyStatusInfo>;
+  /** Re-applies the reply server (the Retry after a failed start). */
+  retryReply: () => Promise<void>;
   validateReplyHotkey: (accelerator: string) => Promise<{ ok: boolean; reason?: string; accelerator?: string }>;
   /** Tells main whether the shortcut recorder has focus (it then swallows the Command key equivalents). */
   recorderActive: (active: boolean) => void;
@@ -109,6 +111,7 @@ const api: PrefsApi = {
   resetSetup: () => ipcRenderer.invoke("prefs:reset-setup"),
   appInfo: () => ipcRenderer.invoke("prefs:app-info"),
   replyStatus: () => ipcRenderer.invoke("prefs:reply-status"),
+  retryReply: () => ipcRenderer.invoke("prefs:retry-reply"),
   validateReplyHotkey: (accelerator) => ipcRenderer.invoke("prefs:validate-reply-hotkey", accelerator),
   recorderActive: (active) => {
     ipcRenderer.send("prefs:recorder-active", active);

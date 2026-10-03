@@ -76,3 +76,23 @@ export function reconcileReplyAccelerator(savedPreference: string, current: stri
   const accelerator = validateReplyAccelerator(savedPreference).ok ? savedPreference : REPLY_HOTKEY_DEFAULT;
   return { accelerator, rebuild: accelerator !== current };
 }
+
+export interface ReplyPrefsSlice {
+  replySuggestionsEnabled: boolean;
+  replyModelId: string;
+  replySuggestionsHotkey: string;
+}
+
+/**
+ * What a saved preferences change requires: the reply server is only touched
+ * when the toggle or the model changed (saving the user's name must not reload
+ * a multi-GB model), the hotkey only when the toggle or the shortcut changed.
+ * The explicit Retry in Settings does not go through here.
+ */
+export function replyChangesToApply(prev: ReplyPrefsSlice, next: ReplyPrefsSlice): { server: boolean; hotkey: boolean } {
+  const enabledChanged = prev.replySuggestionsEnabled !== next.replySuggestionsEnabled;
+  return {
+    server: enabledChanged || prev.replyModelId !== next.replyModelId,
+    hotkey: enabledChanged || prev.replySuggestionsHotkey !== next.replySuggestionsHotkey,
+  };
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateReplyAccelerator, isSystemReservedKeyEvent, reconcileReplyAccelerator, REPLY_HOTKEY_DEFAULT } from "../../src/main/utils/reply-hotkey.js";
+import { replyChangesToApply, validateReplyAccelerator, isSystemReservedKeyEvent, reconcileReplyAccelerator, REPLY_HOTKEY_DEFAULT } from "../../src/main/utils/reply-hotkey.js";
 
 describe("validateReplyAccelerator", () => {
   it("accepts the default and other Command/Control/Shift combinations", () => {
@@ -72,5 +72,18 @@ describe("isSystemReservedKeyEvent", () => {
     expect(press("q", { control: true })).toBe(false);
     expect(press("q", { alt: true })).toBe(false);
     expect(press("q", { meta: false })).toBe(false);
+  });
+});
+
+describe("replyChangesToApply", () => {
+  const base = { replySuggestionsEnabled: true, replyModelId: "gemma-3-4b", replySuggestionsHotkey: "Command+Control+R" };
+
+  it("applies nothing when an unrelated preference was saved", () => {
+    expect(replyChangesToApply(base, { ...base })).toEqual({ server: false, hotkey: false });
+  });
+  it("restarts the server only for the toggle or the model, and rewires the hotkey for the toggle or the shortcut", () => {
+    expect(replyChangesToApply(base, { ...base, replySuggestionsEnabled: false })).toEqual({ server: true, hotkey: true });
+    expect(replyChangesToApply(base, { ...base, replyModelId: "gemma-4-e4b" })).toEqual({ server: true, hotkey: false });
+    expect(replyChangesToApply(base, { ...base, replySuggestionsHotkey: "Command+Shift+K" })).toEqual({ server: false, hotkey: true });
   });
 });

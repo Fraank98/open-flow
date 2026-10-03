@@ -378,8 +378,9 @@ async function init() {
       retry.className = "link";
       retry.textContent = view.text;
       retry.addEventListener("click", () => {
-        // Re-saving the toggle makes the main process re-apply the reply server.
-        void save({ replySuggestionsEnabled: true }, "reply", "Retrying…");
+        // Saving an unchanged toggle no longer restarts the server: ask for it explicitly.
+        say("reply", "Retrying…", "ok");
+        void api.retryReply().then(() => refreshReplyStatus());
       });
       el.appendChild(retry);
     } else {

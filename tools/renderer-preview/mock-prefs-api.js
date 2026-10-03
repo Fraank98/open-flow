@@ -139,6 +139,7 @@
       lastBlockedBundleId: scenario === "reply-on" ? "com.apple.Safari" : null,
     }),
     validateReplyHotkey: (acc) => Promise.resolve(validate(acc)),
+    retryReply: () => Promise.resolve(),
     recorderActive: () => {},
     onReservedKey: () => () => {},
     pickApp: () => Promise.resolve({ bundleId: "com.apple.Safari", name: "Safari", icon: APPS["com.apple.Safari"].icon }),
