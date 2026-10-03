@@ -39,6 +39,7 @@ import { filterVariants } from "./utils/variant-filter.js";
 import { ReplyServerManager } from "./reply-server-manager.js";
 import { ReplyCoordinator, hasExplicitProposal, VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR } from "./reply-coordinator.js";
 import { HotkeyManager } from "./hotkey-manager.js";
+import { DownloadTracker } from "./utils/download-tracker.js";
 import { reconcileReplyAccelerator, replyChangesToApply } from "./utils/reply-hotkey.js";
 import { IpcChannels } from "../shared/ipc-channels.js";
 import type { ReplyUiStatus } from "./preferences-window.js";
@@ -241,7 +242,11 @@ async function main(): Promise<void> {
   });
   // Replaced by the reply-suggestions wiring further down.
   let replyRetry: () => Promise<void> = async () => {};
+  // Shared by the Settings cards and the reply server manager, so a model the
+  // manager downloads is visible there and is never downloaded twice.
+  const downloadTracker = new DownloadTracker();
   const prefsWindow = new PreferencesWindow({
+    downloads: downloadTracker,
     modelManager,
     preferencesStore,
     replyStatus: () => replyUiStatus(),
@@ -427,6 +432,7 @@ async function main(): Promise<void> {
         keepaliveMs: 20_000,
       }),
     modelManager,
+    downloads: downloadTracker,
     logger,
   });
   // Both server managers exist now: from here on, a fatal startup error can

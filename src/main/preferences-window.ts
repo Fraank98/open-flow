@@ -84,6 +84,8 @@ export interface PreferencesWindowDeps {
   modelManager: ModelManager;
   preferencesStore: PreferencesStore;
   /** Read-only snapshot for the reply section. */
+  /** The tracker the reply server manager also uses (see ReplyServerManagerDeps). */
+  downloads: DownloadTracker;
   replyStatus: () => ReplyUiStatus;
   /** Re-applies the reply server with the saved preferences (Retry). */
   replyRetry: () => Promise<void>;
@@ -101,10 +103,27 @@ export class PreferencesWindow {
   /** True while the shortcut recorder has focus (reported by the renderer). */
   private recorderActive = false;
   private readonly savedListeners: Array<(prefs: Preferences) => void> = [];
-  /** Downloads in flight, by model id: Cancel aborts them and a reopened window re-attaches to them. */
-  private readonly downloads = new DownloadTracker();
+  /** Downloads in flight, by model id: Cancel aborts them and a reopened window
+   *  re-attaches to them. Shared with the reply server manager, whose own
+   *  downloads therefore show up on the cards too. */
+  private readonly downloads: DownloadTracker;
+  /** One throttle per model id, so the card is not redrawn on every stream chunk. */
+  private readonly progressGates = new Map<string, (final: boolean) => boolean>();
 
-  constructor(private readonly deps: PreferencesWindowDeps) {}
+  constructor(private readonly deps: PreferencesWindowDeps) {
+    this.downloads = deps.downloads;
+    this.downloads.onProgress((id, p) => {
+      let gate = this.progressGates.get(id);
+      if (!gate) {
+        // Once per stream chunk is far more than the card needs: ~10/s, plus the final 100%.
+        gate = createEmitGate(100);
+        this.progressGates.set(id, gate);
+      }
+      const final = p.bytes >= p.total;
+      if (gate(final)) this.send("prefs:download-progress", { id, bytes: p.bytes, total: p.total });
+      if (final) this.progressGates.delete(id);
+    });
+  }
 
   /** Register a listener called after every successful save with the saved prefs. */
   onSaved(cb: (prefs: Preferences) => void): void {
@@ -238,19 +257,9 @@ export class PreferencesWindow {
       // hand back the same promise, so the caller resolves when it really ends.
       if (!this.downloads.isActive(desc.id) && (await this.deps.modelManager.isInstalled(desc))) return;
       return this.downloads.start(desc.id, async (signal, report) => {
-        // Once per stream chunk is far more than the card needs: ~10/s, plus the final 100%.
-        const gate = createEmitGate(100);
         try {
-          await this.deps.modelManager.download(
-            desc,
-            (p) => {
-              report(p);
-              if (gate(p.bytes >= p.total)) {
-                this.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total });
-              }
-            },
-            { signal },
-          );
+          // Progress reaches the card through the tracker's listener (constructor).
+          await this.deps.modelManager.download(desc, report, { signal });
         } catch (err) {
           // Never forward raw messages: they can carry URLs and 64-char hashes.
           throw new Error(downloadErrorText(err));
