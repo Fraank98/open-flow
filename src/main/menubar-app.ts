@@ -14,7 +14,7 @@ export interface MenubarCallbacks {
 export class MenubarApp {
   private tray: Tray | null = null;
   private enabled = true;
-  private currentStatus = "Idle";
+  private currentStatus = "Starting…";
 
   constructor(private readonly callbacks: MenubarCallbacks) {}
 

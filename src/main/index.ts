@@ -94,6 +94,31 @@ async function main(): Promise<void> {
     active: powerSaveBlocker.isStarted(powerSaveBlockerId),
   });
 
+  // Built before the wizard (and before the slow model loads) so everything
+  // that needs it later — the menubar callbacks now, the wizard's permission
+  // checks in a later step — can rely on it already existing. Constructing it
+  // only loads the native addon; the NSEvent monitor is installed by
+  // ptt.start(), far below, so the wizard's behaviour is unchanged.
+  let ptt: PTTManager;
+  try {
+    ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await logger.error("PTT native addon failed to load", { message });
+    dialog.showErrorBox(
+      "open-flow can't start",
+      "The keyboard listener failed to load. Reinstall the app or report this on GitHub.\n\n" + message,
+    );
+    app.exit(1);
+    return;
+  }
+  ptt.on("ready", () => {
+    void logger.info("PTT armed (in-process NSEvent monitor)");
+  });
+  ptt.on("trustRequired", () => {
+    void logger.error("PTT requires Accessibility — prompt shown to user");
+  });
+
   // First-launch: run setup wizard until setupComplete=true
   if (!prefs.setupComplete) {
     const wizard = new SetupWizard({ modelManager, preferencesStore });
@@ -151,6 +176,38 @@ async function main(): Promise<void> {
   // Snapshot of the prefs the models/servers below are started with. The
   // Settings window compares against it to flag restart-required changes.
   const bootPrefs = { ...prefs };
+
+  // The menubar icon appears now, before the slow model loads below, so the
+  // user sees the app is alive. Everything its callbacks touch (`ptt`,
+  // `prefsWindow`, `prefs`) is declared above this point.
+  const prefsWindow = new PreferencesWindow({
+    modelManager,
+    preferencesStore,
+    restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
+  });
+  const menubar = new MenubarApp({
+    onToggleEnabled: () => {
+      if (menubar.isEnabled()) {
+        ptt.start();
+      } else {
+        ptt.stop();
+      }
+    },
+    onOpenPreferences: () => {
+      void prefsWindow.open();
+    },
+    onQuit: () => app.quit(),
+  });
+  menubar.create();
+  menubar.setStatus("Loading models…");
+  // Keep the in-memory snapshot in sync so `arm` (language, dictionary) reads
+  // fresh values and debug logging toggles without a restart. Note: the
+  // llama-server warmup prompt stays on the boot language; that is only a cache
+  // warm-up, not part of the per-dictation cleanup prompt.
+  prefsWindow.onSaved((next) => {
+    prefs = next;
+    logger.setDebug(next.debugLogging);
+  });
 
   const mic = await checkMicrophone();
   const acc = await checkAccessibilityViaProbe();
@@ -282,6 +339,7 @@ async function main(): Promise<void> {
   // whisper for the GPU every 20s — pure waste. Toggling the pref on at runtime
   // takes effect after a restart (see the resilient clean() wiring below).
   if (prefs.useLlmCleanup) {
+    menubar.setStatus("Starting cleanup model…");
     try {
       await logger.info("llama-server starting", { model: llmModelPath });
       const t0 = Date.now();
@@ -384,40 +442,6 @@ async function main(): Promise<void> {
     void mediaController.resume().catch(swallowMcError("resume"));
   });
 
-  const ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged });
-  ptt.on("ready", () => {
-    void logger.info("PTT armed (in-process NSEvent monitor)");
-  });
-  ptt.on("trustRequired", () => {
-    void logger.error("PTT requires Accessibility — prompt shown to user");
-  });
-  const prefsWindow = new PreferencesWindow({
-    modelManager,
-    preferencesStore,
-    restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
-  });
-  // Keep the in-memory snapshot in sync so `arm` (language, dictionary) reads
-  // fresh values and debug logging toggles without a restart. Note: the
-  // llama-server warmup prompt stays on the boot language; that is only a cache
-  // warm-up, not part of the per-dictation cleanup prompt.
-  prefsWindow.onSaved((next) => {
-    prefs = next;
-    logger.setDebug(next.debugLogging);
-  });
-  const menubar = new MenubarApp({
-    onToggleEnabled: () => {
-      if (menubar.isEnabled()) {
-        ptt.start();
-      } else {
-        ptt.stop();
-      }
-    },
-    onOpenPreferences: () => {
-      void prefsWindow.open();
-    },
-    onQuit: () => app.quit(),
-  });
-
   // Diagnostic: log every raw NSEvent we receive so duplicate-fire bugs
   // can be diagnosed from the log. `detail` carries the keyCode behind a CHORD
   // (which distinguishes a genuine Option shortcut from a spurious one) and the
@@ -491,7 +515,7 @@ async function main(): Promise<void> {
         spokenPunctuation: currentPrefs.spokenPunctuation,
         dictionary: currentPrefs.dictionary,
       });
-      menubar.setStatus("Idle");
+      menubar.setStatus("Ready");
     } catch (err) {
       // Reset FIRST: logger.error can reject (disk full, unwritable dir) and
       // must never stop us from un-wedging the pipeline. finishWithAudio
@@ -504,7 +528,7 @@ async function main(): Promise<void> {
       orchestrator.reset();
       if (streamingWhisper) streamingWhisper.cancel();
       coordinator.cancel();
-      menubar.setStatus("Idle");
+      menubar.setStatus("Ready");
       void logger
         .error("stop handler failed", {
           message: err instanceof Error ? err.message : String(err),
@@ -526,10 +550,11 @@ async function main(): Promise<void> {
     // stuck at "Recording…" because state change → idle is what hides it.
     coordinator.cancel();
     void mediaController.resume().catch(swallowMcError("resume"));
-    menubar.setStatus("Idle");
+    menubar.setStatus("Ready");
   });
 
-  ptt.start();
+  // Respect a "Pause dictation" the user may have chosen while models loaded.
+  if (menubar.isEnabled()) ptt.start();
   if (!ptt.isTrusted()) {
     await logger.error("PTT start failed: not trusted for Accessibility");
     const choice = dialog.showMessageBoxSync({
@@ -550,11 +575,11 @@ async function main(): Promise<void> {
       app.quit();
       return;
     }
+    menubar.setStatus("Hotkey off — Accessibility permission needed");
   } else {
     await logger.info("PTT armed");
+    menubar.setStatus(menubar.isEnabled() ? "Ready — hold ⌥ to dictate" : "Paused");
   }
-
-  menubar.create();
 
   app.on("will-quit", () => {
     ptt.stop();
