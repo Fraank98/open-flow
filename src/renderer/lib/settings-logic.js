@@ -82,7 +82,38 @@
     return { text: "Not asked yet", granted: false };
   }
 
+  /**
+   * The line under the Reply suggestions toggle: what must be done before it can
+   * be switched on ("" when nothing). Lives under the toggle, never in a global
+   * status line.
+   */
+  function replyGuardMessage(input) {
+    if (!input.nativeOk) {
+      return "Reply suggestions are unavailable in this session: the helper that reads conversations didn't load.";
+    }
+    var missing = [];
+    if (String(input.name || "").trim().length === 0) missing.push("enter your name");
+    if (!input.modelInstalled) missing.push("download the " + input.tierLabel + " model");
+    return missing.length > 0 ? "To turn this on: " + missing.join(" and ") + "." : "";
+  }
+
+  /**
+   * Label of the app list and, when the list changes what the mode means, a
+   * warning. An empty allowlist reads nothing; an empty blocklist reads everything.
+   */
+  function replyAppsView(mode, appCount) {
+    if (mode === "blocklist") {
+      return {
+        label: "Apps to exclude",
+        warning: appCount > 0 ? "Every other app can be read." : "No app excluded: every app can be read.",
+      };
+    }
+    return { label: "Apps to read", warning: appCount > 0 ? null : "No app added: nothing will be read." };
+  }
+
   return {
+    replyGuardMessage: replyGuardMessage,
+    replyAppsView: replyAppsView,
     restartBadgeFor: restartBadgeFor,
     bannerVisible: bannerVisible,
     modelRowView: modelRowView,

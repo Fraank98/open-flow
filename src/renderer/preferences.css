@@ -127,7 +127,14 @@ input.switch:checked::after { transform: translateX(16px); }
 .panel-status.error { color: var(--danger); font-weight: 500; }
 .panel-status.ok { color: var(--success); }
 
-/* Reply suggestions tab (provisional layout) */
-.muted { color: var(--muted); font-size: 12px; margin: 2px 0 10px; }
-#tab-reply label { display: block; font-weight: 500; margin-top: 12px; }
-#tab-reply input[type=text] { width: 100%; }
+/* Reply suggestions tab */
+.guard { margin-top: 8px; }
+.guard:empty { display: none; }
+.reply-state { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.reply-state:empty { display: none; }
+#tab-reply .row input[type=text] { width: 200px; flex: none; }
+#tab-reply .row-desc.invalid { color: var(--danger); font-weight: 500; }
+#reply-tiers .model-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+#reply-tiers .model-row.selected { border-color: var(--accent); background: var(--panel-selected); }
+#reply-tiers .name { flex: 1; }
+#reply-tiers .size { color: var(--muted); font-variant-numeric: tabular-nums; }

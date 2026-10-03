@@ -177,35 +177,32 @@ async function init() {
   renderDict();
 
   // ── Reply suggestions ──
+  // Every control saves its own field through prefs:update. None of these fields
+  // needs a restart: the main process reconfigures the reply server and the
+  // shortcut from its onSaved hook.
   let replyApps = Array.isArray(prefs.replyApps) ? [...prefs.replyApps] : [];
   let replyTierId = (catalog.replyTiers.find((t) => t.modelId === prefs.replyModelId) ?? catalog.replyTiers[0]).id;
+  // Optimistic until the first status poll lands, so the toggle isn't wrongly
+  // disabled in the common case (helper loaded fine).
+  let nativeOk = true;
 
   $("#replyEnabled").checked = prefs.replySuggestionsEnabled === true;
   $("#userDisplayName").value = prefs.userDisplayName ?? "";
-  // No `?? "Command+Control+R"` fallback: preferencesStore.load() always
-  // merges DEFAULT_PREFS, so replySuggestionsHotkey is never undefined here
-  // (found by review, Minor 8.3 — the fallback was dead code and a third
-  // copy of the same literal, alongside utils/reply-hotkey.ts and
-  // preferences-store.ts).
+  // preferencesStore.load() always merges DEFAULT_PREFS: never undefined here.
   $("#replyHotkey").value = prefs.replySuggestionsHotkey;
   $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
 
-  /** The same list serves both modes, and switching the dropdown silently
-   *  redefines what it means: allowlist reads ONLY these apps, blocklist
-   *  reads every app EXCEPT these. The label and a warning change with the
-   *  mode instead of leaving that to the reader to notice on their own. */
+  function selectedTier() {
+    return catalog.replyTiers.find((t) => t.id === replyTierId) ?? catalog.replyTiers[0];
+  }
+
+  /** The same list serves both modes; the label and a warning follow the mode. */
   function updateReplyAppsModeUI() {
-    const mode = $("#replyAppsMode").value;
-    $("#replyAppsModeLabel").textContent = mode === "blocklist" ? "App da escludere" : "App in cui leggere";
+    const view = L.replyAppsView($("#replyAppsMode").value, replyApps.length);
+    $("#replyAppsModeLabel").textContent = view.label;
     const warn = $("#replyAppsModeWarning");
-    if (mode !== "blocklist") {
-      warn.hidden = true;
-      return;
-    }
-    warn.hidden = false;
-    warn.textContent = replyApps.length > 0
-      ? "In tutte le altre app il contesto verrà letto."
-      : "Nessuna app esclusa: con questa impostazione la feature non leggerà nulla.";
+    warn.hidden = !view.warning;
+    warn.textContent = view.warning || "";
   }
   $("#replyAppsMode").addEventListener("change", () => {
     updateReplyAppsModeUI();
@@ -233,9 +230,7 @@ async function init() {
       li.append(span, rm);
       list.appendChild(li);
     });
-    // The list content decides which blocklist warning applies (empty vs
-    // non-empty), so every add/remove must refresh it too, not just a mode
-    // switch.
+    // The list content decides which warning applies, so every add/remove refreshes it.
     updateReplyAppsModeUI();
   }
   function addReplyApp(raw) {
@@ -264,10 +259,10 @@ async function init() {
       name.textContent = `${t.label} — ${t.description}`;
       const size = document.createElement("span");
       size.className = "size";
-      size.textContent = `${(t.sizeBytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+      size.textContent = L.formatBytes(t.sizeBytes);
       const badge = document.createElement("span");
       badge.className = "badge" + (t.installed ? " installed" : "");
-      badge.textContent = t.installed ? "installed" : "not installed";
+      badge.textContent = t.installed ? "Installed" : "Not downloaded";
       const actions = document.createElement("span");
       actions.className = "row-actions";
       if (!t.installed) {
@@ -277,18 +272,15 @@ async function init() {
           e.stopPropagation();
           dl.disabled = true;
           dl.textContent = "0%";
-          const off = window.openFlowPrefs.onDownloadProgress((p) => {
+          const off = api.onDownloadProgress((p) => {
             if (p.id === t.modelId && p.total > 0) dl.textContent = Math.floor((p.bytes / p.total) * 100) + "%";
           });
           try {
-            await window.openFlowPrefs.downloadModel("reply", t.modelId);
+            await api.downloadModel("reply", t.modelId);
             t.installed = true;
             renderReplyTiers();
-            say("reply", `Scaricato ${t.label}.`, "ok");
-            // This is the primary path to turning the feature on: without
-            // this the checkbox stays disabled, with no explanation, until
-            // something unrelated (a name edit, a tier click) happens to
-            // re-run the guard.
+            say("reply", `Downloaded ${t.label}`, "ok");
+            // Primary path to turning the feature on: re-run the guard.
             refreshReplyGuards();
           } catch (err) {
             dl.disabled = false;
@@ -311,25 +303,18 @@ async function init() {
   }
   renderReplyTiers();
 
-  function selectedTier() {
-    return catalog.replyTiers.find((t) => t.id === replyTierId) ?? catalog.replyTiers[0];
-  }
-
   const HOTKEY_MESSAGES = {
-    "contains-option": "Option è riservata alla dettatura (Hold Option): scegli un'altra combinazione.",
-    "no-modifier": "Serve almeno un modificatore (Command, Control, Shift).",
-    "no-key": "Serve un tasto oltre ai modificatori.",
-    "reserved-key": "1, 2, 3 ed Esc sono le scorciatoie della pill mentre è visibile.",
+    "contains-option": "Option is used for dictation. Choose another combination.",
+    "no-modifier": "Add at least one of Command, Control or Shift.",
+    "no-key": "Add a key besides the modifiers.",
+    "reserved-key": "1, 2, 3 and Esc are the pill's shortcuts while it is visible.",
   };
-  /** Gates the global Save button only while the feature is (or is being
-   *  left) switched on: an invalid hotkey sitting in this field must not
-   *  block saving an unrelated change — language, dictionary, models —
-   *  while the feature is off. */
+  const HOTKEY_HINT = "It can't use Option: dictation does.";
   async function validateHotkeyField() {
-    const r = await window.openFlowPrefs.validateReplyHotkey($("#replyHotkey").value.trim());
-    $("#replyHotkeyStatus").textContent = r.ok
-      ? "Non può contenere Option: la dettatura usa Hold Option."
-      : (HOTKEY_MESSAGES[r.reason] ?? "Acceleratore non valido.");
+    const r = await api.validateReplyHotkey($("#replyHotkey").value.trim());
+    const status = $("#replyHotkeyStatus");
+    status.textContent = r.ok ? HOTKEY_HINT : (HOTKEY_MESSAGES[r.reason] ?? "That shortcut isn't valid.");
+    status.classList.toggle("invalid", !r.ok);
     return r.ok;
   }
   $("#replyHotkey").addEventListener("input", () => { void validateHotkeyField(); });
@@ -338,69 +323,51 @@ async function init() {
     if (await validateHotkeyField()) void save({ replySuggestionsHotkey: $("#replyHotkey").value.trim() }, "reply");
   });
 
-  /** The feature cannot be switched on without a name and without the tier's
-   *  model on disk: the parser cannot assign roles without the name, and the
-   *  server cannot start without the file. Never force the checkbox off —
-   *  a preference already saved as "on" (e.g. the tier's model was deleted
-   *  after enabling) must not silently flip to "off" on some unrelated Save
-   *  just because Preferences happened to be reopened: it stays disabled,
-   *  with the impediment spelled out, and whatever it already was is what
-   *  gets saved. */
+  /**
+   * The feature cannot be switched on without a name and without the selected
+   * model on disk. The toggle is only ever disabled, never forced off: a
+   * preference already saved as "on" (e.g. the model was deleted afterwards)
+   * keeps its value, with the impediment spelled out.
+   */
   function refreshReplyGuards() {
     const tier = selectedTier();
-    const nameOk = $("#userDisplayName").value.trim().length > 0;
-    const box = $("#replyEnabled");
-    const blockers = [];
-    if (!nameOk) blockers.push("inserisci il tuo nome");
-    if (!tier.installed) blockers.push(`scarica ${tier.label}`);
-    // Same fixed string refreshReplyStatus already shows in the status line
-    // below (no new copy): without this, checking the box while the native
-    // addon failed to load starts the reply llama-server for a feature that
-    // can never register a hotkey (found by review — Important 2).
-    if (!nativeOk) blockers.push("addon non caricabile: feature disattivata per questa sessione");
-    box.disabled = blockers.length > 0;
-    $("#replyGuard").textContent = blockers.length > 0 ? `Per accendere le proposte di risposta: ${blockers.join(", ")}.` : "";
-    // The checkbox's checked state is one of the two inputs to the Save
-    // gate above, so a guard refresh (which can follow a checkbox change)
-    // must recompute it too.
-    void validateHotkeyField();
+    const message = L.replyGuardMessage({
+      name: $("#userDisplayName").value,
+      modelInstalled: tier.installed,
+      tierLabel: tier.label,
+      nativeOk,
+    });
+    $("#replyEnabled").disabled = message !== "";
+    $("#replyGuard").textContent = message;
   }
   $("#userDisplayName").addEventListener("input", refreshReplyGuards);
   $("#userDisplayName").addEventListener("change", () => {
     void save({ userDisplayName: $("#userDisplayName").value.trim() }, "reply");
   });
   $("#replyEnabled").addEventListener("change", () => {
-    refreshReplyGuards();
     void save({ replySuggestionsEnabled: $("#replyEnabled").checked }, "reply");
   });
-  // Optimistic default: the first refreshReplyStatus() (async) hasn't landed
-  // yet when refreshReplyGuards() first runs below, so the checkbox isn't
-  // wrongly disabled for the common case (addon loaded fine) while waiting.
-  let nativeOk = true;
   refreshReplyGuards();
 
   async function refreshReplyStatus() {
-    const s = await window.openFlowPrefs.replyStatus();
+    const s = await api.replyStatus();
     if (s.nativeOk !== nativeOk) {
       nativeOk = s.nativeOk;
       refreshReplyGuards();
     }
-    const parts = [`stato: ${s.serverState}`];
-    if (s.serverError) parts.push(`errore: ${s.serverError}`);
-    if (!s.nativeOk) parts.push("addon non caricabile: feature disattivata per questa sessione");
-    if (s.serverState === "ready" && !s.hotkeyRegistered) parts.push("scorciatoia occupata da un'altra app");
-    $("#replyServerState").textContent = `Modello di risposta — ${parts.join(" · ")}`;
+    const parts = [`State: ${s.serverState}`];
+    if (s.serverError) parts.push(`error: ${s.serverError}`);
+    if (s.serverState === "ready" && !s.hotkeyRegistered) parts.push("shortcut taken by another app");
+    $("#replyServerState").textContent = parts.join(" · ");
     const btn = $("#replyAppAddBlocked");
-    // lastBlockedBundleId is never cleared once set (it survives past apps
-    // the user has since added), so the button must hide itself once that
-    // app is already in the list — otherwise it stays on screen forever
-    // after being acted on.
+    // lastBlockedBundleId is never cleared once set, so hide the button once
+    // that app is already in the list.
     const alreadyListed = s.lastBlockedBundleId
       ? replyApps.some((a) => a.toLowerCase() === s.lastBlockedBundleId.toLowerCase())
       : true;
     if (s.lastBlockedBundleId && !alreadyListed) {
       btn.hidden = false;
-      btn.textContent = `Aggiungi ${s.lastBlockedBundleId}`;
+      btn.textContent = `Add ${s.lastBlockedBundleId}`;
       btn.onclick = () => addReplyApp(s.lastBlockedBundleId);
     } else {
       btn.hidden = true;

@@ -91,33 +91,51 @@
       </section>
 
       <section id="tab-reply" role="tabpanel" aria-labelledby="tabbtn-reply" hidden>
-        <label><input type="checkbox" id="replyEnabled" /> Reply suggestions (leggi la conversazione sotto il mouse e proponi tre risposte)</label>
-        <p class="muted">Spenta per default. Accesa carica un secondo modello: la RAM torna identica a oggi appena la spegni. Richiede il tuo nome e il modello del tier scelto.</p>
-        <p class="muted" id="replyGuard"></p>
-        <p class="muted" id="replyServerState">Stato del modello di risposta: —</p>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Suggest replies</span>
+            <span class="row-desc">Press <span id="replyShortcutHint">⌃⌘R</span> over a chat or an email to get three replies. Runs a second model on your Mac. Off by default.</span>
+          </span>
+          <input type="checkbox" class="switch" id="replyEnabled" />
+        </label>
+        <p class="row-desc guard" id="replyGuard" aria-live="polite"></p>
+        <p class="reply-state" id="replyServerState" aria-live="polite"></p>
 
-        <label for="userDisplayName">Il tuo nome nelle chat e nelle mail</label>
-        <input id="userDisplayName" type="text" placeholder="es. Danilo Franco" />
-        <p class="muted">Serve a capire quali messaggi sono tuoi. Confrontato su nome completo e su primo nome.</p>
+        <div class="row">
+          <label class="row-text" for="userDisplayName">
+            <span class="row-title">Your name</span>
+            <span class="row-desc">As it appears in your chats and mails, so open-flow can tell your messages from theirs.</span>
+          </label>
+          <input id="userDisplayName" type="text" placeholder="e.g. Danilo Franco" autocomplete="off" />
+        </div>
 
-        <label for="replyHotkey">Scorciatoia</label>
-        <input id="replyHotkey" type="text" placeholder="Command+Control+R" />
-        <p class="muted" id="replyHotkeyStatus">Non può contenere Option: la dettatura usa Hold Option.</p>
+        <div class="row">
+          <label class="row-text" for="replyHotkey">
+            <span class="row-title">Shortcut</span>
+            <span class="row-desc" id="replyHotkeyStatus">It can't use Option: dictation does.</span>
+          </label>
+          <input id="replyHotkey" type="text" placeholder="Command+Control+R" autocomplete="off" />
+        </div>
 
-        <label>Qualità del modello di risposta</label>
+        <h2 class="group-title">Reply model</h2>
         <div id="reply-tiers" class="model-list"></div>
 
-        <label id="replyAppsModeLabel" for="replyAppsMode">App in cui leggere</label>
-        <select id="replyAppsMode">
-          <option value="allowlist">Solo queste app (consigliato)</option>
-          <option value="blocklist">Tutte tranne queste</option>
-        </select>
-        <p class="muted" id="replyAppsModeWarning" hidden></p>
-        <div class="dict-add">
-          <input id="replyAppInput" type="text" placeholder="bundle id, es. com.apple.mail" />
-          <button id="replyAppAdd" type="button">Aggiungi</button>
+        <h2 class="group-title" id="replyAppsModeLabel">Apps to read</h2>
+        <div class="row">
+          <label class="row-text" for="replyAppsMode">
+            <span class="row-title">Mode</span>
+          </label>
+          <select id="replyAppsMode">
+            <option value="allowlist">Only these apps (recommended)</option>
+            <option value="blocklist">All apps except these</option>
+          </select>
         </div>
-        <button id="replyAppAddBlocked" type="button" class="danger" hidden>Aggiungi l'ultima app rifiutata</button>
+        <p class="row-desc guard" id="replyAppsModeWarning" hidden></p>
+        <div class="dict-add">
+          <input id="replyAppInput" type="text" placeholder="Bundle id, e.g. com.apple.mail" autocomplete="off" />
+          <button id="replyAppAdd" type="button">Add</button>
+        </div>
+        <button id="replyAppAddBlocked" type="button" class="danger" hidden>Add the last blocked app</button>
         <ul id="replyAppList" class="dict-list"></ul>
 
         <p class="panel-status" aria-live="polite"></p>
