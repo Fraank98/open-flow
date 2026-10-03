@@ -103,6 +103,11 @@ describe("reply model catalog", () => {
     for (const m of REPLY_MODELS) expect(m.url).toBe(`https://huggingface.co/unsloth/${m.id === "gemma-3-4b" ? "gemma-3-4b-it-GGUF" : "gemma-4-E4B-it-GGUF"}/resolve/main/${m.filename}`);
   });
 
+  it("only Gemma 3 carries a license note (Gemma Terms of Use); Gemma 4 is Apache-2.0 and carries none", () => {
+    expect(getModelById("reply", "gemma-3-4b")!.licenseNote).toBe("Subject to Google's Gemma Terms of Use and Prohibited Use Policy.");
+    expect(getModelById("reply", "gemma-4-e4b")!.licenseNote).toBeNull();
+  });
+
   it("has two tiers, default and max, resolving to existing reply models", () => {
     expect(REPLY_TIERS.map((t) => [t.id, t.replyModelId])).toEqual([["default", "gemma-3-4b"], ["max", "gemma-4-e4b"]]);
     const ids = new Set(REPLY_MODELS.map((m) => m.id));

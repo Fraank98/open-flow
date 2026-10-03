@@ -10,6 +10,8 @@ export type CatalogModel = ModelDescriptor & {
   licenseNote: string | null;
 };
 
+const GEMMA_3_LICENSE_NOTE = "Subject to Google's Gemma Terms of Use and Prohibited Use Policy.";
+// Gemma 4 is Apache-2.0 (https://ai.google.dev/gemma/docs/gemma_4_license): no note.
 const QWEN_3B_LICENSE_NOTE = "The 3B cleanup model is licensed for non-commercial use only.";
 
 // Whisper models from ggerganov/whisper.cpp on HuggingFace.
@@ -138,7 +140,7 @@ export const REPLY_MODELS: readonly CatalogModel[] = [
     label: "Gemma 3 4B",
     description: "Gemma 3 4B. Faster, a good fit for most Macs.",
     ramBytes: 3_100_000_000,
-    licenseNote: null,
+    licenseNote: GEMMA_3_LICENSE_NOTE,
     filename: "gemma-3-4b-it-Q4_K_M.gguf",
     sizeBytes: 2_489_894_016,
     sha256: "04a43a22e8d2003deda5acc262f68ec1005fa76c735a9962a8c77042a74a7d19",

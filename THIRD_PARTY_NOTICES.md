@@ -165,6 +165,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | Whisper `large-v3-turbo` (ggml) | Max | MIT | https://huggingface.co/ggerganov/whisper.cpp |
 | Qwen2.5-0.5B-Instruct (GGUF) | Fast | Apache-2.0 | https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF |
 | Qwen2.5-1.5B-Instruct (GGUF) | Balanced | Apache-2.0 | https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF |
+| Gemma 3 4B instruct (GGUF) | Reply suggestions | [Gemma Terms of Use](https://ai.google.dev/gemma/terms) and [Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy) | https://huggingface.co/unsloth/gemma-3-4b-it-GGUF (base: google/gemma-3-4b-it) |
+| Gemma 4 E4B instruct (GGUF) | Reply suggestions (max) | [Apache-2.0](https://ai.google.dev/gemma/docs/gemma_4_license) | https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF (base: google/gemma-4-E4B-it) |
 | Qwen2.5-3B-Instruct (GGUF) | Max | [Qwen Research License Agreement](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/LICENSE), non-commercial only | https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF |
 
 Qwen2.5-3B-Instruct is licensed by Alibaba Cloud for non-commercial purposes only. If you use open-flow for commercial work, pick the Fast or Balanced tier (Apache-2.0 models), or disable LLM cleanup in Preferences. open-flow's own MIT license does not change the terms under which the models are offered.
+
+Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms. Use of Gemma 3 4B is also subject to the Gemma Prohibited Use Policy at https://ai.google.dev/gemma/prohibited_use_policy. Commercial use is allowed under those terms. Gemma 4 E4B is released under Apache-2.0 instead.

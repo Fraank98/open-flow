@@ -100,7 +100,8 @@ All models are downloaded from Hugging Face on demand and are not bundled in the
 | Whisper `small`, `large-v3-turbo` (ggml, [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp)) | MIT |
 | Qwen2.5-0.5B-Instruct, Qwen2.5-1.5B-Instruct (GGUF Q4_K_M) | Apache-2.0 |
 | Qwen2.5-3B-Instruct (GGUF Q4_K_M) | [Qwen Research License](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/LICENSE) — **non-commercial use only** |
-| Gemma 3 4B and Gemma 4 E4B instruct (GGUF Q4_K_M, used only by Reply suggestions) | Google's Gemma terms — see each model card on Hugging Face |
+| Gemma 3 4B instruct (GGUF Q4_K_M, [unsloth/gemma-3-4b-it-GGUF](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF), used only by Reply suggestions) | [Gemma Terms of Use](https://ai.google.dev/gemma/terms) and [Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy); commercial use allowed |
+| Gemma 4 E4B instruct (GGUF Q4_K_M, [unsloth/gemma-4-E4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF), used only by Reply suggestions) | [Apache-2.0](https://ai.google.dev/gemma/docs/gemma_4_license) |
 | Silero VAD v6.2 (bundled, voice-activity detection) | MIT |
 
 open-flow itself is MIT, but that does not change the models' terms. If you use open-flow for paid work, choose the Fast or Balanced tier (or disable LLM cleanup). Full notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
