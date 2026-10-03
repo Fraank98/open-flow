@@ -8,6 +8,37 @@ import {
 
 // Renamed from the old Accessibility-named probe: that osascript probe measures the
 // Automation (Apple Events) permission, not Accessibility. Same logic, honest name.
+describe("checkAutomationViaProbe timeout", () => {
+  it("returns 'unknown' when the probe never answers (unanswered TCC prompt)", async () => {
+    vi.useFakeTimers();
+    try {
+      const exec = vi.fn(() => new Promise<{ stdout: string; stderr: string }>(() => undefined));
+      const pending = checkAutomationViaProbe(exec, 15_000);
+      let settled: string | null = null;
+      void pending.then((r) => {
+        settled = r;
+      });
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(settled).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe("unknown");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears its timer when the probe answers in time", async () => {
+    vi.useFakeTimers();
+    try {
+      const exec = vi.fn(async () => ({ stdout: "", stderr: "" }));
+      expect(await checkAutomationViaProbe(exec, 15_000)).toBe("granted");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("checkAutomationViaProbe", () => {
   it("returns 'granted' when probe command succeeds", async () => {
     const exec = vi.fn(async () => ({ stdout: "", stderr: "" }));

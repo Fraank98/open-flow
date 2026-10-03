@@ -278,8 +278,15 @@ async function main(): Promise<void> {
 
   const mic = await checkMicrophone();
   const acc = checkAccessibility(ptt);
-  automationStatus = await checkAutomationViaProbe();
-  await logger.info("permissions", { mic, accessibility: acc, automation: automationStatus });
+  await logger.info("permissions", { mic, accessibility: acc });
+  // Not awaited: with the macOS Automation prompt left unanswered the probe
+  // blocks (up to its timeout), and boot must not sit on "Loading models…" for
+  // it. It still raises the prompt early, and the result only feeds Settings.
+  void checkAutomationViaProbe().then(async (result) => {
+    // A probe the user ran from Settings meanwhile is newer than this one.
+    if (automationStatus === "unknown") automationStatus = result;
+    await logger.info("automation probe", { automation: result });
+  });
 
   // Pauses Spotify / Apple Music when dictation starts (via AppleScript that
   // checks each app's player state first, so we never blindly toggle media

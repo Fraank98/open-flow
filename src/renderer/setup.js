@@ -409,15 +409,25 @@ async function init() {
   if (step === "download") showDownloadView("paused");
 }
 
+// An Automation probe can sit on an unanswered macOS prompt for a while; focus
+// events during that time must not stack more osascript runs behind it.
+let automationProbeInFlight = false;
+
 async function recheckPermissions({ automation = false } = {}) {
-  if (automation) automationAsked = true;
+  if (automation) {
+    if (automationProbeInFlight) return;
+    automationProbeInFlight = true;
+    automationAsked = true;
+  }
   try {
     const fresh = await window.openFlowSetup.refreshPermissions({ automation });
     state.micPermission = fresh.mic;
     state.accessibilityPermission = fresh.accessibility;
     if (fresh.automation) state.automationPermission = fresh.automation;
     applyPermissions();
-  } catch { /* transient; leave current state */ }
+  } catch { /* transient; leave current state */ } finally {
+    if (automation) automationProbeInFlight = false;
+  }
 }
 
 init();
