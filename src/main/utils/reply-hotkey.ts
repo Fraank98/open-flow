@@ -5,14 +5,18 @@
  * (then a CHORD that cancels it, with a flicker of the recording pill).
  * Command+1/2/3 and Escape are the pill's temporary shortcuts (Task 8):
  * they cannot also be the trigger.
+ * Shift alone is not a modifier here: Shift+letter is capital-letter typing and
+ * Shift+Tab is focus navigation, and a global shortcut would swallow them in
+ * every app. Command or Control is required.
  */
 export const REPLY_HOTKEY_DEFAULT: string = "Command+Control+R";
 
 export type AcceleratorValidation =
   | { ok: true; accelerator: string }
-  | { ok: false; reason: "contains-option" | "no-modifier" | "no-key" | "reserved-key" };
+  | { ok: false; reason: "contains-option" | "no-modifier" | "no-key" | "reserved-key" | "shift-only" };
 
 const MODIFIERS = new Set(["command", "cmd", "control", "ctrl", "commandorcontrol", "cmdorctrl", "shift", "super", "meta"]);
+const COMMAND_OR_CONTROL = new Set(["command", "cmd", "control", "ctrl", "commandorcontrol", "cmdorctrl", "super", "meta"]);
 const OPTION_LIKE = new Set(["alt", "option", "altgr"]);
 const RESERVED_KEYS = new Set(["1", "2", "3", "escape", "esc"]);
 
@@ -25,6 +29,7 @@ export function validateReplyAccelerator(accelerator: string): AcceleratorValida
   const modifiers = lower.filter((p) => MODIFIERS.has(p));
   if (keys.length !== 1) return { ok: false, reason: "no-key" };
   if (modifiers.length === 0) return { ok: false, reason: "no-modifier" };
+  if (!modifiers.some((m) => COMMAND_OR_CONTROL.has(m))) return { ok: false, reason: "shift-only" };
   if (RESERVED_KEYS.has(keys[0]!)) return { ok: false, reason: "reserved-key" }; // keys.length === 1, so keys[0] exists
   return { ok: true, accelerator };
 }

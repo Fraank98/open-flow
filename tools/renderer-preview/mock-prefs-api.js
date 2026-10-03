@@ -73,6 +73,7 @@
     const keys = parts.filter((x) => MODS.indexOf(x) === -1);
     if (keys.length !== 1) return { ok: false, reason: "no-key" };
     if (parts.length === 1) return { ok: false, reason: "no-modifier" };
+    if (!parts.some((x) => MODS.indexOf(x) !== -1 && x !== "shift")) return { ok: false, reason: "shift-only" };
     if (["1", "2", "3", "escape", "esc"].indexOf(keys[0]) !== -1) return { ok: false, reason: "reserved-key" };
     return { ok: true, accelerator: acc };
   }

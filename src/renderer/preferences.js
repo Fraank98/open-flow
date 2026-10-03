@@ -304,7 +304,9 @@ async function init() {
   });
   hotkeyField.addEventListener("keydown", async (e) => {
     const bare = !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
-    if (e.key === "Tab" && bare) return; // keep keyboard navigation
+    // Tab, with or without Shift, keeps keyboard navigation: Shift+Tab walks back
+    // out of the field and is never a shortcut (the validator refuses Shift alone).
+    if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) return;
     e.preventDefault();
     if (e.key === "Escape" && bare) {
       hotkeyField.blur();

@@ -191,7 +191,8 @@
 
   var HOTKEY_REASONS = {
     "contains-option": "Option is used for dictation. Choose another combination.",
-    "no-modifier": "Add at least one of Command, Control or Shift.",
+    "no-modifier": "Add Command or Control.",
+    "shift-only": "Add Command or Control — Shift alone would take over normal typing.",
     "no-key": "Add a key besides the modifiers.",
     "reserved-key": "1, 2, 3 and Esc are the pill's shortcuts while it is visible.",
   };

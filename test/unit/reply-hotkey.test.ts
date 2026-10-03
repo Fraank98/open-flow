@@ -19,6 +19,11 @@ describe("validateReplyAccelerator", () => {
     expect(validateReplyAccelerator("")).toEqual({ ok: false, reason: "no-key" });
     expect(validateReplyAccelerator("Command++R")).toEqual({ ok: false, reason: "no-key" });
   });
+  it("rejects Shift without Command or Control: it would take over normal typing", () => {
+    for (const a of ["Shift+Tab", "Shift+R", "Shift+F5"]) {
+      expect(validateReplyAccelerator(a), a).toEqual({ ok: false, reason: "shift-only" });
+    }
+  });
   it("rejects the bare digits 1-3 and Escape as the key: they are the pill's temporary shortcuts", () => {
     for (const a of ["Command+1", "Command+2", "Command+3", "Control+Escape"]) {
       expect(validateReplyAccelerator(a), a).toEqual({ ok: false, reason: "reserved-key" });
