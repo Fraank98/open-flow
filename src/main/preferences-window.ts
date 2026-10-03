@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { WHISPER_MODELS, LLM_MODELS, REPLY_MODELS, REPLY_TIERS } from "./model-catalog.js";
+import { WHISPER_MODELS, LLM_MODELS, REPLY_MODELS, getModelById, replyCards } from "./model-catalog.js";
 import { validateReplyAccelerator } from "./utils/reply-hotkey.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
@@ -171,22 +171,22 @@ export class PreferencesWindow {
     ipcMain.handle("prefs:list-models", async () => {
       const whisper = await Promise.all(WHISPER_MODELS.map((m) => describeModel(this.deps.modelManager, this.downloads, m)));
       const llm = await Promise.all(LLM_MODELS.map((m) => describeModel(this.deps.modelManager, this.downloads, m)));
-      // Reply models are described like the others; the tier layers its own label and
-      // benchmark text on top (the UI shows one card per tier).
-      const replyTiers = await Promise.all(
-        REPLY_TIERS.map(async (tier) => {
-          const model = REPLY_MODELS.find((m) => m.id === tier.replyModelId);
+      // Reply models are described like the others; the tier layers its own name
+      // and the benchmark text (shown collapsed) on top: one card per tier.
+      const reply = await Promise.all(
+        replyCards().map(async (card) => {
+          const model = getModelById("reply", card.id);
+          if (!model) throw new Error(`Reply card references an unknown model: ${card.id}`);
           return {
-            id: tier.id,
-            label: tier.label,
-            description: tier.description,
-            modelId: tier.replyModelId,
-            sizeBytes: model?.sizeBytes ?? 0,
-            installed: model ? await this.deps.modelManager.isInstalled(model) : false,
+            ...(await describeModel(this.deps.modelManager, this.downloads, model)),
+            label: card.label,
+            description: card.description,
+            details: card.details,
+            tierId: card.tierId,
           };
         }),
       );
-      return { whisper, llm, replyTiers, languages: LANGUAGES };
+      return { whisper, llm, reply, languages: LANGUAGES };
     });
 
     ipcMain.handle("prefs:download-model", async (_e, args: { kind: "whisper" | "llm" | "reply"; id: string }) => {

@@ -8,6 +8,7 @@ import {
   getModelById,
   getTier,
   getReplyTier,
+  replyCards,
   tierTotals,
   tierForModels,
 } from "../../src/main/model-catalog.js";
@@ -127,6 +128,23 @@ describe("reply model catalog", () => {
     expect(getModelById("llm", "gemma-3-4b")).toBeUndefined();
     expect(getReplyTier("max")?.replyModelId).toBe("gemma-4-e4b");
     expect(getReplyTier("fast")).toBeUndefined();
+  });
+
+  it("replyCards: one card per tier, keyed by model id, one-line description, benchmark kept apart", () => {
+    const cards = replyCards();
+    expect(cards.map((c) => [c.id, c.tierId, c.label])).toEqual([
+      ["gemma-3-4b", "default", "Standard"],
+      ["gemma-4-e4b", "max", "Maximum quality"],
+    ]);
+    for (const c of cards) {
+      expect(c.description).not.toMatch(/\n/);
+      expect(c.description.length).toBeLessThanOrEqual(80);
+      // The benchmark prose is for the collapsible details, never the card line.
+      expect(c.details.length).toBeGreaterThan(c.description.length);
+      expect(c.details).toMatch(/benchmark/i);
+      expect(c.sizeBytes).toBe(getModelById("reply", c.id)!.sizeBytes);
+      expect(c.ramBytes).toBe(getModelById("reply", c.id)!.ramBytes);
+    }
   });
 
   it("keeps Qwen out of the reply catalog", () => {

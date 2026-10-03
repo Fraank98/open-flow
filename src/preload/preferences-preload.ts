@@ -18,13 +18,11 @@ interface ModelInfo {
   progress: { bytes: number; total: number } | null;
 }
 
-interface ReplyTierInfo {
-  id: string;
-  label: string;
-  description: string;
-  modelId: string;
-  sizeBytes: number;
-  installed: boolean;
+/** A reply card is a model plus the tier name and benchmark text. */
+interface ReplyModelInfo extends ModelInfo {
+  tierId: string;
+  /** Benchmark prose, shown collapsed. */
+  details: string;
 }
 
 interface ReplyStatusInfo {
@@ -43,7 +41,7 @@ interface PrefsApi {
   listModels: () => Promise<{
     whisper: ModelInfo[];
     llm: ModelInfo[];
-    replyTiers: ReplyTierInfo[];
+    reply: ReplyModelInfo[];
     languages: Array<{ id: string; label: string }>;
   }>;
   downloadModel: (kind: ModelKind, id: string) => Promise<void>;

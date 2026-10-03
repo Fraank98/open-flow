@@ -181,7 +181,6 @@ async function init() {
   // needs a restart: the main process reconfigures the reply server and the
   // shortcut from its onSaved hook.
   let replyApps = Array.isArray(prefs.replyApps) ? [...prefs.replyApps] : [];
-  let replyTierId = (catalog.replyTiers.find((t) => t.modelId === prefs.replyModelId) ?? catalog.replyTiers[0]).id;
   // Optimistic until the first status poll lands, so the toggle isn't wrongly
   // disabled in the common case (helper loaded fine).
   let nativeOk = true;
@@ -192,8 +191,9 @@ async function init() {
   $("#replyHotkey").value = prefs.replySuggestionsHotkey;
   $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
 
-  function selectedTier() {
-    return catalog.replyTiers.find((t) => t.id === replyTierId) ?? catalog.replyTiers[0];
+  /** The reply model chosen in the cards (its install state is the live one on the card). */
+  function selectedReplyModel() {
+    return catalog.reply.find((m) => m.id === prefs.replyModelId) ?? catalog.reply[0];
   }
 
   /** The same list serves both modes; the label and a warning follow the mode. */
@@ -247,62 +247,6 @@ async function init() {
   });
   renderReplyApps();
 
-  function renderReplyTiers() {
-    const container = $("#reply-tiers");
-    container.innerHTML = "";
-    for (const t of catalog.replyTiers) {
-      const row = document.createElement("div");
-      row.className = "model-row" + (t.id === replyTierId ? " selected" : "");
-      row.dataset.id = t.id;
-      const name = document.createElement("span");
-      name.className = "name";
-      name.textContent = `${t.label} — ${t.description}`;
-      const size = document.createElement("span");
-      size.className = "size";
-      size.textContent = L.formatBytes(t.sizeBytes);
-      const badge = document.createElement("span");
-      badge.className = "badge" + (t.installed ? " installed" : "");
-      badge.textContent = t.installed ? "Installed" : "Not downloaded";
-      const actions = document.createElement("span");
-      actions.className = "row-actions";
-      if (!t.installed) {
-        const dl = document.createElement("button");
-        dl.textContent = "Download";
-        dl.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          dl.disabled = true;
-          dl.textContent = "0%";
-          const off = api.onDownloadProgress((p) => {
-            if (p.id === t.modelId && p.total > 0) dl.textContent = Math.floor((p.bytes / p.total) * 100) + "%";
-          });
-          try {
-            await api.downloadModel("reply", t.modelId);
-            t.installed = true;
-            renderReplyTiers();
-            say("reply", `Downloaded ${t.label}`, "ok");
-            // Primary path to turning the feature on: re-run the guard.
-            refreshReplyGuards();
-          } catch (err) {
-            dl.disabled = false;
-            dl.textContent = "Retry";
-            say("reply", "Download failed: " + L.cleanIpcError(err), "error");
-          } finally { off(); }
-        });
-        actions.appendChild(dl);
-      }
-      row.append(name, size, badge, actions);
-      row.addEventListener("click", (e) => {
-        if (e.target.tagName === "BUTTON") return;
-        replyTierId = t.id;
-        renderReplyTiers();
-        refreshReplyGuards();
-        void save({ replyModelId: t.modelId }, "reply");
-      });
-      container.appendChild(row);
-    }
-  }
-  renderReplyTiers();
-
   const HOTKEY_MESSAGES = {
     "contains-option": "Option is used for dictation. Choose another combination.",
     "no-modifier": "Add at least one of Command, Control or Shift.",
@@ -330,11 +274,11 @@ async function init() {
    * keeps its value, with the impediment spelled out.
    */
   function refreshReplyGuards() {
-    const tier = selectedTier();
+    const model = selectedReplyModel();
     const message = L.replyGuardMessage({
       name: $("#userDisplayName").value,
-      modelInstalled: tier.installed,
-      tierLabel: tier.label,
+      modelInstalled: model.installed,
+      tierLabel: model.label,
       nativeOk,
     });
     $("#replyEnabled").disabled = message !== "";
@@ -379,8 +323,10 @@ async function init() {
 
   // ------------------------------------------------------------ models
   const groups = [
-    { kind: "whisper", containerId: "whisper-models", models: catalog.whisper, prefKey: "whisperModelId" },
-    { kind: "llm", containerId: "llm-models", models: catalog.llm, prefKey: "llmModelId" },
+    { kind: "whisper", containerId: "whisper-models", models: catalog.whisper, prefKey: "whisperModelId", tab: "models" },
+    { kind: "llm", containerId: "llm-models", models: catalog.llm, prefKey: "llmModelId", tab: "models" },
+    // The reply cards reuse the same renderer; their feedback goes to the Reply tab.
+    { kind: "reply", containerId: "reply-tiers", models: catalog.reply, prefKey: "replyModelId", tab: "reply" },
   ];
   const rowRenderers = new Map(); // model id -> () => void
 
@@ -391,6 +337,8 @@ async function init() {
   function renderAllRows() {
     for (const fn of rowRenderers.values()) fn();
     refreshStorage();
+    // The reply toggle depends on whether the selected reply model is on disk.
+    refreshReplyGuards();
   }
 
   // One idempotent renderer per row: it always rebuilds the card from the model
@@ -437,6 +385,20 @@ async function init() {
     meta.textContent = L.modelMeta(m);
     row.appendChild(meta);
 
+    if (m.details) {
+      // Collapsed benchmark prose; the open state survives the re-renders a download causes.
+      const details = document.createElement("details");
+      details.className = "model-details";
+      details.open = m.detailsOpen === true;
+      const summary = document.createElement("summary");
+      summary.textContent = "Benchmark details";
+      const text = document.createElement("p");
+      text.textContent = m.details;
+      details.append(summary, text);
+      details.addEventListener("toggle", () => { m.detailsOpen = details.open; });
+      row.appendChild(details);
+    }
+
     const actions = document.createElement("div");
     actions.className = "model-actions";
     row.appendChild(actions);
@@ -475,7 +437,7 @@ async function init() {
       use.className = "primary";
       use.textContent = "Use";
       use.addEventListener("click", async () => {
-        await save({ [group.prefKey]: m.id }, "models", `Now using ${m.label}`);
+        await save({ [group.prefKey]: m.id }, group.tab, `Now using ${m.label}`);
         renderAllRows();
       });
       actions.appendChild(use);
@@ -492,11 +454,11 @@ async function init() {
           await api.deleteModel(group.kind, m.id);
           // Re-read what is on disk rather than assuming the delete worked.
           await refreshModels();
-          if (m.installed) say("models", `Couldn't delete ${m.label}: the file is still there.`, "error");
-          else say("models", `Deleted ${m.label}`, "ok");
+          if (m.installed) say(group.tab, `Couldn't delete ${m.label}: the file is still there.`, "error");
+          else say(group.tab, `Deleted ${m.label}`, "ok");
         } catch (err) {
           await refreshModels();
-          say("models", "Couldn't delete: " + L.cleanIpcError(err), "error");
+          say(group.tab, "Couldn't delete: " + L.cleanIpcError(err), "error");
         }
         renderAllRows();
       });
@@ -510,7 +472,7 @@ async function init() {
   async function refreshModels() {
     try {
       const fresh = await api.listModels();
-      for (const f of [...fresh.whisper, ...fresh.llm]) {
+      for (const f of [...fresh.whisper, ...fresh.llm, ...fresh.reply]) {
         const m = allModels().find((x) => x.id === f.id);
         if (m) m.installed = f.installed;
       }
@@ -518,6 +480,54 @@ async function init() {
     } catch {
       return false;
     }
+  }
+
+  function allModels() {
+    return [...catalog.whisper, ...catalog.llm, ...catalog.reply];
+  }
+
+  // Follows one download to its end. A click starts it; on load it also
+  // re-attaches to a download already running in the main process (the window
+  // was closed and reopened): the main side hands back the same promise, so this
+  // resolves when the download really finishes.
+  async function trackDownload(m, group) {
+    m.downloading = true;
+    m.cancelling = false;
+    m.downloadFailed = false;
+    m.progressPct = m.progress && m.progress.total > 0 ? Math.min(100, Math.floor((m.progress.bytes / m.progress.total) * 100)) : 0;
+    renderAllRows();
+    try {
+      await api.downloadModel(group.kind, m.id);
+      const ok = await refreshModels();
+      if (ok && !m.installed) {
+        m.downloadFailed = true;
+        say(group.tab, `${m.label} didn't finish downloading. Try again.`, "error");
+      } else {
+        say(group.tab, `Downloaded ${m.label}`, "ok");
+        // Downloading a reply model while the selected one is missing: use the new one.
+        if (group.kind === "reply" && m.installed && !selectedReplyModel().installed) {
+          await save({ replyModelId: m.id }, group.tab, `Downloaded ${m.label} — now using it`);
+        }
+      }
+    } catch (err) {
+      await refreshModels();
+      if (m.cancelling) {
+        say(group.tab, `Download of ${m.label} paused. Download again to resume.`);
+      } else {
+        m.downloadFailed = true;
+        say(group.tab, L.cleanIpcError(err), "error");
+      }
+    } finally {
+      m.downloading = false;
+      m.cancelling = false;
+      m.progress = null;
+      renderAllRows();
+    }
+  }
+
+  function startDownload(m, group) {
+    m.progress = null;
+    return trackDownload(m, group);
   }
 
   api.onDownloadProgress((p) => {

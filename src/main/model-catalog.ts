@@ -136,7 +136,7 @@ export const REPLY_MODELS: readonly CatalogModel[] = [
   {
     id: "gemma-3-4b",
     label: "Gemma 3 4B",
-    description: "Standard. Faster, and a good fit for most Macs.",
+    description: "Gemma 3 4B. Faster, a good fit for most Macs.",
     ramBytes: 3_100_000_000,
     licenseNote: null,
     filename: "gemma-3-4b-it-Q4_K_M.gguf",
@@ -147,7 +147,7 @@ export const REPLY_MODELS: readonly CatalogModel[] = [
   {
     id: "gemma-4-e4b",
     label: "Gemma 4 E4B",
-    description: "Maximum quality. Slower; best with 24 GB of RAM or more.",
+    description: "Gemma 4 E4B. Slower, best with 24 GB of RAM or more.",
     ramBytes: 5_800_000_000,
     licenseNote: null,
     filename: "gemma-4-E4B-it-Q4_K_M.gguf",
@@ -160,40 +160,75 @@ export const REPLY_MODELS: readonly CatalogModel[] = [
 export interface ReplyTierDescriptor {
   id: "default" | "max";
   label: string;
-  description: string;
+  /** Benchmark prose, shown collapsed under "Benchmark details" (never on the card line). */
+  benchmark: string;
   replyModelId: string;
 }
 
-// Tier descriptions reflect the Task 1 classifier benchmark, not an assumption
+// The benchmark text reflects the Task 1 classifier benchmark, not an assumption
 // about which model is safer: "default" carries that name only because it is
 // DEFAULT_PREFS.replyModelId (spec-mandated pending the deterministic-gate
 // measurement), not because it scored better. No logic here depends on the
 // array order or on the "default"/"max" ids — getReplyTier looks up by id.
 // Inverting which model is the spec's default stays a DATA-only change,
-// confined to this file and preferences-store.ts, but it is at least three
-// edits across the two files, not one: DEFAULT_PREFS.replyModelId, plus BOTH
+// confined to this file and preferences-store.ts, but it is at least four
+// edits across the two files, not one: DEFAULT_PREFS.replyModelId, BOTH
 // REPLY_TIERS[].replyModelId (so the UI still shows the right tier as
-// default), plus swapping the two `description` strings below — they are
-// written as per-model facts (percentages, GB, latency) and would describe
-// the wrong model if left in place.
+// default), and swapping the two `benchmark` strings below — they are written
+// as per-model facts (percentages, latency) and would describe the wrong model
+// if left in place. The one-line card descriptions live on REPLY_MODELS.
 export const REPLY_TIERS: readonly ReplyTierDescriptor[] = [
   {
     id: "default",
     label: "Standard",
-    description:
-      "Gemma 3 4B. 2,49 GB su disco, ~3,1 GB di RAM a feature accesa (stima). " +
-      'Nel benchmark del solo classificatore ha frainteso 4 domande su 8 che in realtà chiedevano un dato solo tuo (es. "quante volte vai in palestra?"); con il pre-cancello deterministico che precede il classificatore (attivo in questa build) il tasso scende a 1 su 8 — controlla comunque prima di accettare.',
+    benchmark:
+      "In the benchmark of the classifier alone, Gemma 3 4B misread 4 of 8 questions that were really asking for something only you know " +
+      '(for example "how often do you go to the gym?"). With the deterministic pre-gate that runs before the classifier (active in this build) ' +
+      "that drops to 1 of 8. Still check a proposal before you accept it.",
     replyModelId: "gemma-3-4b",
   },
   {
     id: "max",
-    label: "Qualità massima",
-    description:
-      "Gemma 4 E4B. 4,98 GB su disco, ~5,8 GB di RAM a feature accesa (stima). " +
-      "Nel benchmark non ha mai confuso una domanda che chiede un dato con una che richiede una decisione (0 falsi positivi su 8), ma è più lento (~900 ms) e in 3 casi su 12 non ha proposto una risposta che sarebbe stata appropriata. Consigliato da 24 GB di RAM.",
+    label: "Maximum quality",
+    benchmark:
+      "In the benchmark, Gemma 4 E4B never mistook a question asking for a fact for one that needs a decision (0 false positives out of 8). " +
+      "It is slower (about 900 ms) and in 3 cases out of 12 it did not offer a reply that would have been appropriate. Recommended from 24 GB of RAM.",
     replyModelId: "gemma-4-e4b",
   },
 ];
+
+/** What the Settings window needs to draw one reply-model card. */
+export interface ReplyCard {
+  /** The model id (cards are keyed by model, like the other kinds). */
+  id: string;
+  tierId: ReplyTierDescriptor["id"];
+  label: string;
+  description: string;
+  details: string;
+  sizeBytes: number;
+  ramBytes: number;
+  licenseNote: string | null;
+}
+
+/** One card per tier: the tier supplies the name and the benchmark prose, the model the one-line description and the sizes. */
+export function replyCards(): ReplyCard[] {
+  const cards: ReplyCard[] = [];
+  for (const tier of REPLY_TIERS) {
+    const model = REPLY_MODELS.find((m) => m.id === tier.replyModelId);
+    if (!model) continue;
+    cards.push({
+      id: model.id,
+      tierId: tier.id,
+      label: tier.label,
+      description: model.description,
+      details: tier.benchmark,
+      sizeBytes: model.sizeBytes,
+      ramBytes: model.ramBytes,
+      licenseNote: model.licenseNote,
+    });
+  }
+  return cards;
+}
 
 export function getModelById(kind: "whisper" | "llm" | "reply", id: string): CatalogModel | undefined {
   const list = kind === "whisper" ? WHISPER_MODELS : kind === "llm" ? LLM_MODELS : REPLY_MODELS;
