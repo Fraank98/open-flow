@@ -13,6 +13,7 @@ interface ModelInfo {
 contextBridge.exposeInMainWorld("openFlowPrefs", {
   load: (): Promise<unknown> => ipcRenderer.invoke("prefs:load"),
   save: (prefs: unknown): Promise<unknown> => ipcRenderer.invoke("prefs:save", prefs),
+  restartStatus: (): Promise<{ fields: string[] }> => ipcRenderer.invoke("prefs:restart-status"),
   listModels: (): Promise<{
     whisper: ModelInfo[];
     llm: ModelInfo[];
@@ -37,6 +38,7 @@ declare global {
     openFlowPrefs: {
       load: () => Promise<unknown>;
       save: (prefs: unknown) => Promise<unknown>;
+      restartStatus: () => Promise<{ fields: string[] }>;
       listModels: () => Promise<{
         whisper: ModelInfo[];
         llm: ModelInfo[];

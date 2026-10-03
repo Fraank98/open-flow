@@ -18,6 +18,7 @@ import { LLMServer } from "./llm-server.js";
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { buildInitialPrompt } from "./utils/initial-prompt.js";
 import { waitForEventOrTimeout } from "./utils/wait-for-event.js";
+import { restartRequiredFields } from "./utils/restart-required.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
@@ -146,6 +147,10 @@ async function main(): Promise<void> {
     app.quit();
     return;
   }
+
+  // Snapshot of the prefs the models/servers below are started with. The
+  // Settings window compares against it to flag restart-required changes.
+  const bootPrefs = { ...prefs };
 
   const mic = await checkMicrophone();
   const acc = await checkAccessibilityViaProbe();
@@ -386,7 +391,19 @@ async function main(): Promise<void> {
   ptt.on("trustRequired", () => {
     void logger.error("PTT requires Accessibility — prompt shown to user");
   });
-  const prefsWindow = new PreferencesWindow({ modelManager, preferencesStore });
+  const prefsWindow = new PreferencesWindow({
+    modelManager,
+    preferencesStore,
+    restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
+  });
+  // Keep the in-memory snapshot in sync so `arm` (language, dictionary) reads
+  // fresh values and debug logging toggles without a restart. Note: the
+  // llama-server warmup prompt stays on the boot language; that is only a cache
+  // warm-up, not part of the per-dictation cleanup prompt.
+  prefsWindow.onSaved((next) => {
+    prefs = next;
+    logger.setDebug(next.debugLogging);
+  });
   const menubar = new MenubarApp({
     onToggleEnabled: () => {
       if (menubar.isEnabled()) {

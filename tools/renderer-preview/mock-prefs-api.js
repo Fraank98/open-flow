@@ -30,6 +30,7 @@
   window.openFlowPrefs = {
     load: () => Promise.resolve({ ...prefs }),
     save: (next) => { prefs = { ...next }; console.log("[mock] save", next); return Promise.resolve(next); },
+    restartStatus: () => Promise.resolve({ fields: scenario === "restart-pending" ? ["llmModelId"] : [] }),
     listModels: () => Promise.resolve({
       whisper: whisper.map((m) => ({ ...m })), llm: llm.map((m) => ({ ...m })), languages,
     }),

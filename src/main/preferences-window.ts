@@ -33,13 +33,21 @@ async function describeModel(manager: ModelManager, m: CatalogModel) {
 export interface PreferencesWindowDeps {
   modelManager: ModelManager;
   preferencesStore: PreferencesStore;
+  /** Restart-required fields that differ from the prefs the app booted with. */
+  restartStatus?: () => Promise<string[]>;
 }
 
 export class PreferencesWindow {
   private win: BrowserWindow | null = null;
   private handlersRegistered = false;
+  private readonly savedListeners: Array<(prefs: Preferences) => void> = [];
 
   constructor(private readonly deps: PreferencesWindowDeps) {}
+
+  /** Register a listener called after every successful save with the saved prefs. */
+  onSaved(cb: (prefs: Preferences) => void): void {
+    this.savedListeners.push(cb);
+  }
 
   async open(): Promise<void> {
     if (this.win && !this.win.isDestroyed()) {
@@ -86,8 +94,19 @@ export class PreferencesWindow {
       } catch {
         // ignore — pref is saved, will be re-applied on next launch
       }
+      for (const cb of this.savedListeners) {
+        try {
+          cb(next);
+        } catch {
+          // a misbehaving listener must not fail the save
+        }
+      }
       return next;
     });
+
+    ipcMain.handle("prefs:restart-status", async (): Promise<{ fields: string[] }> => ({
+      fields: this.deps.restartStatus ? await this.deps.restartStatus() : [],
+    }));
 
     ipcMain.handle("prefs:list-models", async () => {
       const whisper = await Promise.all(WHISPER_MODELS.map((m) => describeModel(this.deps.modelManager, m)));

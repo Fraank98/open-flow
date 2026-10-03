@@ -45,6 +45,19 @@ describe("Logger", () => {
     expect(c).toContain("visible");
   });
 
+  it("setDebug(true) starts writing debug lines, setDebug(false) stops", async () => {
+    const logger = createLogger({ dir, debug: false, maxBytes: 1024 * 1024 });
+    await logger.debug("before-enable");
+    logger.setDebug(true);
+    await logger.debug("while-enabled");
+    logger.setDebug(false);
+    await logger.debug("after-disable");
+    const c = await readFile(join(dir, "debug.log"), "utf8");
+    expect(c).toContain("while-enabled");
+    expect(c).not.toContain("before-enable");
+    expect(c).not.toContain("after-disable");
+  });
+
   it("rotates error.log when it exceeds maxBytes", async () => {
     const logger = createLogger({ dir, debug: false, maxBytes: 200 });
     for (let i = 0; i < 50; i++) {
