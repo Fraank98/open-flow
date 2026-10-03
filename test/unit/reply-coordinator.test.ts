@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   ReplyCoordinator, hasExplicitProposal, isAlternativeGrounded, FLASH_TEXT, TAIL_BUDGET_CHARS, TOTAL_TIMEOUT_MS,
   SUGGEST_TTL_MS, VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR, ERROR_PILL_MS,
@@ -195,7 +196,21 @@ describe("ReplyCoordinator.onHotkey — guards (degradation L0/L2/L5)", () => {
     expect(e.seen.join(" ")).toContain('"reason":"hotkey-toggle"');
   });
 
-  it("flashes 'Modello in caricamento…' while the server is starting or downloading, and never reads", async () => {
+  it("keeps the UI strings in English, saying Settings (the pill labels follow the conversation language instead)", () => {
+    expect(FLASH_TEXT).toEqual({
+      appNotAllowed: "App not enabled — add it in Settings",
+      modelLoading: "Model loading…",
+      modelFailed: "Model unavailable",
+      noUserName: "Set your name in Settings",
+      copyOnly: "Copied — paste with ⌘V",
+    });
+    const overlay = readFileSync(new URL("../../src/renderer/overlay.html", import.meta.url), "utf8");
+    expect(overlay).toContain('reading: "Reading the conversation…"');
+    expect(overlay).toContain('thinking: "Drafting replies…"');
+    expect(overlay).toContain('nothing: "No suggestion"');
+  });
+
+  it("flashes 'Model loading…' while the server is starting or downloading, and never reads", async () => {
     for (const state of ["starting", "downloading"] as const) {
       const e = makeEnv({ serverState: state });
       await e.c.onHotkey();
@@ -205,7 +220,7 @@ describe("ReplyCoordinator.onHotkey — guards (degradation L0/L2/L5)", () => {
     }
   });
 
-  it("flashes 'Modello non disponibile' when the server failed, and stays silent when it is off", async () => {
+  it("flashes 'Model unavailable' when the server failed, and stays silent when it is off", async () => {
     const failed = makeEnv({ serverState: "failed" });
     await failed.c.onHotkey();
     expect(failed.flashes).toEqual([FLASH_TEXT.modelFailed]);
