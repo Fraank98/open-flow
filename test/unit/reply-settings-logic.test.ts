@@ -8,6 +8,14 @@ interface ReplyLogic {
     status: { serverState: string; hotkeyRegistered: boolean; nativeOk: boolean },
     accelerator: string,
   ): { text: string; tone: "ok" | "busy" | "error" | "none"; action: "retry" | null };
+  acceleratorFromKeyEvent(ev: {
+    code: string;
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+  }): string | null;
+  hotkeyReasonText(reason: string | undefined): string;
   replyAppsView(mode: string, appCount: number): { label: string; warning: string | null };
 }
 const L = (globalThis as unknown as { OpenFlowSettingsLogic: ReplyLogic }).OpenFlowSettingsLogic;
@@ -92,5 +100,42 @@ describe("replyStatusView", () => {
   it("says nothing while the feature is off or unavailable", () => {
     expect(L.replyStatusView({ ...base, serverState: "off" }, "Command+Control+R")).toEqual({ text: "", tone: "none", action: null });
     expect(L.replyStatusView({ ...base, nativeOk: false }, "Command+Control+R").text).toBe("");
+  });
+});
+
+describe("acceleratorFromKeyEvent", () => {
+  it("composes an Electron accelerator from a keydown, modifiers first", () => {
+    expect(L.acceleratorFromKeyEvent({ code: "KeyR", metaKey: true, ctrlKey: true })).toBe("Command+Control+R");
+    expect(L.acceleratorFromKeyEvent({ code: "KeyK", metaKey: true, shiftKey: true })).toBe("Command+Shift+K");
+    expect(L.acceleratorFromKeyEvent({ code: "F5", ctrlKey: true })).toBe("Control+F5");
+    expect(L.acceleratorFromKeyEvent({ code: "Digit1", metaKey: true })).toBe("Command+1");
+    expect(L.acceleratorFromKeyEvent({ code: "Space", metaKey: true })).toBe("Command+Space");
+    expect(L.acceleratorFromKeyEvent({ code: "ArrowUp", metaKey: true })).toBe("Command+Up");
+    expect(L.acceleratorFromKeyEvent({ code: "Slash", metaKey: true, shiftKey: true })).toBe("Command+Shift+/");
+  });
+
+  it("keeps Option in the result so the validator can explain why it is refused", () => {
+    expect(L.acceleratorFromKeyEvent({ code: "KeyR", metaKey: true, altKey: true })).toBe("Command+Alt+R");
+  });
+
+  it("uses the physical key, so Option's dead keys and shifted symbols do not leak in", () => {
+    expect(L.acceleratorFromKeyEvent({ code: "KeyE", metaKey: true, altKey: true })).toBe("Command+Alt+E");
+    expect(L.acceleratorFromKeyEvent({ code: "Digit1", metaKey: true, shiftKey: true })).toBe("Command+Shift+1");
+  });
+
+  it("returns null until a real key is pressed (modifier-only or unknown key)", () => {
+    expect(L.acceleratorFromKeyEvent({ code: "MetaLeft", metaKey: true })).toBeNull();
+    expect(L.acceleratorFromKeyEvent({ code: "ShiftRight", shiftKey: true })).toBeNull();
+    expect(L.acceleratorFromKeyEvent({ code: "Unidentified", metaKey: true })).toBeNull();
+  });
+});
+
+describe("hotkeyReasonText", () => {
+  it("explains every reason the validator can give, in English", () => {
+    expect(L.hotkeyReasonText("contains-option")).toBe("Option is used for dictation. Choose another combination.");
+    expect(L.hotkeyReasonText("no-modifier")).toBe("Add at least one of Command, Control or Shift.");
+    expect(L.hotkeyReasonText("no-key")).toBe("Add a key besides the modifiers.");
+    expect(L.hotkeyReasonText("reserved-key")).toBe("1, 2, 3 and Esc are the pill's shortcuts while it is visible.");
+    expect(L.hotkeyReasonText(undefined)).toBe("That shortcut isn't valid.");
   });
 });

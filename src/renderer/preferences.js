@@ -187,8 +187,6 @@ async function init() {
 
   $("#replyEnabled").checked = prefs.replySuggestionsEnabled === true;
   $("#userDisplayName").value = prefs.userDisplayName ?? "";
-  // preferencesStore.load() always merges DEFAULT_PREFS: never undefined here.
-  $("#replyHotkey").value = prefs.replySuggestionsHotkey;
   $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
 
   /** The reply model chosen in the cards (its install state is the live one on the card). */
@@ -247,28 +245,52 @@ async function init() {
   });
   renderReplyApps();
 
-  const HOTKEY_MESSAGES = {
-    "contains-option": "Option is used for dictation. Choose another combination.",
-    "no-modifier": "Add at least one of Command, Control or Shift.",
-    "no-key": "Add a key besides the modifiers.",
-    "reserved-key": "1, 2, 3 and Esc are the pill's shortcuts while it is visible.",
-  };
+  // ── Shortcut recorder ──
+  // The field is a recorder, not a text box: focus it and press the combination.
+  // An invalid combination is never saved; the reason appears under the field.
   const HOTKEY_HINT = "It can't use Option: dictation does.";
-  async function validateHotkeyField() {
-    const r = await api.validateReplyHotkey($("#replyHotkey").value.trim());
-    const status = $("#replyHotkeyStatus");
-    status.textContent = r.ok ? HOTKEY_HINT : (HOTKEY_MESSAGES[r.reason] ?? "That shortcut isn't valid.");
-    status.classList.toggle("invalid", !r.ok);
-    return r.ok;
+  const hotkeyField = $("#replyHotkey");
+  const hotkeyStatus = $("#replyHotkeyStatus");
+
+  function showSavedShortcut() {
+    hotkeyField.value = L.acceleratorLabel(prefs.replySuggestionsHotkey);
+    hotkeyStatus.textContent = HOTKEY_HINT;
+    hotkeyStatus.classList.remove("invalid");
   }
-  $("#replyHotkey").addEventListener("input", () => { void validateHotkeyField(); });
-  // An invalid shortcut is never saved; the reason stays under the field.
-  $("#replyHotkey").addEventListener("change", async () => {
-    if (await validateHotkeyField()) {
-      await save({ replySuggestionsHotkey: $("#replyHotkey").value.trim() }, "reply");
-      showShortcutHint();
-      void refreshReplyStatus();
+  showSavedShortcut();
+
+  hotkeyField.addEventListener("focus", () => {
+    hotkeyField.value = "";
+    hotkeyField.placeholder = "Press shortcut…";
+  });
+  hotkeyField.addEventListener("blur", () => {
+    hotkeyField.placeholder = "";
+    showSavedShortcut();
+  });
+  hotkeyField.addEventListener("keydown", async (e) => {
+    const bare = !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+    if (e.key === "Tab" && bare) return; // keep keyboard navigation
+    e.preventDefault();
+    if (e.key === "Escape" && bare) {
+      hotkeyField.blur();
+      return;
     }
+    const accelerator = L.acceleratorFromKeyEvent(e);
+    if (accelerator === null) return; // only modifiers so far
+    hotkeyField.value = L.acceleratorLabel(accelerator);
+    const check = await api.validateReplyHotkey(accelerator);
+    if (!check.ok) {
+      hotkeyStatus.textContent = L.hotkeyReasonText(check.reason);
+      hotkeyStatus.classList.add("invalid");
+      return;
+    }
+    hotkeyStatus.textContent = HOTKEY_HINT;
+    hotkeyStatus.classList.remove("invalid");
+    if (accelerator === prefs.replySuggestionsHotkey) return;
+    await save({ replySuggestionsHotkey: accelerator }, "reply");
+    showShortcutHint();
+    void refreshReplyStatus();
+    hotkeyField.blur();
   });
 
   /**

@@ -156,7 +156,54 @@
     }
   }
 
+  var CODE_KEYS = {
+    Space: "Space", Enter: "Return", NumpadEnter: "Return", Backspace: "Backspace", Tab: "Tab", Escape: "Escape",
+    Delete: "Delete", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
+    ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+    Minus: "-", Equal: "=", Comma: ",", Period: ".", Slash: "/", Semicolon: ";", Quote: "'",
+    BracketLeft: "[", BracketRight: "]", Backslash: "\\", Backquote: "`",
+  };
+
+  /**
+   * Builds an Electron accelerator from a keydown ("Command+Control+R"), or null
+   * while only modifiers are down / the key is unknown. It reads the physical key
+   * (`code`), so Option's dead keys and shifted symbols never leak in. Option is
+   * kept as "Alt": the validator then explains why it is refused.
+   */
+  function acceleratorFromKeyEvent(ev) {
+    var code = String(ev.code || "");
+    var key = null;
+    var m;
+    if ((m = /^Key([A-Z])$/.exec(code))) key = m[1];
+    else if ((m = /^Digit([0-9])$/.exec(code))) key = m[1];
+    else if ((m = /^Numpad([0-9])$/.exec(code))) key = m[1];
+    else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) key = code;
+    else if (Object.prototype.hasOwnProperty.call(CODE_KEYS, code)) key = CODE_KEYS[code];
+    if (key === null) return null;
+    var parts = [];
+    if (ev.metaKey) parts.push("Command");
+    if (ev.ctrlKey) parts.push("Control");
+    if (ev.shiftKey) parts.push("Shift");
+    if (ev.altKey) parts.push("Alt");
+    parts.push(key);
+    return parts.join("+");
+  }
+
+  var HOTKEY_REASONS = {
+    "contains-option": "Option is used for dictation. Choose another combination.",
+    "no-modifier": "Add at least one of Command, Control or Shift.",
+    "no-key": "Add a key besides the modifiers.",
+    "reserved-key": "1, 2, 3 and Esc are the pill's shortcuts while it is visible.",
+  };
+
+  /** Why the validator refused a shortcut, in a sentence. */
+  function hotkeyReasonText(reason) {
+    return Object.prototype.hasOwnProperty.call(HOTKEY_REASONS, reason) ? HOTKEY_REASONS[reason] : "That shortcut isn't valid.";
+  }
+
   return {
+    acceleratorFromKeyEvent: acceleratorFromKeyEvent,
+    hotkeyReasonText: hotkeyReasonText,
     acceleratorLabel: acceleratorLabel,
     replyStatusView: replyStatusView,
     replyGuardMessage: replyGuardMessage,
