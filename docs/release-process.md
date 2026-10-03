@@ -54,10 +54,12 @@ Result: `release/open-flow-<version>-arm64.dmg`.
 The `.dmg` is unsigned (no Apple Developer ID). Users will see "Apple could not verify "open-flow" is free of malware" (older macOS: "cannot be opened because Apple cannot check it for malicious software") on first launch. Workarounds:
 
 1. **macOS 15 and later:** double-click the app once (it is blocked), open System Settings → Privacy & Security, scroll to *Security* and click **Open Anyway** next to the open-flow message, then confirm. This is the only GUI route on these versions.
-2. **Older macOS:** right-click the app in Applications → Open, then click "Open" in the dialog.
+2. **macOS 14 and earlier:** right-click the app in Applications → Open, then click "Open" in the dialog.
 3. **Any version, Terminal:** `xattr -dr com.apple.quarantine /Applications/open-flow.app`, then launch normally.
 
 Future launches work normally.
+
+The release workflow adds these instructions to every GitHub Release automatically (the `body` of the `softprops/action-gh-release` step in `.github/workflows/release.yml`, with `append_body: true`), above the generated changelog. If you change the wording here, change it there and in the README too, so the three stay consistent.
 
 This is acceptable for the beta phase. To make installation seamless, enroll in the Apple Developer Program ($99/year) and:
 - Set `identity` in `electron-builder.yml` to the Developer ID name
