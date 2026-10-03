@@ -5,7 +5,7 @@ interface ReplyLogic {
   replyGuardMessage(input: { name: string; modelInstalled: boolean; tierLabel: string; nativeOk: boolean }): string;
   acceleratorLabel(accelerator: string): string;
   replyStatusView(
-    status: { serverState: string; hotkeyRegistered: boolean; nativeOk: boolean },
+    status: { serverState: string; hotkeyRegistered: boolean; nativeOk: boolean; booting?: boolean },
     accelerator: string,
   ): { text: string; tone: "ok" | "busy" | "error" | "none"; action: "retry" | null };
   acceleratorFromKeyEvent(ev: {
@@ -111,6 +111,14 @@ describe("replyStatusView", () => {
       text: "Model: failed — Retry",
       tone: "error",
       action: "retry",
+    });
+  });
+
+  it("says the app is starting up while the reply wiring has not run yet, instead of reporting the helper as missing", () => {
+    expect(L.replyStatusView({ ...base, serverState: "off", nativeOk: false, hotkeyRegistered: false, booting: true }, "Command+Control+R")).toEqual({
+      text: "Starting up…",
+      tone: "busy",
+      action: null,
     });
   });
 

@@ -75,6 +75,9 @@ export interface ReplyUiStatus {
   nativeOk: boolean;
   /** Bundle id of the last app the reader refused (§Deviazioni 3). */
   lastBlockedBundleId: string | null;
+  /** true until the reply wiring has run at boot; the other fields are
+   *  placeholders then (nativeOk in particular is not known yet). */
+  booting: boolean;
 }
 
 export interface PreferencesWindowDeps {

@@ -149,6 +149,9 @@
    */
   function replyStatusView(status, accelerator) {
     var none = { text: "", tone: "none", action: null };
+    // Settings can open while the app is still booting, before the reply wiring
+    // exists: nativeOk is not known yet, so it must not be read as "helper missing".
+    if (status.booting) return { text: "Starting up…", tone: "busy", action: null };
     if (!status.nativeOk) return none;
     switch (status.serverState) {
       case "ready":

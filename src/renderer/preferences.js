@@ -388,8 +388,10 @@ async function init() {
 
   async function refreshReplyStatus() {
     const s = await api.replyStatus();
-    if (s.nativeOk !== nativeOk) {
-      nativeOk = s.nativeOk;
+    // While booting nativeOk is a placeholder: assume the helper is there.
+    const available = s.nativeOk || s.booting;
+    if (available !== nativeOk) {
+      nativeOk = available;
       refreshReplyGuards();
     }
     renderReplyState(L.replyStatusView(s, prefs.replySuggestionsHotkey), s.serverError);

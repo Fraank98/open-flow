@@ -237,6 +237,7 @@ async function main(): Promise<void> {
     hotkeyRegistered: false,
     nativeOk: false,
     lastBlockedBundleId: null,
+    booting: true,
   });
   const prefsWindow = new PreferencesWindow({
     modelManager,
@@ -771,13 +772,14 @@ async function main(): Promise<void> {
   ipcMain.on(IpcChannels.ReplyHover, () => { replyCoordinator?.onHover(); });
 
   // The Settings window reads the reply state through this; until the block
-  // above ran (it can open while models still load) it reports the idle state.
+  // above ran (it can open while models still load) the stub reports `booting`.
   replyUiStatus = (): ReplyUiStatus => ({
     serverState: replyServerManager.getState(),
     serverError: replyServerManager.lastError(),
     hotkeyRegistered: replyHotkeyRegistered,
     nativeOk: axReader !== null,
     lastBlockedBundleId: replyCoordinator?.lastBlockedBundleId() ?? null,
+    booting: false,
   });
   // Quit-time teardown of everything above (the will-quit handler is registered
   // much earlier, before these objects exist).
@@ -800,14 +802,16 @@ async function main(): Promise<void> {
       }));
   });
 
-  if (prefs.replySuggestionsEnabled && replyCoordinator) {
+  // `quitting` is checked like for whisper/llama: a quit during boot must not
+  // start a model server that the will-quit teardown has already passed.
+  if (prefs.replySuggestionsEnabled && replyCoordinator && !quitting) {
     // Not awaited: the app must not wait for a 2.5-5 GB model to load.
     void replyServerManager.apply({ enabled: true, replyModelId: prefs.replyModelId })
       .then(applyReplyHotkey)
       .catch((err: unknown) => logger.error("reply server start failed", {
         message: err instanceof Error ? err.message : String(err),
       }));
-  } else {
+  } else if (!quitting) {
     await logger.info("reply suggestions off — no second llama-server", {
       enabled: prefs.replySuggestionsEnabled, nativeOk: axReader !== null,
     });

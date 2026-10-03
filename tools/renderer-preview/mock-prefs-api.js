@@ -133,7 +133,7 @@
     replyStatus: () => Promise.resolve({
       serverState: scenario === "reply-on" || scenario === "reply-bad-shortcut" ? "ready" : scenario === "reply-failed" ? "failed" : "off",
       serverError: scenario === "reply-failed" ? "llama-server exited (code 1)" : null,
-      hotkeyRegistered: true, nativeOk: true,
+      hotkeyRegistered: scenario !== "reply-booting", nativeOk: scenario !== "reply-booting", booting: scenario === "reply-booting",
       lastBlockedBundleId: scenario === "reply-on" ? "com.apple.Safari" : null,
     }),
     validateReplyHotkey: (acc) => Promise.resolve(validate(acc)),

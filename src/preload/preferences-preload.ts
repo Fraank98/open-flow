@@ -31,6 +31,7 @@ interface ReplyStatusInfo {
   hotkeyRegistered: boolean;
   nativeOk: boolean;
   lastBlockedBundleId: string | null;
+  booting: boolean;
 }
 
 interface AppInfo {
