@@ -21,6 +21,7 @@ interface SetupLogic {
     micPermission?: string;
     accessibilityPermission?: string;
   }): string;
+  pausedText(reason: string | null | undefined): string;
   readyView(state: string | undefined): {
     live: boolean;
     text: string;
@@ -285,5 +286,16 @@ describe("pruneSamples", () => {
     // 5 s at one sample per 10 ms.
     expect(samples.length).toBeLessThanOrEqual(502);
     expect(L.downloadStats(samples, 50_000_000)).toEqual(L.downloadStats(full, 50_000_000));
+  });
+});
+
+describe("pausedText", () => {
+  it("explains a missing model file when that is why setup reopened", () => {
+    expect(L.pausedText("missing-model")).toBe("A model file is missing — download it again to continue.");
+  });
+
+  it("is the plain paused text otherwise", () => {
+    expect(L.pausedText(null)).toBe("Download paused.");
+    expect(L.pausedText(undefined)).toBe("Download paused.");
   });
 });

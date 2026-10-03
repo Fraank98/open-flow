@@ -138,6 +138,11 @@ export function getTier(id: string): TierDescriptor | undefined {
   return TIERS.find((t) => t.id === id);
 }
 
+/** The tier made of exactly this whisper + llm pair, if any (models picked one by one in Settings may match none). */
+export function tierForModels(whisperId: string, llmId: string): TierDescriptor | undefined {
+  return TIERS.find((t) => t.whisperId === whisperId && t.llmId === llmId);
+}
+
 /**
  * Total download size and RAM of a tier. The two models are loaded together,
  * so RAM is the sum, not the max. UI copy must use this instead of hard-coded

@@ -25,7 +25,7 @@ import { restartRequiredFields } from "./utils/restart-required.js";
 import { checkAccessibility, checkAutomationViaProbe, checkMicrophone, type PermissionStatus } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
-import { getModelById } from "./model-catalog.js";
+import { getModelById, tierForModels } from "./model-catalog.js";
 import { getModelsDir, modelFilePath } from "./utils/model-paths.js";
 import { SetupWizard } from "./setup-wizard.js";
 import { PreferencesWindow } from "./preferences-window.js";
@@ -162,7 +162,8 @@ async function main(): Promise<void> {
       whisperId: prefs.whisperModelId,
       llmId: prefs.llmModelId,
     });
-    await preferencesStore.update({ setupComplete: false });
+    // Resume at the download step with a reason, not at "welcome" with no context.
+    await preferencesStore.update({ setupComplete: false, setupStep: "download", setupReason: "missing-model" });
     app.relaunch();
     app.quit();
     return;
@@ -175,7 +176,14 @@ async function main(): Promise<void> {
     await logger.error("selected model missing on disk; re-running setup", {
       modelsDir: getModelsDir(),
     });
-    await preferencesStore.update({ setupComplete: false });
+    // The download step needs a tier: use the one these models belong to (the
+    // wizard falls back to the tier chooser when there is none).
+    await preferencesStore.update({
+      setupComplete: false,
+      setupStep: "download",
+      setupReason: "missing-model",
+      setupTierId: tierForModels(prefs.whisperModelId, prefs.llmModelId)?.id ?? prefs.setupTierId,
+    });
     app.relaunch();
     app.quit();
     return;

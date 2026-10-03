@@ -106,6 +106,13 @@
     return step;
   }
 
+  /** Text of the download step's paused state; says why when setup reopened because a model file went missing. */
+  function pausedText(reason) {
+    return reason === "missing-model"
+      ? "A model file is missing — download it again to continue."
+      : "Download paused.";
+  }
+
   var READY_VIEWS = {
     starting: { live: false, text: "Starting up… loading your models (this can take up to 30 s).", action: null },
     ready: { live: true, text: "", action: null },
@@ -177,6 +184,7 @@
     estimateMinutes: estimateMinutes,
     resumeStep: resumeStep,
     readyView: readyView,
+    pausedText: pausedText,
     tierCardLines: tierCardLines,
     freeSpaceInfo: freeSpaceInfo,
   };

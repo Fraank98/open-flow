@@ -263,7 +263,7 @@ export class PreferencesWindow {
       const parent = this.win && !this.win.isDestroyed() ? this.win : null;
       const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
       if (response !== 0) return false;
-      await this.deps.preferencesStore.update({ setupComplete: false, setupStep: "welcome" });
+      await this.deps.preferencesStore.update({ setupComplete: false, setupStep: "welcome", setupReason: null });
       setImmediate(() => {
         app.relaunch();
         app.quit();

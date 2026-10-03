@@ -59,6 +59,22 @@ describe("PreferencesStore", () => {
     expect(prefs.setupTierId).toBeNull();
   });
 
+  it("defaults setupReason to null, and loads an old file without it", async () => {
+    expect(DEFAULT_PREFS.setupReason).toBeNull();
+    const path = join(dir, "prefs.json");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(path, JSON.stringify({ setupComplete: false }));
+    expect((await new PreferencesStore(path).load()).setupReason).toBeNull();
+  });
+
+  it("persists setupReason", async () => {
+    const store = new PreferencesStore(join(dir, "prefs.json"));
+    await store.update({ setupComplete: false, setupStep: "download", setupReason: "missing-model" });
+    const prefs = await store.load();
+    expect(prefs.setupReason).toBe("missing-model");
+    expect(prefs.setupStep).toBe("download");
+  });
+
   it("falls back to defaults on corrupt JSON", async () => {
     const path = join(dir, "prefs.json");
     const { writeFile } = await import("node:fs/promises");

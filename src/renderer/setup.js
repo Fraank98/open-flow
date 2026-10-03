@@ -281,7 +281,10 @@ function onDone({ ok, error }) {
     goto("ready", { save: false });
     return;
   }
-  if (error && error.code === "aborted") showDownloadView("paused");
+  if (error && error.code === "aborted") {
+    $("#dl-paused-text").textContent = Logic.pausedText(null);
+    showDownloadView("paused");
+  }
   else showDownloadView("error", error || { title: "Download failed", hint: "", retryable: true });
 }
 
@@ -414,7 +417,10 @@ async function init() {
   // paused: it resumes only when the user says so.
   const step = Logic.resumeStep(state);
   goto(step, { save: false });
-  if (step === "download") showDownloadView("paused");
+  if (step === "download") {
+    $("#dl-paused-text").textContent = Logic.pausedText(state.setupReason);
+    showDownloadView("paused");
+  }
 }
 
 // An Automation probe can sit on an unanswered macOS prompt for a while; focus

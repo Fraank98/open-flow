@@ -2,7 +2,7 @@
 // Query: ?theme=light|dark
 //        &step=welcome|permissions|tier|download|ready   (page to land on)
 //        &appReady=1 (ready step: the app finished starting)  &ready=accessibility-off|relaunch-needed|paused (ready step: why it isn't)  &pipeline=recording|transcribing|cleaning|pasting|pasted
-//        &scenario=fresh|mixed|granted|no-permissions|resume-download|downloading|download-error|no-space
+//        &scenario=fresh|mixed|granted|no-permissions|resume-download|downloading|download-error|no-space|missing-model
 (function () {
   "use strict";
   const q = new URLSearchParams(location.search);
@@ -75,6 +75,7 @@
       automationPermission: scenario === "granted" ? "granted" : "unknown", tiers,
       setupStep: savedStep, setupTierId: savedTier,
       readyState: "starting",
+      setupReason: scenario === "missing-model" ? "missing-model" : null,
       freeBytes: scenario === "no-space" ? 0.9e9 : 42e9, launchAtLogin: true,
     }),
     requestMicPermission: () => { perms.mic = "granted"; return Promise.resolve("granted"); },

@@ -29,6 +29,8 @@ interface InitialState {
   tiers: TierInfo[];
   setupStep: SetupStepId;
   setupTierId: string | null;
+  /** Why setup reopened by itself, e.g. "missing-model"; null on a normal run. */
+  setupReason: string | null;
   /** Free bytes on the volume that holds the models, or null when unknown. */
   freeBytes: number | null;
   launchAtLogin: boolean;

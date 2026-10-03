@@ -6,6 +6,7 @@ import {
   getModelById,
   getTier,
   tierTotals,
+  tierForModels,
 } from "../../src/main/model-catalog.js";
 
 describe("model catalog", () => {
@@ -86,5 +87,15 @@ describe("model catalog", () => {
   it("getTier returns tier descriptor by id", () => {
     expect(getTier("balanced")?.id).toBe("balanced");
     expect(getTier("nope")).toBeUndefined();
+  });
+});
+
+describe("tierForModels", () => {
+  it("finds the tier whose whisper + llm pair matches", () => {
+    for (const t of TIERS) expect(tierForModels(t.whisperId, t.llmId)?.id).toBe(t.id);
+  });
+
+  it("is undefined for a pair no tier offers", () => {
+    expect(tierForModels("whisper-small", "nope")).toBeUndefined();
   });
 });

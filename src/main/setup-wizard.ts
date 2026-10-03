@@ -156,6 +156,7 @@ export class SetupWizard {
         automationPermission: "unknown" as const,
         setupStep: prefs.setupStep,
         setupTierId: prefs.setupTierId,
+        setupReason: prefs.setupReason,
         launchAtLogin: prefs.launchAtLogin,
         freeBytes: await this.freeBytes(),
         readyState: this.readyState,
@@ -265,6 +266,7 @@ export class SetupWizard {
         await this.deps.preferencesStore.update({
           setupComplete: true,
           setupStep: "ready",
+          setupReason: null,
           setupTierId: tier.id,
           whisperModelId: whisper.id,
           llmModelId: llm.id,

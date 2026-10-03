@@ -4,10 +4,15 @@ import { dirname } from "node:path";
 /** Wizard steps in order; saved so an interrupted setup resumes where it stopped. */
 export type SetupStep = "welcome" | "permissions" | "tier" | "download" | "ready";
 
+/** Why setup reopened on its own, when it was not the first run. */
+export type SetupReason = "missing-model";
+
 export interface Preferences {
   setupComplete: boolean;
   /** Last wizard step reached while setup is incomplete. */
   setupStep: SetupStep;
+  /** Set when the app sent the user back to setup (e.g. a model file vanished); cleared once setup completes. */
+  setupReason: SetupReason | null;
   /** Quality level chosen in the wizard, or null before the choice. */
   setupTierId: string | null;
   whisperModelId: string;
@@ -26,6 +31,7 @@ export interface Preferences {
 export const DEFAULT_PREFS: Preferences = {
   setupComplete: false,
   setupStep: "welcome",
+  setupReason: null,
   setupTierId: null,
   whisperModelId: "whisper-small",
   llmModelId: "qwen-1.5b",
