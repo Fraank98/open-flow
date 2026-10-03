@@ -295,13 +295,21 @@ async function init() {
   showSavedShortcut();
 
   hotkeyField.addEventListener("focus", () => {
+    api.recorderActive(true);
     hotkeyField.value = "";
     hotkeyField.placeholder = "Press shortcut…";
   });
   hotkeyField.addEventListener("blur", () => {
+    api.recorderActive(false);
     hotkeyField.placeholder = "";
     showSavedShortcut();
   });
+  // Main swallowed ⌘Q/⌘W/… before the page saw it: say why nothing was recorded.
+  api.onReservedKey(() => {
+    hotkeyStatus.textContent = L.hotkeyReasonText("system-reserved");
+    hotkeyStatus.classList.add("invalid");
+  });
+  window.addEventListener("beforeunload", () => api.recorderActive(false));
   hotkeyField.addEventListener("keydown", async (e) => {
     const bare = !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
     // Tab, with or without Shift, keeps keyboard navigation: Shift+Tab walks back

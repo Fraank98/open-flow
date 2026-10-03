@@ -13,11 +13,17 @@ export const REPLY_HOTKEY_DEFAULT: string = "Command+Control+R";
 
 export type AcceleratorValidation =
   | { ok: true; accelerator: string }
-  | { ok: false; reason: "contains-option" | "no-modifier" | "no-key" | "reserved-key" | "shift-only" };
+  | { ok: false; reason: "contains-option" | "no-modifier" | "no-key" | "reserved-key" | "shift-only" | "system-reserved" };
 
 const MODIFIERS = new Set(["command", "cmd", "control", "ctrl", "commandorcontrol", "cmdorctrl", "shift", "super", "meta"]);
 const COMMAND_OR_CONTROL = new Set(["command", "cmd", "control", "ctrl", "commandorcontrol", "cmdorctrl", "super", "meta"]);
+// Spellings of Command (CommandOrControl is Command on macOS).
+const COMMAND_ONLY = new Set(["command", "cmd", "commandorcontrol", "cmdorctrl", "super", "meta"]);
 const OPTION_LIKE = new Set(["alt", "option", "altgr"]);
+// Command+<key> combinations macOS (or the app menu) owns: quit, close, hide,
+// minimize, app switcher, Spotlight, Settings, window cycling. Registering one
+// globally would either fight the system or make the Settings window unusable.
+const COMMAND_RESERVED_KEYS = new Set(["q", "w", "h", "m", "tab", "space", ",", "`"]);
 const RESERVED_KEYS = new Set(["1", "2", "3", "escape", "esc"]);
 
 export function validateReplyAccelerator(accelerator: string): AcceleratorValidation {
@@ -31,7 +37,20 @@ export function validateReplyAccelerator(accelerator: string): AcceleratorValida
   if (modifiers.length === 0) return { ok: false, reason: "no-modifier" };
   if (!modifiers.some((m) => COMMAND_OR_CONTROL.has(m))) return { ok: false, reason: "shift-only" };
   if (RESERVED_KEYS.has(keys[0]!)) return { ok: false, reason: "reserved-key" }; // keys.length === 1, so keys[0] exists
+  if (COMMAND_RESERVED_KEYS.has(keys[0]!) && modifiers.length === 1 && COMMAND_ONLY.has(modifiers[0]!)) return { ok: false, reason: "system-reserved" };
   return { ok: true, accelerator };
+}
+
+/**
+ * True for a keydown that is exactly one of those Command key equivalents
+ * (Electron's `before-input-event` shape, `key` being the typed character).
+ * The Settings window uses it to swallow them while the shortcut recorder has
+ * focus, so pressing them records instead of quitting/closing/hiding the app.
+ */
+export function isSystemReservedKeyEvent(input: { key: string; meta: boolean; control: boolean; shift: boolean; alt: boolean }): boolean {
+  if (!input.meta || input.control || input.shift || input.alt) return false;
+  const key = input.key === " " ? "space" : input.key.toLowerCase();
+  return COMMAND_RESERVED_KEYS.has(key);
 }
 
 export interface ReplyHotkeyReconciliation {

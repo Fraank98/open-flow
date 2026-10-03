@@ -66,6 +66,10 @@ interface PrefsApi {
   onShowTab: (cb: (tab: string) => void) => () => void;
   replyStatus: () => Promise<ReplyStatusInfo>;
   validateReplyHotkey: (accelerator: string) => Promise<{ ok: boolean; reason?: string; accelerator?: string }>;
+  /** Tells main whether the shortcut recorder has focus (it then swallows the Command key equivalents). */
+  recorderActive: (active: boolean) => void;
+  /** Main swallowed a reserved Command key equivalent while the recorder was active. */
+  onReservedKey: (cb: () => void) => () => void;
   /** Opens the app chooser; null when cancelled. */
   pickApp: () => Promise<AppInfo | null>;
   resolveApps: (bundleIds: string[]) => Promise<AppInfo[]>;
@@ -106,6 +110,14 @@ const api: PrefsApi = {
   appInfo: () => ipcRenderer.invoke("prefs:app-info"),
   replyStatus: () => ipcRenderer.invoke("prefs:reply-status"),
   validateReplyHotkey: (accelerator) => ipcRenderer.invoke("prefs:validate-reply-hotkey", accelerator),
+  recorderActive: (active) => {
+    ipcRenderer.send("prefs:recorder-active", active);
+  },
+  onReservedKey: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("prefs:reserved-key", handler);
+    return () => ipcRenderer.removeListener("prefs:reserved-key", handler);
+  },
   pickApp: () => ipcRenderer.invoke("prefs:pick-app"),
   resolveApps: (bundleIds) => ipcRenderer.invoke("prefs:resolve-apps", bundleIds),
   onShowTab: (cb) => {

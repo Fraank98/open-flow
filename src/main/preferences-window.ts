@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WHISPER_MODELS, LLM_MODELS, REPLY_MODELS, getModelById, replyCards } from "./model-catalog.js";
-import { validateReplyAccelerator } from "./utils/reply-hotkey.js";
+import { validateReplyAccelerator, isSystemReservedKeyEvent } from "./utils/reply-hotkey.js";
 import { appNameFromPath, findAppPathByBundleId, isBundleId, readBundleId, type ExecFn } from "./utils/app-bundle.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
@@ -96,6 +96,8 @@ export interface PreferencesWindowDeps {
 export class PreferencesWindow {
   private win: BrowserWindow | null = null;
   private handlersRegistered = false;
+  /** True while the shortcut recorder has focus (reported by the renderer). */
+  private recorderActive = false;
   private readonly savedListeners: Array<(prefs: Preferences) => void> = [];
   /** Downloads in flight, by model id: Cancel aborts them and a reopened window re-attaches to them. */
   private readonly downloads = new DownloadTracker();
@@ -135,7 +137,18 @@ export class PreferencesWindow {
     this.win = win;
     win.once("ready-to-show", () => win.show());
     this.registerHandlers();
+    // While the recorder has focus, ⌘Q/⌘W/⌘H/⌘M/⌘Tab/⌘Space/⌘,/⌘` would run their
+    // menu or system action instead of being recorded. before-input-event runs
+    // before the menu shortcuts and the page, so swallowing them here keeps the
+    // window alive; the renderer is told so it can explain the refusal.
+    win.webContents.on("before-input-event", (event, input) => {
+      if (!this.recorderActive || input.type !== "keyDown") return;
+      if (!isSystemReservedKeyEvent(input)) return;
+      event.preventDefault();
+      this.send("prefs:reserved-key");
+    });
     win.on("closed", () => {
+      this.recorderActive = false;
       // Closing the window leaves downloads running; their progress just has no listener.
       if (this.win === win) this.win = null;
     });
@@ -303,6 +316,10 @@ export class PreferencesWindow {
     });
 
     ipcMain.handle("prefs:reply-status", (): ReplyUiStatus => this.deps.replyStatus());
+
+    ipcMain.on("prefs:recorder-active", (e, active: unknown) => {
+      if (this.win && !this.win.isDestroyed() && e.sender === this.win.webContents) this.recorderActive = active === true;
+    });
 
     ipcMain.handle("prefs:validate-reply-hotkey", (_e, accelerator: string) => validateReplyAccelerator(accelerator));
 

@@ -75,6 +75,8 @@
     if (parts.length === 1) return { ok: false, reason: "no-modifier" };
     if (!parts.some((x) => MODS.indexOf(x) !== -1 && x !== "shift")) return { ok: false, reason: "shift-only" };
     if (["1", "2", "3", "escape", "esc"].indexOf(keys[0]) !== -1) return { ok: false, reason: "reserved-key" };
+    const mods = parts.filter((x) => MODS.indexOf(x) !== -1);
+    if (mods.length === 1 && ["command", "cmd", "commandorcontrol", "cmdorctrl", "super", "meta"].indexOf(mods[0]) !== -1 && ["q", "w", "h", "m", "tab", "space", ",", "`"].indexOf(keys[0]) !== -1) return { ok: false, reason: "system-reserved" };
     return { ok: true, accelerator: acc };
   }
 
@@ -137,6 +139,8 @@
       lastBlockedBundleId: scenario === "reply-on" ? "com.apple.Safari" : null,
     }),
     validateReplyHotkey: (acc) => Promise.resolve(validate(acc)),
+    recorderActive: () => {},
+    onReservedKey: () => () => {},
     pickApp: () => Promise.resolve({ bundleId: "com.apple.Safari", name: "Safari", icon: APPS["com.apple.Safari"].icon }),
     resolveApps: (ids) => Promise.resolve(ids.map((id) => ({ bundleId: id, name: APPS[id] ? APPS[id].name : null, icon: APPS[id] ? APPS[id].icon : null }))),
   };

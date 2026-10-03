@@ -160,6 +160,7 @@ describe("hotkeyReasonText", () => {
     expect(L.hotkeyReasonText("contains-option")).toBe("Option is used for dictation. Choose another combination.");
     expect(L.hotkeyReasonText("no-modifier")).toBe("Add Command or Control.");
     expect(L.hotkeyReasonText("shift-only")).toBe("Add Command or Control — Shift alone would take over normal typing.");
+    expect(L.hotkeyReasonText("system-reserved")).toBe("That shortcut is reserved by macOS or the app — choose another.");
     expect(L.hotkeyReasonText("no-key")).toBe("Add a key besides the modifiers.");
     expect(L.hotkeyReasonText("reserved-key")).toBe("1, 2, 3 and Esc are the pill's shortcuts while it is visible.");
     expect(L.hotkeyReasonText(undefined)).toBe("That shortcut isn't valid.");

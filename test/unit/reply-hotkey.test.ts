@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateReplyAccelerator, reconcileReplyAccelerator, REPLY_HOTKEY_DEFAULT } from "../../src/main/utils/reply-hotkey.js";
+import { validateReplyAccelerator, isSystemReservedKeyEvent, reconcileReplyAccelerator, REPLY_HOTKEY_DEFAULT } from "../../src/main/utils/reply-hotkey.js";
 
 describe("validateReplyAccelerator", () => {
   it("accepts the default and other Command/Control/Shift combinations", () => {
@@ -22,6 +22,16 @@ describe("validateReplyAccelerator", () => {
   it("rejects Shift without Command or Control: it would take over normal typing", () => {
     for (const a of ["Shift+Tab", "Shift+R", "Shift+F5"]) {
       expect(validateReplyAccelerator(a), a).toEqual({ ok: false, reason: "shift-only" });
+    }
+  });
+  it("rejects the Command key equivalents of macOS and the app, whatever the spelling", () => {
+    for (const a of ["Command+Q", "Cmd+W", "CommandOrControl+H", "Command+M", "Command+Tab", "Command+Space", "Command+,", "Command+`", "command+q", "Super+Q"]) {
+      expect(validateReplyAccelerator(a), a).toEqual({ ok: false, reason: "system-reserved" });
+    }
+  });
+  it("lets the same keys through with another modifier combination", () => {
+    for (const a of ["Command+Control+Q", "Control+Q", "Command+Shift+Q", "Command+Control+Space", "Control+Tab"]) {
+      expect(validateReplyAccelerator(a), a).toEqual({ ok: true, accelerator: a });
     }
   });
   it("rejects the bare digits 1-3 and Escape as the key: they are the pill's temporary shortcuts", () => {
@@ -47,5 +57,20 @@ describe("reconcileReplyAccelerator", () => {
   it("still signals rebuild when falling back to the default and the current wired value differs from it", () => {
     expect(reconcileReplyAccelerator("Alt+R", "Command+Control+T"))
       .toEqual({ accelerator: REPLY_HOTKEY_DEFAULT, rebuild: true });
+  });
+});
+
+describe("isSystemReservedKeyEvent", () => {
+  const press = (key: string, extra: object = {}) => isSystemReservedKeyEvent({ key, meta: true, control: false, shift: false, alt: false, ...extra });
+
+  it("is true for Command plus Q, W, H, M, Tab, Space, comma or backtick", () => {
+    for (const key of ["q", "W", "h", "m", "Tab", " ", ",", "`"]) expect(press(key), key).toBe(true);
+  });
+  it("is false for other keys and for any extra modifier", () => {
+    expect(press("r")).toBe(false);
+    expect(press("q", { shift: true })).toBe(false);
+    expect(press("q", { control: true })).toBe(false);
+    expect(press("q", { alt: true })).toBe(false);
+    expect(press("q", { meta: false })).toBe(false);
   });
 });
