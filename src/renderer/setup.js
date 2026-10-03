@@ -99,7 +99,10 @@ function renderTiers() {
     el.dataset.id = t.id;
     el.innerHTML = `<strong></strong><span class="desc"></span>`;
     el.querySelector("strong").textContent = t.label;
-    el.querySelector(".desc").textContent = t.description;
+    // Interim copy until the wizard rewrite: model pair, size and the notes.
+    el.querySelector(".desc").textContent =
+      `${t.summary} · ${formatSize(t.sizeBytes)} download. ${t.transcriptionNote}` +
+      (t.licenseNote ? ` ${t.licenseNote}` : "");
     el.addEventListener("click", () => selectTier(t.id));
     list.appendChild(el);
   });

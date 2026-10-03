@@ -12,14 +12,15 @@
     dictionary: ["Kubernetes", "open-flow"],
   };
   const full = scenario === "installed";
+  const LICENSE = "The 3B cleanup model is licensed for non-commercial use only.";
   const whisper = [
-    { id: "whisper-small", label: "whisper small", sizeBytes: 487601967, installed: true },
-    { id: "whisper-large-v3-turbo", label: "whisper large v3 turbo", sizeBytes: 1624555275, installed: false },
+    { id: "whisper-small", label: "Whisper Small", description: "Fast. Good for English and Italian.", sizeBytes: 487601967, ramBytes: 1e9, installed: true, licenseNote: null },
+    { id: "whisper-large-v3-turbo", label: "Whisper Large v3 Turbo", description: "Most accurate. Slower on 8 GB Macs.", sizeBytes: 1624555275, ramBytes: 2.5e9, installed: false, licenseNote: null },
   ];
   const llm = [
-    { id: "qwen-0.5b", label: "qwen 0.5b", sizeBytes: 491e6, installed: full },
-    { id: "qwen-1.5b", label: "qwen 1.5b", sizeBytes: 1117320736, installed: true },
-    { id: "qwen-3b", label: "qwen 3b", sizeBytes: 2104932768, installed: false },
+    { id: "qwen-0.5b", label: "Qwen 2.5 0.5B", description: "Lightest cleanup. May over-edit.", sizeBytes: 491400032, ramBytes: 7e8, installed: full, licenseNote: null },
+    { id: "qwen-1.5b", label: "Qwen 2.5 1.5B", description: "Recommended balance of speed and quality.", sizeBytes: 1117320736, ramBytes: 1.4e9, installed: true, licenseNote: null },
+    { id: "qwen-3b", label: "Qwen 2.5 3B", description: "Best cleanup. Needs 16 GB of RAM to stay snappy.", sizeBytes: 2104932768, ramBytes: 2.6e9, installed: false, licenseNote: LICENSE },
   ];
   const languages = [
     { id: "auto", label: "Auto-detect" }, { id: "en", label: "English" }, { id: "it", label: "Italiano" },

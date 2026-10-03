@@ -5,10 +5,17 @@
   if (q.get("theme")) document.documentElement.dataset.theme = q.get("theme");
   const scenario = q.get("scenario") || "fresh";
 
+  const LICENSE = "The 3B cleanup model is licensed for non-commercial use only.";
   const tiers = [
-    { id: "fast", label: "Fast", description: "Whisper Small + Qwen 0.5B. Lightest, ~1 GB download." },
-    { id: "balanced", label: "Balanced", description: "Whisper Small + Qwen 1.5B. Recommended." },
-    { id: "max", label: "Max", description: "Whisper Large v3 Turbo + Qwen 3B. Best quality, ~3.7 GB, non-commercial." },
+    { id: "fast", label: "Fast", description: "Whisper Small + Qwen 0.5B", summary: "Whisper Small + Qwen 0.5B",
+      transcriptionNote: "Same transcription as Balanced, lighter cleanup.", recommended: false,
+      sizeBytes: 487601967 + 491400032, ramBytes: 1.7e9, installed: false, licenseNote: null },
+    { id: "balanced", label: "Balanced", description: "Whisper Small + Qwen 1.5B", summary: "Whisper Small + Qwen 1.5B",
+      transcriptionNote: "Recommended for most Macs.", recommended: true,
+      sizeBytes: 487601967 + 1117320736, ramBytes: 2.4e9, installed: false, licenseNote: null },
+    { id: "max", label: "Maximum quality", description: "Whisper Large v3 Turbo + Qwen 3B", summary: "Whisper Large v3 Turbo + Qwen 3B",
+      transcriptionNote: "Best accuracy. Needs 16 GB of RAM.", recommended: false,
+      sizeBytes: 1624555275 + 2104932768, ramBytes: 5.1e9, installed: false, licenseNote: LICENSE },
   ];
   const perms = scenario === "granted"
     ? { mic: "granted", acc: "granted" }

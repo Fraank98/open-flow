@@ -2,7 +2,7 @@ import { BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ModelManager } from "./model-manager.js";
-import { TIERS, getModelById, getTier } from "./model-catalog.js";
+import { TIERS, getModelById, getTier, tierTotals } from "./model-catalog.js";
 import { checkAccessibilityViaProbe, checkMicrophone } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 
@@ -54,7 +54,30 @@ export class SetupWizard {
     ipcMain.handle("setup:get-initial-state", async () => ({
       micPermission: await checkMicrophone(),
       accessibilityPermission: await checkAccessibilityViaProbe(),
-      tiers: TIERS.map((t) => ({ id: t.id, label: t.label, description: t.description })),
+      tiers: await Promise.all(
+        TIERS.map(async (t) => {
+          const { sizeBytes, ramBytes } = tierTotals(t);
+          const whisper = getModelById("whisper", t.whisperId);
+          const llm = getModelById("llm", t.llmId);
+          const installed =
+            !!whisper &&
+            !!llm &&
+            (await this.deps.modelManager.isInstalled(whisper)) &&
+            (await this.deps.modelManager.isInstalled(llm));
+          return {
+            id: t.id,
+            label: t.label,
+            description: t.description,
+            summary: t.summary,
+            transcriptionNote: t.transcriptionNote,
+            recommended: t.recommended,
+            sizeBytes,
+            ramBytes,
+            installed,
+            licenseNote: t.licenseNote,
+          };
+        }),
+      ),
     }));
 
     ipcMain.handle("setup:request-mic", async () => {

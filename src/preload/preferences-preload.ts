@@ -1,11 +1,21 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+interface ModelInfo {
+  id: string;
+  label: string;
+  description: string;
+  sizeBytes: number;
+  ramBytes: number;
+  installed: boolean;
+  licenseNote: string | null;
+}
+
 contextBridge.exposeInMainWorld("openFlowPrefs", {
   load: (): Promise<unknown> => ipcRenderer.invoke("prefs:load"),
   save: (prefs: unknown): Promise<unknown> => ipcRenderer.invoke("prefs:save", prefs),
   listModels: (): Promise<{
-    whisper: Array<{ id: string; label: string; sizeBytes: number; installed: boolean }>;
-    llm: Array<{ id: string; label: string; sizeBytes: number; installed: boolean }>;
+    whisper: ModelInfo[];
+    llm: ModelInfo[];
     languages: Array<{ id: string; label: string }>;
   }> => ipcRenderer.invoke("prefs:list-models"),
   downloadModel: (kind: "whisper" | "llm", id: string): Promise<void> =>
@@ -28,8 +38,8 @@ declare global {
       load: () => Promise<unknown>;
       save: (prefs: unknown) => Promise<unknown>;
       listModels: () => Promise<{
-        whisper: Array<{ id: string; label: string; sizeBytes: number; installed: boolean }>;
-        llm: Array<{ id: string; label: string; sizeBytes: number; installed: boolean }>;
+        whisper: ModelInfo[];
+        llm: ModelInfo[];
         languages: Array<{ id: string; label: string }>;
       }>;
       downloadModel: (kind: "whisper" | "llm", id: string) => Promise<void>;

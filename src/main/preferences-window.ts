@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { WHISPER_MODELS, LLM_MODELS } from "./model-catalog.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
-import type { ModelDescriptor } from "./utils/model-paths.js";
+import type { CatalogModel } from "./model-catalog.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const APP_ROOT = join(dirname(__filename), "..", "..");
@@ -18,8 +18,16 @@ const LANGUAGES = [
   { id: "de", label: "Deutsch" },
 ];
 
-function modelLabel(desc: ModelDescriptor): string {
-  return desc.id.replace(/-/g, " ");
+async function describeModel(manager: ModelManager, m: CatalogModel) {
+  return {
+    id: m.id,
+    label: m.label,
+    description: m.description,
+    sizeBytes: m.sizeBytes,
+    ramBytes: m.ramBytes,
+    installed: await manager.isInstalled(m),
+    licenseNote: m.licenseNote,
+  };
 }
 
 export interface PreferencesWindowDeps {
@@ -82,22 +90,8 @@ export class PreferencesWindow {
     });
 
     ipcMain.handle("prefs:list-models", async () => {
-      const whisper = await Promise.all(
-        WHISPER_MODELS.map(async (m) => ({
-          id: m.id,
-          label: modelLabel(m),
-          sizeBytes: m.sizeBytes,
-          installed: await this.deps.modelManager.isInstalled(m),
-        })),
-      );
-      const llm = await Promise.all(
-        LLM_MODELS.map(async (m) => ({
-          id: m.id,
-          label: modelLabel(m),
-          sizeBytes: m.sizeBytes,
-          installed: await this.deps.modelManager.isInstalled(m),
-        })),
-      );
+      const whisper = await Promise.all(WHISPER_MODELS.map((m) => describeModel(this.deps.modelManager, m)));
+      const llm = await Promise.all(LLM_MODELS.map((m) => describeModel(this.deps.modelManager, m)));
       return { whisper, llm, languages: LANGUAGES };
     });
 

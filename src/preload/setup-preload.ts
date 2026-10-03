@@ -4,7 +4,18 @@ contextBridge.exposeInMainWorld("openFlowSetup", {
   getInitialState: (): Promise<{
     micPermission: string;
     accessibilityPermission: string;
-    tiers: Array<{ id: string; label: string; description: string }>;
+    tiers: Array<{
+      id: string;
+      label: string;
+      description: string;
+      summary: string;
+      transcriptionNote: string;
+      recommended: boolean;
+      sizeBytes: number;
+      ramBytes: number;
+      installed: boolean;
+      licenseNote: string | null;
+    }>;
   }> => ipcRenderer.invoke("setup:get-initial-state"),
 
   requestMicPermission: (): Promise<string> => ipcRenderer.invoke("setup:request-mic"),
@@ -33,7 +44,18 @@ declare global {
       getInitialState: () => Promise<{
         micPermission: string;
         accessibilityPermission: string;
-        tiers: Array<{ id: string; label: string; description: string }>;
+        tiers: Array<{
+      id: string;
+      label: string;
+      description: string;
+      summary: string;
+      transcriptionNote: string;
+      recommended: boolean;
+      sizeBytes: number;
+      ramBytes: number;
+      installed: boolean;
+      licenseNote: string | null;
+    }>;
       }>;
       requestMicPermission: () => Promise<string>;
       refreshAccessibilityStatus: () => Promise<string>;
