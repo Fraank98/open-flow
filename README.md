@@ -26,7 +26,7 @@
 - **Custom dictionary.** Preferred spellings for names, products and jargon: applied to every transcript and fed to Whisper as a hint.
 - **Language auto-detect**, or pin one of en / it / es / fr / de.
 - **Stays out of the way.** Menubar-only, pauses Spotify / Apple Music while you dictate and resumes them afterwards, restores your clipboard after pasting.
-- **Reply suggestions (optional).** A shortcut reads the conversation under your mouse and proposes three replies, from a second local model. Off by default — see [Reply suggestions](#reply-suggestions-optional-off-by-default).
+- **Reply suggestions (alpha, optional).** A shortcut reads the conversation under your mouse and proposes three replies, from a second local model. Off by default — see [Reply suggestions (alpha)](#reply-suggestions-alpha-optional-off-by-default).
 - **Three quality tiers** from ~1 GB to ~3.7 GB of models, picked at setup; the Whisper and cleanup models can be changed separately in Preferences.
 
 ## Privacy
@@ -83,7 +83,9 @@ When it finishes, a microphone icon appears in the menubar and you can start dic
 - **Tray menu:** status, *Disable hotkey*, *Preferences…*, *Quit*.
 - **Launch at login** is on by default; turn it off in Preferences.
 
-## Reply suggestions (optional, off by default)
+## Reply suggestions (alpha, optional, off by default)
+> **Alpha.** This feature is still being tested and improved. Suggestions can be wrong or miss context — always read them before sending.
+
 A second feature, separate from dictation: press <kbd>⌘⌃R</kbd> (<kbd>Command</kbd>+<kbd>Control</kbd>+<kbd>R</kbd>, configurable) over a chat or an email and open-flow proposes three replies.
 
 - **How it works.** It reads the conversation under the mouse pointer through the macOS Accessibility API, checks with a local model that you are being asked something it can answer, and shows three proposals in a small pill. Press <kbd>⌘1</kbd>, <kbd>⌘2</kbd> or <kbd>⌘3</kbd> (or click a row) to paste one into the reply field. Nothing is sent for you. <kbd>Esc</kbd> closes the pill, and it closes by itself after 20 seconds.

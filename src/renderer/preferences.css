@@ -106,6 +106,9 @@ input.switch:checked::after { transform: translateX(16px); }
 .model-actions { grid-column: 2; grid-row: 1 / span 4; display: flex; align-items: center; gap: 6px; }
 .badge { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--track); color: var(--muted); }
 .badge.active { background: var(--accent); color: var(--on-accent); }
+.badge.alpha { background: var(--warning-bg); color: var(--warning); margin-left: 4px; font-size: 10px; padding: 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+.alpha-note { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; padding: 8px 12px; border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 8px; background: var(--warning-bg); font-size: 12px; color: var(--text); }
+.alpha-note-title { font-size: 12px; font-weight: 600; color: var(--warning); }
 .badge.installed { background: var(--success-bg); color: var(--success); }
 .dl-progress { display: flex; align-items: center; gap: 8px; }
 .dl-progress progress { width: 90px; height: 6px; accent-color: var(--accent); }

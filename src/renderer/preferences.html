@@ -13,7 +13,7 @@
       <button type="button" role="tab" data-tab="general" id="tabbtn-general" aria-controls="tab-general">General</button>
       <button type="button" role="tab" data-tab="dictation" id="tabbtn-dictation" aria-controls="tab-dictation">Dictation</button>
       <button type="button" role="tab" data-tab="models" id="tabbtn-models" aria-controls="tab-models">Models</button>
-      <button type="button" role="tab" data-tab="reply" id="tabbtn-reply" aria-controls="tab-reply">Reply suggestions</button>
+      <button type="button" role="tab" data-tab="reply" id="tabbtn-reply" aria-controls="tab-reply" aria-label="Reply suggestions (alpha)">Reply suggestions <span class="badge alpha" aria-hidden="true">Alpha</span></button>
       <button type="button" role="tab" data-tab="advanced" id="tabbtn-advanced" aria-controls="tab-advanced">Advanced</button>
     </header>
 
@@ -91,6 +91,10 @@
       </section>
 
       <section id="tab-reply" role="tabpanel" aria-labelledby="tabbtn-reply" hidden>
+        <div class="alpha-note" role="note">
+          <strong class="alpha-note-title">Alpha</strong>
+          <span>This feature is still being tested and improved. Suggestions can be wrong or miss context — always read them before sending.</span>
+        </div>
         <label class="row">
           <span class="row-text">
             <span class="row-title">Suggest replies</span>
