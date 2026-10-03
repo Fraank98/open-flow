@@ -24,3 +24,6 @@ coverage/
 
 # electron-builder output
 release/
+
+# Renderer preview harness output
+tools/renderer-preview/out/
