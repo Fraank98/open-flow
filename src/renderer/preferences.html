@@ -131,11 +131,10 @@
           </select>
         </div>
         <p class="row-desc guard" id="replyAppsModeWarning" hidden></p>
-        <div class="dict-add">
-          <input id="replyAppInput" type="text" placeholder="Bundle id, e.g. com.apple.mail" autocomplete="off" />
-          <button id="replyAppAdd" type="button">Add</button>
+        <div class="app-actions">
+          <button id="replyAppPick" type="button">Add app…</button>
+          <button id="replyAppAddBlocked" type="button" hidden>Add the last blocked app</button>
         </div>
-        <button id="replyAppAddBlocked" type="button" class="danger" hidden>Add the last blocked app</button>
         <ul id="replyAppList" class="dict-list"></ul>
 
         <p class="panel-status" aria-live="polite"></p>

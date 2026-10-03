@@ -1,6 +1,7 @@
 import { getModelById } from "../model-catalog.js";
 import { isSupportedLanguage } from "./languages.js";
 import { validateReplyAccelerator } from "./reply-hotkey.js";
+import { isBundleId } from "./app-bundle.js";
 import type { Preferences } from "../preferences-store.js";
 
 /** Fields the Settings window may write. Everything else (setup state, hotkey) is main-owned. */
@@ -33,8 +34,6 @@ const BOOLEAN_FIELDS = [
 ] as const;
 
 const DISPLAY_NAME_MAX = 100;
-// A reverse-DNS bundle id: no spaces, no path separators.
-const BUNDLE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 /**
  * Validates a partial coming over IPC: keeps only settable fields with the right
@@ -70,7 +69,7 @@ export function sanitizePrefsPatch(input: unknown): SettingsPatch {
     const apps: string[] = [];
     for (const a of raw.replyApps as string[]) {
       const id = a.trim();
-      if (!BUNDLE_ID.test(id) || seen.has(id.toLowerCase())) continue;
+      if (!isBundleId(id) || seen.has(id.toLowerCase())) continue;
       seen.add(id.toLowerCase());
       apps.push(id);
     }

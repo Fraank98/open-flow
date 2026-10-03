@@ -207,30 +207,57 @@ async function init() {
     void save({ replyAppsMode: $("#replyAppsMode").value }, "reply");
   });
 
+  // Readable names and icons for the bundle ids in the list, resolved by the main process.
+  const appInfo = new Map(); // lower-case bundle id -> { bundleId, name, icon }
+
   function renderReplyApps() {
     const list = $("#replyAppList");
     list.innerHTML = "";
     replyApps.forEach((id, i) => {
+      const label = L.appRowLabel(id, appInfo.get(id.toLowerCase()));
       const li = document.createElement("li");
-      const span = document.createElement("span");
-      span.className = "dict-term";
-      span.textContent = id;
+      const icon = document.createElement("img");
+      icon.className = "app-icon";
+      icon.alt = "";
+      const src = appInfo.get(id.toLowerCase())?.icon;
+      if (src) icon.src = src; else icon.classList.add("blank");
+      const text = document.createElement("span");
+      text.className = "dict-term";
+      text.textContent = label.primary;
+      if (label.secondary) {
+        const small = document.createElement("span");
+        small.className = "app-id";
+        small.textContent = label.secondary;
+        text.append(" ", small);
+      }
       const rm = document.createElement("button");
       rm.type = "button";
       rm.className = "danger";
       rm.textContent = "×";
-      rm.setAttribute("aria-label", `Remove ${id}`);
+      rm.setAttribute("aria-label", `Remove ${label.primary}`);
       rm.addEventListener("click", () => {
         replyApps.splice(i, 1);
         renderReplyApps();
         void save({ replyApps }, "reply");
       });
-      li.append(span, rm);
+      li.append(icon, text, rm);
       list.appendChild(li);
     });
     // The list content decides which warning applies, so every add/remove refreshes it.
     updateReplyAppsModeUI();
   }
+
+  async function resolveReplyApps(ids) {
+    const missing = ids.filter((id) => !appInfo.has(id.toLowerCase()));
+    if (missing.length === 0) return;
+    try {
+      for (const info of await api.resolveApps(missing)) appInfo.set(info.bundleId.toLowerCase(), info);
+    } catch {
+      /* names are a nicety: the list falls back to bundle ids */
+    }
+    renderReplyApps();
+  }
+
   function addReplyApp(raw) {
     const id = (raw ?? "").trim();
     if (!id) return;
@@ -239,11 +266,19 @@ async function init() {
     renderReplyApps();
     void save({ replyApps }, "reply");
   }
-  $("#replyAppAdd").addEventListener("click", () => { addReplyApp($("#replyAppInput").value); $("#replyAppInput").value = ""; });
-  $("#replyAppInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); addReplyApp($("#replyAppInput").value); $("#replyAppInput").value = ""; }
+
+  $("#replyAppPick").addEventListener("click", async () => {
+    try {
+      const picked = await api.pickApp();
+      if (!picked) return; // cancelled
+      appInfo.set(picked.bundleId.toLowerCase(), picked);
+      addReplyApp(picked.bundleId);
+    } catch (err) {
+      say("reply", L.cleanIpcError(err), "error");
+    }
   });
   renderReplyApps();
+  void resolveReplyApps(replyApps);
 
   // ── Shortcut recorder ──
   // The field is a recorder, not a text box: focus it and press the combination.
@@ -362,8 +397,11 @@ async function init() {
       : true;
     if (s.lastBlockedBundleId && !alreadyListed) {
       btn.hidden = false;
-      btn.textContent = `Add ${s.lastBlockedBundleId}`;
+      const blocked = appInfo.get(s.lastBlockedBundleId.toLowerCase());
+      btn.textContent = `Add ${blocked?.name ?? s.lastBlockedBundleId}`;
       btn.onclick = () => addReplyApp(s.lastBlockedBundleId);
+      // The name arrives asynchronously; the next poll shows it.
+      void resolveReplyApps([s.lastBlockedBundleId]);
     } else {
       btn.hidden = true;
     }

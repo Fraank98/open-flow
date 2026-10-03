@@ -201,7 +201,14 @@
     return Object.prototype.hasOwnProperty.call(HOTKEY_REASONS, reason) ? HOTKEY_REASONS[reason] : "That shortcut isn't valid.";
   }
 
+  /** How an app appears in the reply apps list: its name, with the bundle id underneath; the bare id when unknown. */
+  function appRowLabel(bundleId, info) {
+    if (info && info.name) return { primary: info.name, secondary: bundleId };
+    return { primary: bundleId, secondary: null };
+  }
+
   return {
+    appRowLabel: appRowLabel,
     acceleratorFromKeyEvent: acceleratorFromKeyEvent,
     hotkeyReasonText: hotkeyReasonText,
     acceleratorLabel: acceleratorLabel,

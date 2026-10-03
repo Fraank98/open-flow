@@ -16,6 +16,7 @@ interface ReplyLogic {
     altKey?: boolean;
   }): string | null;
   hotkeyReasonText(reason: string | undefined): string;
+  appRowLabel(bundleId: string, info?: { name: string | null } | null): { primary: string; secondary: string | null };
   replyAppsView(mode: string, appCount: number): { label: string; warning: string | null };
 }
 const L = (globalThis as unknown as { OpenFlowSettingsLogic: ReplyLogic }).OpenFlowSettingsLogic;
@@ -137,5 +138,16 @@ describe("hotkeyReasonText", () => {
     expect(L.hotkeyReasonText("no-key")).toBe("Add a key besides the modifiers.");
     expect(L.hotkeyReasonText("reserved-key")).toBe("1, 2, 3 and Esc are the pill's shortcuts while it is visible.");
     expect(L.hotkeyReasonText(undefined)).toBe("That shortcut isn't valid.");
+  });
+});
+
+describe("appRowLabel", () => {
+  it("shows the readable name with the bundle id as the small line", () => {
+    expect(L.appRowLabel("com.apple.mail", { name: "Mail" })).toEqual({ primary: "Mail", secondary: "com.apple.mail" });
+  });
+
+  it("falls back to the bundle id alone when the app can't be found on this Mac", () => {
+    expect(L.appRowLabel("com.acme.gone", { name: null })).toEqual({ primary: "com.acme.gone", secondary: null });
+    expect(L.appRowLabel("com.acme.gone", undefined)).toEqual({ primary: "com.acme.gone", secondary: null });
   });
 });

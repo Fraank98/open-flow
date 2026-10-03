@@ -1,8 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WHISPER_MODELS, LLM_MODELS, REPLY_MODELS, getModelById, replyCards } from "./model-catalog.js";
 import { validateReplyAccelerator } from "./utils/reply-hotkey.js";
+import { appNameFromPath, findAppPathByBundleId, isBundleId, readBundleId, type ExecFn } from "./utils/app-bundle.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
 import type { ReplyServerState } from "../shared/reply-types.js";
@@ -21,6 +23,19 @@ const SETTINGS_PANES: Record<string, string> = {
   microphone: "Privacy_Microphone",
   automation: "Privacy_Automation",
 };
+
+const execCommand: ExecFn = (file, args) =>
+  new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: 5000 }, (err, stdout) => (err ? reject(err) : resolve(String(stdout))));
+  });
+
+export interface AppInfo {
+  bundleId: string;
+  /** Readable name, or null when the app isn't installed here (the UI shows the bundle id). */
+  name: string | null;
+  /** 16 px icon as a data URL, when the app was found. */
+  icon: string | null;
+}
 
 /** Same backgrounds as lib/theme.css, so the window never flashes the wrong colour. */
 const BG_LIGHT = "#f5f5f7";
@@ -122,6 +137,14 @@ export class PreferencesWindow {
       if (this.win === win) this.win = null;
     });
     await win.loadFile(join(APP_ROOT, "src", "renderer", "preferences.html"), tab ? { hash: tab } : undefined);
+  }
+
+  private async iconFor(appPath: string): Promise<string | null> {
+    try {
+      return (await app.getFileIcon(appPath, { size: "small" })).toDataURL();
+    } catch {
+      return null;
+    }
   }
 
   private send(channel: string, ...args: unknown[]): void {
@@ -245,6 +268,35 @@ export class PreferencesWindow {
       }
       // Also drops a leftover <file>.partial; errors other than "not found" propagate to the UI.
       await this.deps.modelManager.deleteModel(desc);
+    });
+
+    // Add app…: pick a .app in /Applications, read its bundle id for the list.
+    ipcMain.handle("prefs:pick-app", async (): Promise<AppInfo | null> => {
+      const options = {
+        defaultPath: "/Applications",
+        properties: ["openFile" as const],
+        filters: [{ name: "Applications", extensions: ["app"] }],
+      };
+      const parent = this.win && !this.win.isDestroyed() ? this.win : null;
+      const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+      const appPath = result.canceled ? undefined : result.filePaths[0];
+      if (!appPath) return null;
+      const bundleId = await readBundleId(appPath, execCommand);
+      if (!bundleId) throw new Error("Couldn't read this app's identifier. Choose an application from /Applications.");
+      return { bundleId, name: appNameFromPath(appPath), icon: await this.iconFor(appPath) };
+    });
+
+    // Readable names (and icons) for the bundle ids in the list.
+    ipcMain.handle("prefs:resolve-apps", async (_e, ids: unknown): Promise<AppInfo[]> => {
+      if (!Array.isArray(ids)) return [];
+      const unique = [...new Set(ids.filter((id): id is string => typeof id === "string" && isBundleId(id)))].slice(0, 100);
+      return Promise.all(
+        unique.map(async (bundleId) => {
+          const appPath = await findAppPathByBundleId(bundleId, execCommand);
+          if (!appPath) return { bundleId, name: null, icon: null };
+          return { bundleId, name: appNameFromPath(appPath), icon: await this.iconFor(appPath) };
+        }),
+      );
     });
 
     ipcMain.handle("prefs:reply-status", (): ReplyUiStatus => this.deps.replyStatus());

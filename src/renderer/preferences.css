@@ -143,3 +143,7 @@ input.switch:checked::after { transform: translateX(16px); }
 .model-details p { margin-top: 6px; line-height: 1.5; }
 #tab-reply input.recorder { text-align: center; cursor: pointer; caret-color: transparent; }
 #tab-reply input.recorder:focus { border-color: var(--accent); }
+.app-actions { display: flex; gap: 8px; margin-top: 10px; }
+.dict-list li .app-icon { width: 16px; height: 16px; margin-right: 8px; flex: none; }
+.dict-list li .app-icon.blank { visibility: hidden; }
+.app-id { color: var(--muted); font-size: 11px; margin-left: 4px; }
