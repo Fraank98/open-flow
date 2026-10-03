@@ -238,6 +238,35 @@ async function main(): Promise<void> {
   );
   menubar.create();
   menubar.setStatus("Loading models…");
+
+  // The tray's Quit/Relaunch exist from here on, while the slow loads below can
+  // take tens of seconds — so the cleanup must be registered NOW, not at the end
+  // of boot, or quitting during "Loading models…" would leave llama-server
+  // orphaned on :18080 (it is a plain, non-detached child). The things it tears
+  // down are created later, and a `const` read before its declaration throws a
+  // ReferenceError (TDZ), so each is a `let` declared here as null and assigned
+  // once it exists; the handler skips whatever isn't there yet.
+  let streamingWhisper: StreamingWhisperRunner | null = null;
+  let bootWhisperServer: WhisperServer | null = null;
+  let bootLlmServer: LLMServer | null = null;
+  let bootOverlay: OverlayWindow | null = null;
+  // Set by the handler so a boot step still in flight doesn't start a server
+  // after cleanup already ran.
+  let quitting = false;
+  app.on("will-quit", () => {
+    quitting = true;
+    pttArmer?.stop();
+    ptt.stop();
+    if (powerSaveBlocker.isStarted(powerSaveBlockerId)) powerSaveBlocker.stop(powerSaveBlockerId);
+    // shutdown(), NOT release(): release() blocks on the native inference mutex,
+    // which a hung pass holds forever — that would freeze quit. The OS reclaims
+    // the model/GPU on process exit.
+    streamingWhisper?.shutdown();
+    bootWhisperServer?.stop();
+    bootLlmServer?.stop();
+    bootOverlay?.destroy();
+    menubar.destroy();
+  });
   // Keep the in-memory snapshot in sync so `arm` (language, dictionary) reads
   // fresh values and debug logging toggles without a restart. Note: the
   // llama-server warmup prompt stays on the boot language; that is only a cache
@@ -284,7 +313,6 @@ async function main(): Promise<void> {
   // Streaming Whisper via the in-process native addon. Model loads once
   // into a whisper_context that stays in RAM; each utterance is a
   // start → feedSamples* → processChunk* → finalize cycle.
-  let streamingWhisper: StreamingWhisperRunner | null = null;
   try {
     await logger.info("streaming whisper loading model", { model: whisperModelPath });
     const t0 = Date.now();
@@ -342,7 +370,8 @@ async function main(): Promise<void> {
     modelPath: whisperModelPath,
     port: 18081,
   });
-  if (!streamingWhisper) {
+  bootWhisperServer = whisperServer;
+  if (!streamingWhisper && !quitting) {
     try {
       await whisperServer.start();
       await logger.info("whisper-server ready (fallback)", {
@@ -373,10 +402,12 @@ async function main(): Promise<void> {
     // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
     keepaliveMs: 20_000,
   });
+  bootLlmServer = llmServer;
   // Only run llama-server when LLM cleanup is enabled. With it off (whisper-only
   // mode) the model would just sit in RAM and its keepalive would contend with
   // whisper for the GPU every 20s — pure waste. Toggling the pref on at runtime
   // takes effect after a restart (see the resilient clean() wiring below).
+  if (quitting) return;
   if (prefs.useLlmCleanup) {
     menubar.setStatus("Starting cleanup model…");
     try {
@@ -431,6 +462,7 @@ async function main(): Promise<void> {
   });
 
   const overlay = new OverlayWindow();
+  bootOverlay = overlay;
   await overlay.create();
   coordinator.onStateChange((state) => {
     if (wizard?.isOpen()) wizard.sendPipelineState(toWizardPipelineState(state));
@@ -632,20 +664,6 @@ async function main(): Promise<void> {
   } else {
     menubar.setStatus("Paused");
   }
-
-  app.on("will-quit", () => {
-    pttArmer?.stop();
-    ptt.stop();
-    if (powerSaveBlocker.isStarted(powerSaveBlockerId)) powerSaveBlocker.stop(powerSaveBlockerId);
-    // shutdown(), NOT release(): release() blocks on the native inference mutex,
-    // which a hung pass holds forever — that would freeze quit. The OS reclaims
-    // the model/GPU on process exit.
-    if (streamingWhisper) streamingWhisper.shutdown();
-    whisperServer.stop();
-    llmServer.stop();
-    overlay.destroy();
-    menubar.destroy();
-  });
 
   app.on("window-all-closed", () => {
     // intentional no-op — menubar app stays alive
