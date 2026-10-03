@@ -21,7 +21,7 @@ import { buildInitialPrompt } from "./utils/initial-prompt.js";
 import { waitForEventOrTimeout } from "./utils/wait-for-event.js";
 import { toWizardPipelineState } from "./utils/wizard-pipeline-state.js";
 import { restartRequiredFields } from "./utils/restart-required.js";
-import { checkAccessibility, checkAutomationViaProbe, checkMicrophone } from "./permissions.js";
+import { checkAccessibility, checkAutomationViaProbe, checkMicrophone, type PermissionStatus } from "./permissions.js";
 import { PreferencesStore } from "./preferences-store.js";
 import { ModelManager } from "./model-manager.js";
 import { getModelById } from "./model-catalog.js";
@@ -187,10 +187,23 @@ async function main(): Promise<void> {
   // The menubar icon appears now, before the slow model loads below, so the
   // user sees the app is alive. Everything its callbacks touch (`ptt`,
   // `prefsWindow`, `prefs`) is declared above this point.
+  // Last Automation probe result: the probe runs osascript (and may raise the
+  // macOS prompt), so Settings only re-runs it when the user clicks "Check again".
+  let automationStatus: PermissionStatus = "unknown";
   const prefsWindow = new PreferencesWindow({
     modelManager,
     preferencesStore,
     restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
+    permissionsStatus: async (probeAutomation) => {
+      if (probeAutomation) automationStatus = await checkAutomationViaProbe();
+      return {
+        mic: await checkMicrophone(),
+        accessibility: checkAccessibility(ptt),
+        automation: automationStatus,
+      };
+    },
+    logDir: LOG_DIR,
+    version: app.getVersion(),
   });
   // Assigned near the bottom, once the PTT handlers are registered.
   let pttArmer: PttArmer | null = null;
@@ -208,10 +221,9 @@ async function main(): Promise<void> {
       onOpenSettings: () => {
         void prefsWindow.open();
       },
-      // Until the Settings window grows a Permissions section, jump straight
-      // to the Accessibility pane — the permission people most often miss.
+      // The Permissions list lives on the General tab of Settings.
       onCheckPermissions: () => {
-        void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+        void prefsWindow.open("general");
       },
       onOpenLogs: () => {
         void shell.openPath(LOG_DIR);
@@ -237,8 +249,8 @@ async function main(): Promise<void> {
 
   const mic = await checkMicrophone();
   const acc = checkAccessibility(ptt);
-  const automation = await checkAutomationViaProbe();
-  await logger.info("permissions", { mic, accessibility: acc, automation });
+  automationStatus = await checkAutomationViaProbe();
+  await logger.info("permissions", { mic, accessibility: acc, automation: automationStatus });
 
   // Pauses Spotify / Apple Music when dictation starts (via AppleScript that
   // checks each app's player state first, so we never blindly toggle media

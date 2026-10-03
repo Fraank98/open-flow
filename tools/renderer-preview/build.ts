@@ -40,17 +40,22 @@ async function main(): Promise<void> {
   const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   console.log(`Built ${OUT}\n`);
   console.log("Open in Chrome (scenario and theme via query string):");
-  console.log(`  open -a "Google Chrome" "${OUT}/preferences.html?theme=dark&scenario=installed"`);
+  console.log(`  open -a "Google Chrome" "${OUT}/preferences.html?theme=dark&scenario=installed&tab=models"`);
   console.log(`  open -a "Google Chrome" "${OUT}/setup.html?theme=light&scenario=fresh"\n`);
-  console.log("Headless screenshots (640 px wide):");
-  for (const [page, h] of [["setup", 700], ["preferences", 900]] as const) {
-    for (const theme of ["light", "dark"]) {
+  console.log("Headless screenshots (setup 640x700; settings 640x600, also 560x480):");
+  for (const theme of ["light", "dark"]) {
+    console.log(
+      `  "${chrome}" --headless=new --hide-scrollbars --window-size=640,700 ` +
+        `--screenshot=${OUT}/setup-${theme}.png "file://${OUT}/setup.html?theme=${theme}"`,
+    );
+    for (const tab of ["general", "dictation", "models", "advanced"]) {
       console.log(
-        `  "${chrome}" --headless=new --window-size=640,${h} ` +
-          `--screenshot=${OUT}/${page}-${theme}.png "file://${OUT}/${page === "setup" ? "setup" : "preferences"}.html?theme=${theme}"`,
+        `  "${chrome}" --headless=new --hide-scrollbars --window-size=640,600 ` +
+          `--screenshot=${OUT}/settings-${tab}-${theme}.png "file://${OUT}/preferences.html?theme=${theme}&tab=${tab}"`,
       );
     }
   }
+  console.log("\nSettings scenarios: fresh, installed, restart-pending, downloading.");
   console.log("\nNo Chrome? Use Safari: open -a Safari <file>.html (no headless screenshots).");
 }
 

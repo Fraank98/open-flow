@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+type ModelKind = "whisper" | "llm";
+type Permission = "granted" | "denied" | "unknown";
+type Pane = "accessibility" | "microphone" | "automation";
+
 interface ModelInfo {
   id: string;
   label: string;
@@ -10,45 +14,76 @@ interface ModelInfo {
   licenseNote: string | null;
 }
 
-contextBridge.exposeInMainWorld("openFlowPrefs", {
-  load: (): Promise<unknown> => ipcRenderer.invoke("prefs:load"),
-  save: (prefs: unknown): Promise<unknown> => ipcRenderer.invoke("prefs:save", prefs),
-  restartStatus: (): Promise<{ fields: string[] }> => ipcRenderer.invoke("prefs:restart-status"),
-  listModels: (): Promise<{
+interface PrefsApi {
+  load: () => Promise<unknown>;
+  /** Autosave: send only the fields that changed. Resolves with the saved prefs. */
+  update: (patch: Record<string, unknown>) => Promise<unknown>;
+  restartStatus: () => Promise<{ fields: string[] }>;
+  listModels: () => Promise<{
     whisper: ModelInfo[];
     llm: ModelInfo[];
     languages: Array<{ id: string; label: string }>;
-  }> => ipcRenderer.invoke("prefs:list-models"),
-  downloadModel: (kind: "whisper" | "llm", id: string): Promise<void> =>
-    ipcRenderer.invoke("prefs:download-model", { kind, id }),
-  deleteModel: (kind: "whisper" | "llm", id: string): Promise<void> =>
-    ipcRenderer.invoke("prefs:delete-model", { kind, id }),
-  relaunch: (): void => {
+  }>;
+  downloadModel: (kind: ModelKind, id: string) => Promise<void>;
+  cancelDownload: (id: string) => void;
+  deleteModel: (kind: ModelKind, id: string) => Promise<void>;
+  relaunch: () => void;
+  onDownloadProgress: (cb: (p: { id: string; bytes: number; total: number }) => void) => () => void;
+  permissionsStatus: (opts?: { automation?: boolean }) => Promise<{ mic: Permission; accessibility: Permission; automation: Permission }>;
+  openSystemSettings: (pane: Pane) => void;
+  openLogs: () => void;
+  revealModels: () => void;
+  openProjectPage: () => void;
+  resetSetup: () => Promise<boolean>;
+  appInfo: () => Promise<{ version: string }>;
+  onShowTab: (cb: (tab: string) => void) => () => void;
+}
+
+const api: PrefsApi = {
+  load: () => ipcRenderer.invoke("prefs:load"),
+  update: (patch) => ipcRenderer.invoke("prefs:update", patch),
+  restartStatus: () => ipcRenderer.invoke("prefs:restart-status"),
+  listModels: () => ipcRenderer.invoke("prefs:list-models"),
+  downloadModel: (kind, id) => ipcRenderer.invoke("prefs:download-model", { kind, id }),
+  cancelDownload: (id) => {
+    ipcRenderer.send("prefs:cancel-download", id);
+  },
+  deleteModel: (kind, id) => ipcRenderer.invoke("prefs:delete-model", { kind, id }),
+  relaunch: () => {
     ipcRenderer.send("prefs:relaunch");
   },
-  onDownloadProgress: (cb: (p: { id: string; bytes: number; total: number }) => void): (() => void) => {
+  onDownloadProgress: (cb) => {
     const handler = (_e: unknown, payload: { id: string; bytes: number; total: number }) => cb(payload);
     ipcRenderer.on("prefs:download-progress", handler);
     return () => ipcRenderer.removeListener("prefs:download-progress", handler);
   },
-});
+  permissionsStatus: (opts) => ipcRenderer.invoke("prefs:permissions-status", opts),
+  openSystemSettings: (pane) => {
+    ipcRenderer.send("prefs:open-system-settings", pane);
+  },
+  openLogs: () => {
+    ipcRenderer.send("prefs:open-logs");
+  },
+  revealModels: () => {
+    ipcRenderer.send("prefs:reveal-models");
+  },
+  openProjectPage: () => {
+    ipcRenderer.send("prefs:open-external", "https://github.com/Fraank98/open-flow");
+  },
+  resetSetup: () => ipcRenderer.invoke("prefs:reset-setup"),
+  appInfo: () => ipcRenderer.invoke("prefs:app-info"),
+  onShowTab: (cb) => {
+    const handler = (_e: unknown, tab: string) => cb(tab);
+    ipcRenderer.on("prefs:show-tab", handler);
+    return () => ipcRenderer.removeListener("prefs:show-tab", handler);
+  },
+};
+
+contextBridge.exposeInMainWorld("openFlowPrefs", api);
 
 declare global {
   interface Window {
-    openFlowPrefs: {
-      load: () => Promise<unknown>;
-      save: (prefs: unknown) => Promise<unknown>;
-      restartStatus: () => Promise<{ fields: string[] }>;
-      listModels: () => Promise<{
-        whisper: ModelInfo[];
-        llm: ModelInfo[];
-        languages: Array<{ id: string; label: string }>;
-      }>;
-      downloadModel: (kind: "whisper" | "llm", id: string) => Promise<void>;
-      deleteModel: (kind: "whisper" | "llm", id: string) => Promise<void>;
-      relaunch: () => void;
-      onDownloadProgress: (cb: (p: { id: string; bytes: number; total: number }) => void) => () => void;
-    };
+    openFlowPrefs: PrefsApi;
   }
 }
 
