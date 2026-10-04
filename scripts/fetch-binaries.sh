@@ -16,7 +16,7 @@ BUILD_DIR="$BIN_DIR/build-tmp"
 WHISPER_REPO="https://github.com/ggerganov/whisper.cpp.git"
 WHISPER_TAG="v1.9.2"
 LLAMA_REPO="https://github.com/ggerganov/llama.cpp.git"
-LLAMA_TAG="b4404"
+LLAMA_TAG="v0.4.0"
 
 mkdir -p "$BIN_DIR" "$BUILD_DIR"
 
@@ -109,7 +109,13 @@ build_llama() {
   # into one shared lib/ would have one silently overwrite the other's
   # same-named files — a corruption that surfaces as an inscrutable runtime
   # failure rather than a build error.
-  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib-llama;@executable_path/../lib-llama" >/dev/null
+  # LLAMA_OPENSSL=OFF: from v0.4.0 llama-server's vendored cpp-httplib links
+  # OpenSSL for HTTPS whenever cmake's find_package(OpenSSL) succeeds on the
+  # build machine — e.g. Homebrew's openssl@3. The app only ever talks to
+  # llama-server over plain HTTP on 127.0.0.1, and a dylib dependency on an
+  # absolute /opt/homebrew path would break the packaged app on every machine
+  # without that formula. Keep the binary free of it, as the pre-bump build was.
+  cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib-llama;@executable_path/../lib-llama" >/dev/null
   cmake --build "$src/build" -j --target llama-cli llama-server
   cp "$src/build/bin/llama-cli" "$BIN_DIR/llama-cli"
   cp "$src/build/bin/llama-server" "$BIN_DIR/llama-server"
@@ -120,15 +126,15 @@ build_llama() {
 copy_llama_libs() {
   # Copy llama's own dylibs to a dedicated resources/bin/lib-llama/ (kept
   # separate from whisper's resources/bin/lib/ — see the rpath comment in
-  # build_llama for why sharing one directory is unsafe). At LLAMA_TAG=b4404,
-  # llama-server links against libllama.dylib and its private
-  # libggml/-base/-cpu/-blas/-metal.dylib; there is no libmtmd (added to
-  # llama.cpp well after this tag). `common` (shared code between llama-cli
-  # and llama-server) is declared `add_library(... STATIC ...)` upstream and
-  # builds to build/common/libcommon.a, not a dylib; the server is a single
-  # add_executable target with no separate "server-impl" library. So there
-  # are no other dylibs to copy beyond these six — verify against `otool -L`
-  # on the built binaries if this ever looks stale after a tag bump.
+  # build_llama for why sharing one directory is unsafe). The set is
+  # tag-dependent and grew at v0.4.0: alongside libllama and its private
+  # libggml/-base/-cpu/-blas/-metal, upstream now also ships libmtmd
+  # (multimodal) and turns what used to be static code into libllama-common,
+  # libllama-server-impl and libllama-cli-impl (the last one is a build
+  # artifact of llama-cli, which isn't packaged, but it's harmless to copy).
+  # The `libllama*` glob covers all three; the authoritative list is whatever
+  # `otool -L` reports on the built binaries, so check it after any tag bump
+  # rather than trusting this comment.
   #
   # Unlike whisper.cpp's build (which places every dylib under build/bin/),
   # b4404's dylibs land scattered across the build tree: build/src/,
@@ -155,7 +161,7 @@ copy_llama_libs() {
   while IFS= read -r -d '' f; do
     cp -a "$f" "$lib_dst/"
     found=1
-  done < <(find "$build_root" \( -name "libllama*.dylib" -o -name "libggml*.dylib" \) \( -type f -o -type l \) -print0)
+  done < <(find "$build_root" \( -name "libllama*.dylib" -o -name "libmtmd*.dylib" -o -name "libggml*.dylib" \) \( -type f -o -type l \) -print0)
   if [[ $found -eq 0 ]]; then
     echo "[error] no llama/ggml dylibs found under $build_root"; exit 1
   fi

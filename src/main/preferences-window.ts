@@ -1,9 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { WHISPER_MODELS, LLM_MODELS } from "./model-catalog.js";
+import { WHISPER_MODELS, LLM_MODELS, REPLY_MODELS, getModelById, replyCards } from "./model-catalog.js";
+import { validateReplyAccelerator, isSystemReservedKeyEvent } from "./utils/reply-hotkey.js";
+import { appNameFromPath, findAppPathByBundleId, isBundleId, mapWithLimit, readBundleId, type ExecFn } from "./utils/app-bundle.js";
 import { ModelManager } from "./model-manager.js";
 import { PreferencesStore, Preferences } from "./preferences-store.js";
+import type { ReplyServerState } from "../shared/reply-types.js";
 import { downloadErrorText } from "./utils/download-errors.js";
 import { LANGUAGES } from "./utils/languages.js";
 import { createEmitGate } from "./utils/emit-gate.js";
@@ -19,6 +23,19 @@ const SETTINGS_PANES: Record<string, string> = {
   microphone: "Privacy_Microphone",
   automation: "Privacy_Automation",
 };
+
+const execCommand: ExecFn = (file, args) =>
+  new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: 5000 }, (err, stdout) => (err ? reject(err) : resolve(String(stdout))));
+  });
+
+export interface AppInfo {
+  bundleId: string;
+  /** Readable name, or null when the app isn't installed here (the UI shows the bundle id). */
+  name: string | null;
+  /** 16 px icon as a data URL, when the app was found. */
+  icon: string | null;
+}
 
 /** Same backgrounds as lib/theme.css, so the window never flashes the wrong colour. */
 const BG_LIGHT = "#f5f5f7";
@@ -49,9 +66,29 @@ export interface PermissionsSnapshot {
   automation: PermissionStatus;
 }
 
+export interface ReplyUiStatus {
+  serverState: ReplyServerState;
+  serverError: string | null;
+  /** false when globalShortcut.register refused the accelerator. */
+  hotkeyRegistered: boolean;
+  /** false when the ax_context addon could not be loaded (degradation L6). */
+  nativeOk: boolean;
+  /** Bundle id of the last app the reader refused (§Deviazioni 3). */
+  lastBlockedBundleId: string | null;
+  /** true until the reply wiring has run at boot; the other fields are
+   *  placeholders then (nativeOk in particular is not known yet). */
+  booting: boolean;
+}
+
 export interface PreferencesWindowDeps {
   modelManager: ModelManager;
   preferencesStore: PreferencesStore;
+  /** Read-only snapshot for the reply section. */
+  /** The tracker the reply server manager also uses (see ReplyServerManagerDeps). */
+  downloads: DownloadTracker;
+  replyStatus: () => ReplyUiStatus;
+  /** Re-applies the reply server with the saved preferences (Retry). */
+  replyRetry: () => Promise<void>;
   /** Restart-required fields that differ from the prefs the app booted with. */
   restartStatus: () => Promise<string[]>;
   /** Current permissions; `probeAutomation` runs the osascript probe (it can raise the macOS prompt). */
@@ -63,11 +100,30 @@ export interface PreferencesWindowDeps {
 export class PreferencesWindow {
   private win: BrowserWindow | null = null;
   private handlersRegistered = false;
+  /** True while the shortcut recorder has focus (reported by the renderer). */
+  private recorderActive = false;
   private readonly savedListeners: Array<(prefs: Preferences) => void> = [];
-  /** Downloads in flight, by model id: Cancel aborts them and a reopened window re-attaches to them. */
-  private readonly downloads = new DownloadTracker();
+  /** Downloads in flight, by model id: Cancel aborts them and a reopened window
+   *  re-attaches to them. Shared with the reply server manager, whose own
+   *  downloads therefore show up on the cards too. */
+  private readonly downloads: DownloadTracker;
+  /** One throttle per model id, so the card is not redrawn on every stream chunk. */
+  private readonly progressGates = new Map<string, (final: boolean) => boolean>();
 
-  constructor(private readonly deps: PreferencesWindowDeps) {}
+  constructor(private readonly deps: PreferencesWindowDeps) {
+    this.downloads = deps.downloads;
+    this.downloads.onProgress((id, p) => {
+      let gate = this.progressGates.get(id);
+      if (!gate) {
+        // Once per stream chunk is far more than the card needs: ~10/s, plus the final 100%.
+        gate = createEmitGate(100);
+        this.progressGates.set(id, gate);
+      }
+      const final = p.bytes >= p.total;
+      if (gate(final)) this.send("prefs:download-progress", { id, bytes: p.bytes, total: p.total });
+      if (final) this.progressGates.delete(id);
+    });
+  }
 
   /** Register a listener called after every successful save with the saved prefs. */
   onSaved(cb: (prefs: Preferences) => void): void {
@@ -102,11 +158,30 @@ export class PreferencesWindow {
     this.win = win;
     win.once("ready-to-show", () => win.show());
     this.registerHandlers();
+    // While the recorder has focus, ⌘Q/⌘W/⌘H/⌘M/⌘Tab/⌘Space/⌘,/⌘` would run their
+    // menu or system action instead of being recorded. before-input-event runs
+    // before the menu shortcuts and the page, so swallowing them here keeps the
+    // window alive; the renderer is told so it can explain the refusal.
+    win.webContents.on("before-input-event", (event, input) => {
+      if (!this.recorderActive || input.type !== "keyDown") return;
+      if (!isSystemReservedKeyEvent(input)) return;
+      event.preventDefault();
+      this.send("prefs:reserved-key");
+    });
     win.on("closed", () => {
+      this.recorderActive = false;
       // Closing the window leaves downloads running; their progress just has no listener.
       if (this.win === win) this.win = null;
     });
     await win.loadFile(join(APP_ROOT, "src", "renderer", "preferences.html"), tab ? { hash: tab } : undefined);
+  }
+
+  private async iconFor(appPath: string): Promise<string | null> {
+    try {
+      return (await app.getFileIcon(appPath, { size: "small" })).toDataURL();
+    } catch {
+      return null;
+    }
   }
 
   private send(channel: string, ...args: unknown[]): void {
@@ -156,30 +231,35 @@ export class PreferencesWindow {
     ipcMain.handle("prefs:list-models", async () => {
       const whisper = await Promise.all(WHISPER_MODELS.map((m) => describeModel(this.deps.modelManager, this.downloads, m)));
       const llm = await Promise.all(LLM_MODELS.map((m) => describeModel(this.deps.modelManager, this.downloads, m)));
-      return { whisper, llm, languages: LANGUAGES };
+      // Reply models are described like the others; the tier layers its own name
+      // and the benchmark text (shown collapsed) on top: one card per tier.
+      const reply = await Promise.all(
+        replyCards().map(async (card) => {
+          const model = getModelById("reply", card.id);
+          if (!model) throw new Error(`Reply card references an unknown model: ${card.id}`);
+          return {
+            ...(await describeModel(this.deps.modelManager, this.downloads, model)),
+            label: card.label,
+            description: card.description,
+            details: card.details,
+            tierId: card.tierId,
+          };
+        }),
+      );
+      return { whisper, llm, reply, languages: LANGUAGES };
     });
 
-    ipcMain.handle("prefs:download-model", async (_e, args: { kind: "whisper" | "llm"; id: string }) => {
-      const list = args.kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
+    ipcMain.handle("prefs:download-model", async (_e, args: { kind: "whisper" | "llm" | "reply"; id: string }) => {
+      const list = args.kind === "whisper" ? WHISPER_MODELS : args.kind === "llm" ? LLM_MODELS : REPLY_MODELS;
       const desc = list.find((m) => m.id === args.id);
       if (!desc) throw new Error(`Unknown model: ${args.kind}/${args.id}`);
       // Already running (e.g. the window was closed and reopened mid-download):
       // hand back the same promise, so the caller resolves when it really ends.
       if (!this.downloads.isActive(desc.id) && (await this.deps.modelManager.isInstalled(desc))) return;
       return this.downloads.start(desc.id, async (signal, report) => {
-        // Once per stream chunk is far more than the card needs: ~10/s, plus the final 100%.
-        const gate = createEmitGate(100);
         try {
-          await this.deps.modelManager.download(
-            desc,
-            (p) => {
-              report(p);
-              if (gate(p.bytes >= p.total)) {
-                this.send("prefs:download-progress", { id: desc.id, bytes: p.bytes, total: p.total });
-              }
-            },
-            { signal },
-          );
+          // Progress reaches the card through the tracker's listener (constructor).
+          await this.deps.modelManager.download(desc, report, { signal });
         } catch (err) {
           // Never forward raw messages: they can carry URLs and 64-char hashes.
           throw new Error(downloadErrorText(err));
@@ -200,13 +280,13 @@ export class PreferencesWindow {
       });
     });
 
-    ipcMain.handle("prefs:delete-model", async (_e, args: { kind: "whisper" | "llm"; id: string }) => {
-      const list = args.kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
+    ipcMain.handle("prefs:delete-model", async (_e, args: { kind: "whisper" | "llm" | "reply"; id: string }) => {
+      const list = args.kind === "whisper" ? WHISPER_MODELS : args.kind === "llm" ? LLM_MODELS : REPLY_MODELS;
       const desc = list.find((m) => m.id === args.id);
       if (!desc) throw new Error(`Unknown model: ${args.kind}/${args.id}`);
       // Don't allow deleting the active model — that would break the next app start.
       const prefs = await this.deps.preferencesStore.load();
-      const selectedKey = args.kind === "whisper" ? prefs.whisperModelId : prefs.llmModelId;
+      const selectedKey = args.kind === "whisper" ? prefs.whisperModelId : args.kind === "llm" ? prefs.llmModelId : prefs.replyModelId;
       if (selectedKey === args.id) {
         throw new Error("Can't delete the active model. Choose another model first.");
       }
@@ -216,6 +296,44 @@ export class PreferencesWindow {
       // Also drops a leftover <file>.partial; errors other than "not found" propagate to the UI.
       await this.deps.modelManager.deleteModel(desc);
     });
+
+    // Add app…: pick a .app in /Applications, read its bundle id for the list.
+    ipcMain.handle("prefs:pick-app", async (): Promise<AppInfo | null> => {
+      const options = {
+        defaultPath: "/Applications",
+        properties: ["openFile" as const],
+        filters: [{ name: "Applications", extensions: ["app"] }],
+      };
+      const parent = this.win && !this.win.isDestroyed() ? this.win : null;
+      const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+      const appPath = result.canceled ? undefined : result.filePaths[0];
+      if (!appPath) return null;
+      const bundleId = await readBundleId(appPath, execCommand);
+      if (!bundleId) throw new Error("Couldn't read this app's identifier. Choose an application from /Applications.");
+      return { bundleId, name: appNameFromPath(appPath), icon: await this.iconFor(appPath) };
+    });
+
+    // Readable names (and icons) for the bundle ids in the list.
+    ipcMain.handle("prefs:resolve-apps", async (_e, ids: unknown): Promise<AppInfo[]> => {
+      if (!Array.isArray(ids)) return [];
+      const unique = [...new Set(ids.filter((id): id is string => typeof id === "string" && isBundleId(id)))].slice(0, 100);
+      // A handful of Spotlight queries at a time: up to 100 mdfind processes at once would stall the app.
+      return mapWithLimit(unique, 4, async (bundleId) => {
+        const appPath = await findAppPathByBundleId(bundleId, execCommand);
+        if (!appPath) return { bundleId, name: null, icon: null };
+        return { bundleId, name: appNameFromPath(appPath), icon: await this.iconFor(appPath) };
+      });
+    });
+
+    ipcMain.handle("prefs:retry-reply", () => this.deps.replyRetry());
+
+    ipcMain.handle("prefs:reply-status", (): ReplyUiStatus => this.deps.replyStatus());
+
+    ipcMain.on("prefs:recorder-active", (e, active: unknown) => {
+      if (this.win && !this.win.isDestroyed() && e.sender === this.win.webContents) this.recorderActive = active === true;
+    });
+
+    ipcMain.handle("prefs:validate-reply-hotkey", (_e, accelerator: string) => validateReplyAccelerator(accelerator));
 
     ipcMain.handle("prefs:permissions-status", (_e, opts?: { automation?: boolean }) =>
       this.deps.permissionsStatus(opts?.automation === true),

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, powerSaveBlocker, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -30,6 +30,19 @@ import { getModelsDir, modelFilePath } from "./utils/model-paths.js";
 import { SetupWizard } from "./setup-wizard.js";
 import { PreferencesWindow } from "./preferences-window.js";
 import { MediaController, createDefaultScripter } from "./media-control.js";
+import { AxContextReader } from "./ax-context-reader.js";
+import { parse as parseConversation } from "./utils/conversation-parser.js";
+import { ReplyChatClient } from "./reply-chat-client.js";
+import { ReplyClassifier } from "./reply-classifier.js";
+import { ReplyGenerator, GENERATOR_PREFIX } from "./reply-generator.js";
+import { filterVariants } from "./utils/variant-filter.js";
+import { ReplyServerManager } from "./reply-server-manager.js";
+import { ReplyCoordinator, hasExplicitProposal, VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR } from "./reply-coordinator.js";
+import { HotkeyManager } from "./hotkey-manager.js";
+import { DownloadTracker } from "./utils/download-tracker.js";
+import { reconcileReplyAccelerator, replyChangesToApply } from "./utils/reply-hotkey.js";
+import { IpcChannels } from "../shared/ipc-channels.js";
+import type { ReplyUiStatus } from "./preferences-window.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,8 +60,27 @@ const WHISPER_SERVER_BIN = join(BIN_DIR, "whisper-server");
 const LLAMA_SERVER_BIN = join(BIN_DIR, "llama-server");
 const VAD_MODEL = join(BIN_DIR, "ggml-silero-v6.2.0.bin");
 
+// The reply model lives in its own llama-server: a different model, and the
+// dictation cleanup stays untouched in the critical path (decision 5).
+// 18080 = cleanup, 18081 = whisper-server fallback, 18082 = replies.
+const REPLY_PORT = 18082;
+const REPLY_ENDPOINT = `http://127.0.0.1:${REPLY_PORT}`;
+const REPLY_CONTEXT_SIZE = 3072;
+const REPLY_CLASSIFY_TIMEOUT_MS = 8_000;
+const REPLY_GENERATE_TIMEOUT_MS = 10_000;
+
 const LOG_DIR = join(homedir(), "Library", "Logs", "open-flow");
 const PREFS_PATH = join(homedir(), "Library", "Application Support", "open-flow", "preferences.json");
+
+/** Set inside main() once both llama-server managers exist, so the fatal
+ *  startup-error handler at the bottom of this file can stop them before
+ *  app.exit(1) — app.exit() never emits will-quit, so nothing else would ask
+ *  either server to release its model / free its port before a relaunch
+ *  (found by review: four things between server-start and the end of main()
+ *  can throw — ptt.start(), the trust dialog, logger.error, menubar.create()
+ *  — and any of them left both llama-server processes running with their
+ *  models in RAM and port 18082 already occupied). */
+let stopServers: () => void = () => {};
 
 async function main(): Promise<void> {
   // Single-instance lock: if another open-flow is already running, exit
@@ -199,9 +231,26 @@ async function main(): Promise<void> {
   // Last Automation probe result: the probe runs osascript (and may raise the
   // macOS prompt), so Settings only re-runs it when the user clicks "Check again".
   let automationStatus: PermissionStatus = "unknown";
+  // Replaced by the reply-suggestions wiring further down.
+  let replyUiStatus: () => ReplyUiStatus = () => ({
+    serverState: "off",
+    serverError: null,
+    hotkeyRegistered: false,
+    nativeOk: false,
+    lastBlockedBundleId: null,
+    booting: true,
+  });
+  // Replaced by the reply-suggestions wiring further down.
+  let replyRetry: () => Promise<void> = async () => {};
+  // Shared by the Settings cards and the reply server manager, so a model the
+  // manager downloads is visible there and is never downloaded twice.
+  const downloadTracker = new DownloadTracker();
   const prefsWindow = new PreferencesWindow({
+    downloads: downloadTracker,
     modelManager,
     preferencesStore,
+    replyStatus: () => replyUiStatus(),
+    replyRetry: () => replyRetry(),
     restartStatus: async () => restartRequiredFields(bootPrefs, await preferencesStore.load()),
     permissionsStatus: async (probeAutomation) => {
       if (probeAutomation) automationStatus = await checkAutomationViaProbe();
@@ -272,6 +321,9 @@ async function main(): Promise<void> {
   let streamingWhisper: StreamingWhisperRunner | null = null;
   let bootWhisperServer: WhisperServer | null = null;
   let bootLlmServer: LLMServer | null = null;
+  let bootReplyServer: ReplyServerManager | null = null;
+  // Set once the reply-suggestions wiring below exists.
+  let bootReplyCleanup: (() => void) | null = null;
   let bootOverlay: OverlayWindow | null = null;
   // Set by the handler so a boot step still in flight doesn't start a server
   // after cleanup already ran.
@@ -287,6 +339,8 @@ async function main(): Promise<void> {
     streamingWhisper?.shutdown();
     bootWhisperServer?.stop();
     bootLlmServer?.stop();
+    bootReplyCleanup?.();
+    bootReplyServer?.stop();
     bootOverlay?.destroy();
     menubar.destroy();
   });
@@ -340,6 +394,54 @@ async function main(): Promise<void> {
     });
   };
 
+  // Both constructed here, ahead of the streaming-whisper block below, on
+  // purpose: its own stall handler references BOTH llmServer and
+  // replyServerManager, and a `const` referenced by a closure that is
+  // registered before the `const`'s own declaration line throws
+  // ReferenceError until that line executes (TDZ) — found by review, and
+  // (round 2) the same trap existed for llmServer too, left half-closed when
+  // only replyServerManager was moved. Neither construction has any
+  // dependency on anything computed below this point (llmServer needs only
+  // `llmModelPath` and `prefs.language`, both already resolved above;
+  // replyServerManager needs only `modelManager` and `logger`), so moving
+  // both ahead of the closure that captures them removes the race instead of
+  // papering over it with an optional-chained call.
+  const llmServer = new LLMServer({
+    binaryPath: LLAMA_SERVER_BIN,
+    modelPath: llmModelPath,
+    port: 18080,
+    contextSize: 1536,
+    // Prime the prefix cache with the actual cleanup template so the system
+    // instructions are already prefilled when the first dictation hits.
+    warmupPrompt: buildCleanupPrompt("test", prefs.language),
+    // Keep the GPU pipeline hot between dictations — without this every cleanup
+    // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
+    keepaliveMs: 20_000,
+  });
+  const replyServerManager = new ReplyServerManager({
+    createServer: (modelPath) =>
+      new LLMServer({
+        binaryPath: LLAMA_SERVER_BIN,
+        modelPath,
+        port: REPLY_PORT,
+        contextSize: REPLY_CONTEXT_SIZE,
+        startupTimeoutMs: 90_000,
+        // The generator's fixed instruction prefix, so it is already in the
+        // KV cache when the first hotkey lands.
+        warmupPrompt: GENERATOR_PREFIX,
+        keepaliveMs: 20_000,
+      }),
+    modelManager,
+    downloads: downloadTracker,
+    logger,
+  });
+  // Both server managers exist now: from here on, a fatal startup error can
+  // release the model RAM and the reply port instead of leaking them across
+  // app.exit(1) (Important 3 — see the module-level declaration above).
+  stopServers = () => { llmServer.stop(); replyServerManager.stop(); };
+  bootLlmServer = llmServer;
+  bootReplyServer = replyServerManager;
+
   // Streaming Whisper via the in-process native addon. Model loads once
   // into a whisper_context that stays in RAM; each utterance is a
   // start → feedSamples* → processChunk* → finalize cycle.
@@ -384,6 +486,13 @@ async function main(): Promise<void> {
         phase: s.phase,
         timeoutMs: s.timeoutMs,
       });
+      // app.exit() does not emit will-quit, so the child llama-server
+      // processes (dictation cleanup, and — if the reply feature is on —
+      // the second, larger model) are not asked to stop by anything else:
+      // without this they outlive this process with their RAM still held,
+      // and the relaunched instance finds their ports already occupied.
+      llmServer.stop();
+      replyServerManager.stop();
       app.relaunch();
       app.exit(0);
     });
@@ -418,21 +527,8 @@ async function main(): Promise<void> {
     timeoutMs: 60_000,
   });
 
-  // Start the LLM server in the background. Model loads once, stays warm,
-  // per-cleanup latency drops from ~3-5s (cold spawn) to ~100-500ms.
-  const llmServer = new LLMServer({
-    binaryPath: LLAMA_SERVER_BIN,
-    modelPath: llmModelPath,
-    port: 18080,
-    contextSize: 1536,
-    // Prime the prefix cache with the actual cleanup template so the system
-    // instructions are already prefilled when the first dictation hits.
-    warmupPrompt: buildCleanupPrompt("test", prefs.language),
-    // Keep the GPU pipeline hot between dictations — without this every cleanup
-    // pays the ~2.5s cold-start (the prior build showed 2.6-3s cleanups).
-    keepaliveMs: 20_000,
-  });
-  bootLlmServer = llmServer;
+  // llmServer itself is constructed earlier, above the streaming-whisper
+  // block (see the comment there) — it only gets started here.
   // Only run llama-server when LLM cleanup is enabled. With it off (whisper-only
   // mode) the model would just sit in RAM and its keepalive would contend with
   // whisper for the GPU every 20s — pure waste. Toggling the pref on at runtime
@@ -464,6 +560,12 @@ async function main(): Promise<void> {
   });
   const injector = createDefaultTextInjector(logger);
   const orchestrator = new AudioOrchestrator({ maxDurationMs: 60_000, sampleRate: SAMPLE_RATE });
+
+  // Global busy flag: prevent a second 'stop' from firing while a pipeline
+  // is still running. The coordinator has its own state guard but stop
+  // events are debounced through async setTimeout(250) so two stops can
+  // both pass the guard if they happen in the same tick.
+  let pipelineBusy = false;
 
   const coordinator = new PipelineCoordinator({
     transcribe: async ({ wavBytes, language }) => {
@@ -544,6 +646,205 @@ async function main(): Promise<void> {
     void mediaController.resume().catch(swallowMcError("resume"));
   });
 
+  // ── Reply suggestions (optional feature, off by default) ──
+  // Degradation L6: if the addon cannot be loaded the feature disables itself
+  // for the session and the rest of the app starts normally.
+  let axReader: AxContextReader | null = null;
+  try {
+    axReader = new AxContextReader({ appRoot: APP_ROOT, isPackaged: app.isPackaged, logger });
+    await logger.info("ax_context addon loaded");
+  } catch (err) {
+    await logger.error("ax_context addon not loadable — reply suggestions disabled for this session", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // replyServerManager itself is constructed earlier, above the streaming-
+  // whisper block (see the comment there) — only its client/classifier/
+  // generator need to wait for this point.
+  // The port is fixed, so one client is enough for the app's lifetime; the
+  // manager's isReady() is what gates the calls.
+  const replyClient = new ReplyChatClient({ endpoint: REPLY_ENDPOINT });
+  const replyClassifier = new ReplyClassifier({ client: replyClient, timeoutMs: REPLY_CLASSIFY_TIMEOUT_MS, logger });
+  const replyGenerator = new ReplyGenerator({ client: replyClient, timeoutMs: REPLY_GENERATE_TIMEOUT_MS, logger });
+
+  let replyHotkeyRegistered = false;
+  const replyCoordinator = axReader === null ? null : new ReplyCoordinator({
+    reader: axReader,
+    parse: parseConversation,
+    classify: (input) => replyClassifier.classify(input),
+    generate: (input) => replyGenerator.generate(input),
+    filterVariants,
+    overlay,
+    shortcuts: {
+      register: (accelerator, cb) => globalShortcut.register(accelerator, cb),
+      unregister: (accelerator) => globalShortcut.unregister(accelerator),
+    },
+    server: {
+      isReady: () => replyServerManager.isReady(),
+      getState: () => replyServerManager.getState(),
+      recover: () => replyServerManager.recover(),
+    },
+    inject: (text) => injector.inject(text),
+    copyToClipboard: (text) => clipboard.writeText(text),
+    loadPrefs: async () => {
+      const p = await preferencesStore.load();
+      return {
+        enabled: p.replySuggestionsEnabled,
+        userDisplayName: p.userDisplayName,
+        appsMode: p.replyAppsMode,
+        apps: p.replyApps,
+      };
+    },
+    // Mutual exclusion in the other direction: no reply run while a dictation
+    // is anywhere but idle.
+    dictationBusy: () => pipelineBusy || coordinator.getState() !== "idle",
+    logger,
+    onTrustRequired: () => {
+      dialog.showMessageBox({
+        type: "warning",
+        title: "open-flow needs Accessibility access",
+        message: "Reply suggestions read the conversation under the mouse",
+        detail: "Open System Settings → Privacy & Security → Accessibility and enable open-flow.",
+        buttons: ["Open System Settings", "Close"],
+        defaultId: 0,
+        cancelId: 1,
+      }).then((r) => {
+        if (r.response === 0) {
+          shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+        }
+      }).catch(() => undefined);
+    },
+    // Wired because the Task 1 experiment came out MITIGAZIONE — see the
+    // module's own doc comment on hasExplicitProposal.
+    preGate: hasExplicitProposal,
+  });
+
+  // The reply hotkey is an impulse, not a toggle: HotkeyManager alternates
+  // start/stop, so reset() right after 'start' makes every press a start.
+  function wireReplyHotkeyStart(hk: HotkeyManager): void {
+    hk.on("start", () => {
+      hk.reset();
+      if (replyCoordinator) void replyCoordinator.onHotkey();
+    });
+  }
+  let replyAccelerator = reconcileReplyAccelerator(prefs.replySuggestionsHotkey, "").accelerator;
+  let replyHotkey = new HotkeyManager({ accelerator: replyAccelerator });
+  wireReplyHotkeyStart(replyHotkey);
+
+  // Reads the saved accelerator fresh every time (same "read prefs from disk
+  // on every reconcile" pattern as the coordinator's own loadPrefs), so a
+  // hotkey saved in Preferences takes effect without a restart.
+  // HotkeyManager's accelerator is immutable once constructed (opts is
+  // readonly): a change can only take effect by unregistering the old
+  // manager and constructing a fresh one — reconcileReplyAccelerator (tested
+  // in utils/reply-hotkey.ts) decides the value and whether that swap is
+  // needed; this function only carries out the swap and the register/
+  // unregister side effects.
+  async function applyReplyHotkey(): Promise<void> {
+    const saved = (await preferencesStore.load()).replySuggestionsHotkey;
+    const { accelerator, rebuild } = reconcileReplyAccelerator(saved, replyAccelerator);
+    if (rebuild) {
+      if (replyHotkeyRegistered) {
+        replyHotkey.unregister();
+        replyHotkeyRegistered = false;
+      }
+      replyAccelerator = accelerator;
+      replyHotkey = new HotkeyManager({ accelerator: replyAccelerator });
+      wireReplyHotkeyStart(replyHotkey);
+    }
+
+    const wanted = replyServerManager.getState() === "ready" && replyCoordinator !== null;
+    if (wanted && !replyHotkeyRegistered) {
+      const r = replyHotkey.register();
+      replyHotkeyRegistered = r.ok;
+      void logger.info("reply hotkey", { accelerator: replyAccelerator, registered: r.ok });
+    } else if (!wanted && replyHotkeyRegistered) {
+      replyHotkey.unregister();
+      replyHotkeyRegistered = false;
+      void logger.info("reply hotkey released");
+    }
+  }
+  replyServerManager.onStateChange((state) => {
+    void applyReplyHotkey();
+    if (state !== "ready" && replyCoordinator) replyCoordinator.dismiss("quit");
+  });
+  replyServerManager.onDownloadProgress((p) => {
+    void logger.debug("reply model download", { bytes: p.bytes, total: p.total });
+  });
+
+  // Overlay → main, same pattern as pipeline:cancel.
+  ipcMain.on(IpcChannels.ReplyChoose, (_e, id: number) => {
+    if (replyCoordinator && Number.isInteger(id)) void replyCoordinator.accept(id);
+  });
+  ipcMain.on(IpcChannels.ReplyDismiss, () => { replyCoordinator?.dismiss("click"); });
+  ipcMain.on(IpcChannels.ReplyHover, () => { replyCoordinator?.onHover(); });
+
+  // The Settings window reads the reply state through this; until the block
+  // above ran (it can open while models still load) the stub reports `booting`.
+  replyUiStatus = (): ReplyUiStatus => ({
+    serverState: replyServerManager.getState(),
+    serverError: replyServerManager.lastError(),
+    hotkeyRegistered: replyHotkeyRegistered,
+    nativeOk: axReader !== null,
+    lastBlockedBundleId: replyCoordinator?.lastBlockedBundleId() ?? null,
+    booting: false,
+  });
+  // Quit-time teardown of everything above (the will-quit handler is registered
+  // much earlier, before these objects exist).
+  bootReplyCleanup = () => {
+    replyCoordinator?.dismiss("quit");
+    if (replyHotkeyRegistered) replyHotkey.unregister();
+    for (const acc of [...VARIANT_ACCELERATORS, ESCAPE_ACCELERATOR]) globalShortcut.unregister(acc);
+  };
+
+  // Applies the saved reply preferences: the server only when the toggle or the
+  // model changed, the hotkey only when the toggle or the shortcut changed.
+  // Mirrors the startup guard below (`prefs.replySuggestionsEnabled &&
+  // replyCoordinator`): without `replyCoordinator !== null` here, checking
+  // the box when the native addon failed to load starts the 2.5-5 GB
+  // model server for a feature applyReplyHotkey can never register a
+  // hotkey for (found by review — Important 2).
+  const applyReplyServer = (p: { replySuggestionsEnabled: boolean; replyModelId: string }): Promise<void> =>
+    replyServerManager.apply({ enabled: p.replySuggestionsEnabled && replyCoordinator !== null, replyModelId: p.replyModelId })
+      .then(applyReplyHotkey)
+      .catch((err: unknown) => logger.error("reply server apply failed", {
+        message: err instanceof Error ? err.message : String(err),
+      }));
+  let lastReplyPrefs = { ...prefs };
+  prefsWindow.onSaved((next) => {
+    const change = replyChangesToApply(lastReplyPrefs, next);
+    lastReplyPrefs = { ...next };
+    if (change.server) {
+      void applyReplyServer(next);
+    } else if (change.hotkey) {
+      void applyReplyHotkey().catch((err: unknown) => logger.error("reply hotkey apply failed", {
+        message: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  });
+  // The explicit Retry after a failed start: the saved values did not change, so
+  // onSaved would (rightly) skip it.
+  replyRetry = async () => {
+    const saved = await preferencesStore.load();
+    await applyReplyServer(saved);
+  };
+
+  // `quitting` is checked like for whisper/llama: a quit during boot must not
+  // start a model server that the will-quit teardown has already passed.
+  if (prefs.replySuggestionsEnabled && replyCoordinator && !quitting) {
+    // Not awaited: the app must not wait for a 2.5-5 GB model to load.
+    void replyServerManager.apply({ enabled: true, replyModelId: prefs.replyModelId })
+      .then(applyReplyHotkey)
+      .catch((err: unknown) => logger.error("reply server start failed", {
+        message: err instanceof Error ? err.message : String(err),
+      }));
+  } else if (!quitting) {
+    await logger.info("reply suggestions off — no second llama-server", {
+      enabled: prefs.replySuggestionsEnabled, nativeOk: axReader !== null,
+    });
+  }
+
   // Diagnostic: log every raw NSEvent we receive so duplicate-fire bugs
   // can be diagnosed from the log. `detail` carries the keyCode behind a CHORD
   // (which distinguishes a genuine Option shortcut from a spurious one) and the
@@ -552,13 +853,8 @@ async function main(): Promise<void> {
     void logger.info("PTT rawEvent", { state, detail });
   });
 
-  // Global busy flag: prevent a second 'stop' from firing while a pipeline
-  // is still running. The coordinator has its own state guard but stop
-  // events are debounced through async setTimeout(250) so two stops can
-  // both pass the guard if they happen in the same tick.
-  let pipelineBusy = false;
-
   ptt.on("arm", () => {
+    replyCoordinator?.onDictationArm();
     if (pipelineBusy) {
       void logger.warn("arm ignored: pipeline busy");
       return;
@@ -707,5 +1003,12 @@ async function main(): Promise<void> {
 main().catch((err) => {
   // eslint-disable-next-line no-console
   console.error("Fatal startup error:", err);
+  // app.exit(1) never emits will-quit: without this, a throw anywhere
+  // between server-start and the end of main() (ptt.start(), the trust
+  // dialog, logger.error, menubar.create() all can throw) leaves both
+  // llama-server processes running with their models in RAM and port 18082
+  // occupied, so the next launch can't start its own reply server (found by
+  // review — Important 3).
+  stopServers();
   app.exit(1);
 });

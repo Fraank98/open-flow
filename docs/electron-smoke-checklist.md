@@ -66,7 +66,7 @@ Remove open-flow from Accessibility (or start from a fresh install) and launch i
 
 ## Settings
 
-Open it from the tray menu: **Settings…**. The window is 640×600, resizable down to 560×480, follows the system light/dark appearance, and has four tabs: General, Dictation, Models, Advanced. Arrow keys move between tabs; the last tab you used is remembered. There is no Save button: every control applies as soon as you change it, and the panel shows a short confirmation ("Saved").
+Open it from the tray menu: **Settings…**. The window is 640×600, resizable down to 560×480, follows the system light/dark appearance, and has five tabs: General, Dictation, Models, Reply suggestions, Advanced. Arrow keys move between tabs; the last tab you used is remembered. There is no Save button: every control applies as soon as you change it, and the panel shows a short confirmation ("Saved").
 
 19. **General:** "Open open-flow at login" (check System Settings › General › Login Items follows it), Language, the Dictation key line "Hold ⌥ Option (left or right)", and a Permissions list with Microphone, Accessibility and Automation. Not-granted rows have **Open System Settings**. After changing a permission in System Settings and returning, the list refreshes; **Check again** also re-runs the Automation check. Tray › **Check permissions…** opens Settings on this tab.
 20. **Dictation:** "Clean up with the local model", "Spoken punctuation commands" and the Dictionary (placeholder "e.g. Kubernetes"; Enter or **Add**; × removes a term). Add a term, then dictate it: it applies without a restart.
@@ -84,6 +84,24 @@ Open it from the tray menu: **Settings…**. The window is 640×600, resizable d
 24. **Short tap:** Tap Option for less than ~150 ms. Nothing happens: no overlay, no paste. Holding Option and pressing another key (e.g. Option+arrow) must not dictate or must cancel a recording in progress.
 25. **Pause + resume:** Tray menu → "Pause dictation" (the first line reads "Paused"). Holding Option now does nothing. Choose "Resume dictation", dictation works again.
 26. **Quit:** Tray menu → "Quit open-flow". App exits cleanly; no orphan processes (`ps -ef | grep -E "(open-flow|electron|whisper-server|llama-server)"` should show none).
+
+## Reply suggestions (optional feature)
+
+Off by default. While it is off, no second `llama-server` may exist. Do not run
+this against the installed `/Applications/open-flow.app`: build and launch a
+throwaway dev copy (`npm run build && npx electron dist/main/index.js`).
+
+27. **Off:** `lsof -iTCP:18082 -sTCP:LISTEN` prints nothing. `Command+Control+R` over any window does nothing and no line mentioning `reply` appears in `~/Library/Logs/open-flow/*.log`. Dictation still works.
+28. **Settings › Reply suggestions, requirements:** the toggle is disabled and the line under it reads "To turn this on: enter your name and download the Standard model." (it names the selected model, and drops each part once done). Nothing in this tab shows "Restart required", and the status line at the bottom only reports what you just did here ("Saved", "Downloaded Standard").
+29. **Models:** two cards, Standard (Gemma 3 4B, 2.5 GB, ~3.1 GB RAM) and Maximum quality (Gemma 4 E4B, 5.0 GB, ~5.8 GB RAM). "Benchmark details" opens a short paragraph and stays open while a download reports progress. **Download** shows progress with **Cancel** (cancel, then Download again resumes); click Download then **Delete** or **Use** on the other card while it runs: every button keeps working. Entering your name and finishing the Standard download enables the toggle; switch it on.
+30. **Status sentence:** under the toggle, "Model: downloading…" / "Model: loading…" then "Model: ready · ⌃⌘R active", without a restart; `lsof -iTCP:18082 -sTCP:LISTEN` now lists exactly one `llama-server` (note its memory in Activity Monitor). Switch the toggle off: the sentence disappears, the process is gone within a few seconds and memory drops back. To see "Model: failed — Retry", quit with the model file missing or corrupt and switch the toggle on; Retry re-applies.
+31. **Shortcut recorder:** click the Shortcut field ("Press shortcut…") and press `⌥⌘R`: it is refused with "Option is used for dictation…" under the field and nothing is saved (reopen Settings: still the old shortcut). Press `⌘1`: "1, 2, 3 and Esc are the pill's shortcuts…". Press a lone `R`: "Add at least one of Command, Control or Shift." Press `⌃⇧⌘K`: saved at once, the status reads "⌃⇧⌘K active", and the new shortcut (not the old one) raises the pill. Esc cancels; Tab still moves focus. Note any `⌘`-combination macOS or the app menu swallows before the field sees it (`⌘W`, `⌘Q`, `⌘H`, `⌘M`). If another app owns the shortcut the line reads "Shortcut taken by another app — choose another".
+32. **Apps:** the list shows each app with its icon and name (Slack, Mail, Brave Browser) and the bundle id in small type. **Add app…** opens a chooser in /Applications showing only applications; picking one (try an app Spotlight does not index, e.g. from an external disk) adds it by name; cancelling adds nothing. The mode popup relabels the list ("Apps to read" / "Apps to exclude") and warns when the list is empty. After a hotkey press over an app that is not listed, "Add <app name>" appears and adds it.
+33. **Pill:** with the toggle on and the model ready, in Slack (the other person wrote last) hover the messages and press `Command+Control+R`. Three proposals appear with `⌘1 ⌘2 ⌘3`. `⌘2` or a click pastes that proposal into the reply field; nothing is sent. `Esc` closes the pill, and it closes by itself after 20 s (the timer restarts while the pointer is over it).
+34. **Other apps and cases:** Mail (a received message with the reply window open) and Brave (a web conversation) work like Slack. On a document, an empty field, a thread where you wrote last, or a question that asks for information, the pill flashes "No suggestion" and never says why. Over an app that is not in the list the pill says the app is not enabled; Settings then offers to add that app.
+35. **Dictation wins:** raise the pill, then hold Option: the pill closes and dictation starts.
+36. **Privacy:** `grep -iE "review|preventivo|INTERLOCUTORE" ~/Library/Logs/open-flow/*.log` finds nothing, with Debug logging on too.
+37. **Two monitors:** the pill appears on the monitor under the pointer, fully visible, centred on the usable area when the Dock is on a side, and again after unplugging and replugging a monitor.
 
 ## If something fails
 

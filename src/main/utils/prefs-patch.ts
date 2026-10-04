@@ -1,5 +1,7 @@
 import { getModelById } from "../model-catalog.js";
 import { isSupportedLanguage } from "./languages.js";
+import { validateReplyAccelerator } from "./reply-hotkey.js";
+import { isBundleId } from "./app-bundle.js";
 import type { Preferences } from "../preferences-store.js";
 
 /** Fields the Settings window may write. Everything else (setup state, hotkey) is main-owned. */
@@ -14,10 +16,24 @@ export type SettingsPatch = Partial<
     | "dictionary"
     | "whisperModelId"
     | "llmModelId"
+    | "replySuggestionsEnabled"
+    | "userDisplayName"
+    | "replySuggestionsHotkey"
+    | "replyModelId"
+    | "replyAppsMode"
+    | "replyApps"
   >
 >;
 
-const BOOLEAN_FIELDS = ["debugLogging", "useLlmCleanup", "launchAtLogin", "spokenPunctuation"] as const;
+const BOOLEAN_FIELDS = [
+  "debugLogging",
+  "useLlmCleanup",
+  "launchAtLogin",
+  "spokenPunctuation",
+  "replySuggestionsEnabled",
+] as const;
+
+const DISPLAY_NAME_MAX = 100;
 
 /**
  * Validates a partial coming over IPC: keeps only settable fields with the right
@@ -38,6 +54,26 @@ export function sanitizePrefsPatch(input: unknown): SettingsPatch {
   }
   if (typeof raw.llmModelId === "string" && getModelById("llm", raw.llmModelId)) {
     out.llmModelId = raw.llmModelId;
+  }
+  if (typeof raw.replyModelId === "string" && getModelById("reply", raw.replyModelId)) {
+    out.replyModelId = raw.replyModelId;
+  }
+  if (raw.replyAppsMode === "allowlist" || raw.replyAppsMode === "blocklist") out.replyAppsMode = raw.replyAppsMode;
+  if (typeof raw.userDisplayName === "string") out.userDisplayName = raw.userDisplayName.trim().slice(0, DISPLAY_NAME_MAX);
+  if (typeof raw.replySuggestionsHotkey === "string") {
+    const accelerator = raw.replySuggestionsHotkey.trim();
+    if (validateReplyAccelerator(accelerator).ok) out.replySuggestionsHotkey = accelerator;
+  }
+  if (Array.isArray(raw.replyApps) && raw.replyApps.every((a) => typeof a === "string")) {
+    const seen = new Set<string>();
+    const apps: string[] = [];
+    for (const a of raw.replyApps as string[]) {
+      const id = a.trim();
+      if (!isBundleId(id) || seen.has(id.toLowerCase())) continue;
+      seen.add(id.toLowerCase());
+      apps.push(id);
+    }
+    out.replyApps = apps;
   }
   if (Array.isArray(raw.dictionary) && raw.dictionary.every((t) => typeof t === "string")) {
     const seen = new Set<string>();

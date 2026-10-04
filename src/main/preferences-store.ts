@@ -1,5 +1,6 @@
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { REPLY_HOTKEY_DEFAULT } from "./utils/reply-hotkey.js";
 
 /** Wizard steps in order; saved so an interrupted setup resumes where it stopped. */
 export type SetupStep = "welcome" | "permissions" | "tier" | "download" | "ready";
@@ -26,6 +27,24 @@ export interface Preferences {
   /** User-defined preferred spellings normalized in the transcript and used to
    *  bias Whisper (proper nouns, product names, jargon). */
   dictionary: string[];
+  /** The name the user appears with in chats and mails ("Danilo", "Danilo
+   *  Franco"). The reply-suggestions parser compares it — normalized on case,
+   *  accents and whitespace, on the full string and on its first token — with
+   *  the speaker of each turn to tell the user's turns from the counterpart's.
+   *  Empty means "not configured": the feature cannot be enabled without it. */
+  userDisplayName: string;
+  /** Reply suggestions (context → three proposed replies). Off by default:
+   *  off means no second llama-server, no extra RAM, identical behaviour. */
+  replySuggestionsEnabled: boolean;
+  /** Electron accelerator. Must not contain Alt/Option: dictation holds
+   *  Option through the native modifier monitor (utils/reply-hotkey.ts). */
+  replySuggestionsHotkey: string;
+  /** Id in REPLY_MODELS, chosen through REPLY_TIERS in the UI. */
+  replyModelId: string;
+  /** allowlist: read only the listed apps (default). blocklist: read all but them. */
+  replyAppsMode: "allowlist" | "blocklist";
+  /** Bundle ids. Compared case-insensitively by AxContextReader. */
+  replyApps: string[];
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -42,6 +61,12 @@ export const DEFAULT_PREFS: Preferences = {
   launchAtLogin: true,
   spokenPunctuation: false,
   dictionary: [],
+  userDisplayName: "",
+  replySuggestionsEnabled: false,
+  replySuggestionsHotkey: REPLY_HOTKEY_DEFAULT,
+  replyModelId: "gemma-3-4b",
+  replyAppsMode: "allowlist",
+  replyApps: ["com.tinyspeck.slackmacgap", "com.apple.mail", "com.brave.Browser"],
 };
 
 export class PreferencesStore {

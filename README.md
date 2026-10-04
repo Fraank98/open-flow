@@ -27,6 +27,7 @@
 <p align="center">
   <a href="#install">Install</a> ·
   <a href="#using-it">Using it</a> ·
+  <a href="#reply-suggestions-alpha-optional-off-by-default">Reply suggestions</a> ·
   <a href="#models-and-licenses">Models</a> ·
   <a href="#troubleshooting">Troubleshooting</a> ·
   <a href="#build-from-source">Build from source</a> ·
@@ -70,9 +71,17 @@ Dictation tools that feel instant usually send your voice to a server. open-flow
       Menubar-only. Pauses Spotify / Apple Music while you dictate and resumes them afterwards. Restores your clipboard after pasting.
     </td>
   </tr>
+  <tr>
+    <td valign="top">
+      <b>Reply suggestions (alpha, optional)</b><br>
+      A shortcut reads the conversation under your mouse and proposes three replies from a second local model. Off by default — see <a href="#reply-suggestions-alpha-optional-off-by-default">Reply suggestions</a>.
+    </td>
+    <td valign="top">
+      <b>Three quality tiers</b><br>
+      From ~1 GB to ~3.7 GB of models, picked at setup. The Whisper model and the cleanup model can be changed separately in Settings › Models.
+    </td>
+  </tr>
 </table>
-
-Three quality tiers, from ~1 GB to ~3.7 GB of models, are picked at setup; the Whisper model and the cleanup model can be changed separately in Settings › Models.
 
 ## Quick start
 
@@ -134,6 +143,24 @@ Three quality tiers, from ~1 GB to ~3.7 GB of models, are picked at setup; the W
 - **Menubar menu:** status line, *Pause dictation* / *Resume dictation*, *Settings…*, *Check permissions…*, *Open Logs*, *Relaunch open-flow*, *Quit open-flow*.
 - **Open at login** is on by default; turn it off in Settings › General.
 
+## Reply suggestions (alpha, optional, off by default)
+> **Alpha.** This feature is still being tested and improved. Suggestions can be wrong or miss context — always read them before sending.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/settings-reply-dark.png">
+    <img src="docs/media/settings-reply-light.png" width="520" alt="Settings, Reply suggestions tab with the Alpha badge: the feature switched on with the Standard reply model ready, your name and the Command+Control+R shortcut.">
+  </picture>
+</p>
+
+A second feature, separate from dictation: press <kbd>⌘⌃R</kbd> (<kbd>Command</kbd>+<kbd>Control</kbd>+<kbd>R</kbd>, configurable) over a chat or an email and open-flow proposes three replies.
+
+- **How it works.** It reads the conversation under the mouse pointer through the macOS Accessibility API, checks with a local model that you are being asked something it can answer, and shows three proposals in a small pill. Press <kbd>⌘1</kbd>, <kbd>⌘2</kbd> or <kbd>⌘3</kbd> (or click a row) to paste one into the reply field. Nothing is sent for you. <kbd>Esc</kbd> closes the pill, and it closes by itself after 20 seconds.
+- **Which apps.** Only the apps you list, and only the window under the mouse while its app is frontmost. Slack, Mail and Brave are listed by default; add or remove apps in Settings.
+- **Privacy.** Everything stays on your Mac: the conversation is read, processed by a local model on `127.0.0.1`, and discarded. Nothing read or generated is written to disk or to the logs.
+- **Turning it on.** Settings › Reply suggestions (marked Alpha). Enter the name you appear under in your chats, download a reply model (Standard, Gemma 3 4B, ~2.5 GB, or Maximum quality, Gemma 4 E4B, ~5 GB), then switch it on. While it is off no extra process runs and no extra memory is used; on, it adds a second model in RAM (about 3 GB for Standard, 6 GB for Maximum quality).
+- **Caveats.** The shortcut cannot contain Option (dictation uses it). While the pill is on screen, <kbd>⌘1</kbd>/<kbd>⌘2</kbd>/<kbd>⌘3</kbd> and <kbd>Esc</kbd> do not reach the app underneath; in browsers those normally switch tabs.
+
 ## Privacy
 
 Everything runs on your Mac. The only network traffic open-flow generates is the one-time download of the models you pick, from Hugging Face. There is no telemetry, no crash reporting, no account, no update check. Speech-to-text and cleanup talk to local processes on `127.0.0.1` only — you can confirm it in the sources: the only `fetch()` targets are `huggingface.co` and `127.0.0.1`.
@@ -191,6 +218,8 @@ All models are downloaded from Hugging Face on demand and are not bundled in the
 | Whisper `small`, `large-v3-turbo` (ggml, [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp)) | MIT |
 | Qwen2.5-0.5B-Instruct, Qwen2.5-1.5B-Instruct (GGUF Q4_K_M) | Apache-2.0 |
 | Qwen2.5-3B-Instruct (GGUF Q4_K_M) | [Qwen Research License](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/LICENSE) — **non-commercial use only** |
+| Gemma 3 4B instruct (GGUF Q4_K_M, [unsloth/gemma-3-4b-it-GGUF](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF), used only by Reply suggestions) | [Gemma Terms of Use](https://ai.google.dev/gemma/terms) and [Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy); commercial use allowed |
+| Gemma 4 E4B instruct (GGUF Q4_K_M, [unsloth/gemma-4-E4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF), used only by Reply suggestions) | [Apache-2.0](https://ai.google.dev/gemma/docs/gemma_4_license) |
 | Silero VAD v6.2 (bundled, voice-activity detection) | MIT |
 
 open-flow itself is MIT, but that does not change the models' terms. If you use open-flow for paid work, choose the Fast or Balanced tier (or disable LLM cleanup). Full notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -279,6 +308,7 @@ flowchart LR
     A --> W["Streaming Whisper<br/><sub>whisper_stream addon</sub>"]
     W --> P["Spoken punctuation"] --> D["Custom dictionary"]
     D --> L["LLM cleanup<br/><sub>llama-server, 127.0.0.1</sub>"] --> V["Paste<br/><sub>⌘V via osascript</sub>"]
+    K2["⌘⌃R"] -.-> R["Reply suggestions<br/><sub>second llama-server, port 18082</sub>"]
 ```
 
 Main-process modules live under `src/main/`:
@@ -287,6 +317,7 @@ Main-process modules live under `src/main/`:
 - `llm-server.ts` / `llm-cleaner.ts` — local `llama-server` cleanup pass with a removal-only output sanitizer.
 - `pipeline-coordinator.ts` — orchestrates transcribe → spoken punctuation → custom dictionary → cleanup → paste.
 - `text-injector.ts` — swaps the clipboard, presses ⌘V through `osascript`, then restores the clipboard.
+- `reply-coordinator.ts`, `reply-classifier.ts`, `reply-generator.ts`, `reply-server-manager.ts`, `ax-context-reader.ts` — the optional reply-suggestions feature: a second `llama-server` (port 18082), started only while the feature is on.
 - `setup-wizard.ts`, `preferences-window.ts`, `model-manager.ts`, `overlay-window.ts`, `menubar-app.ts` — the GUI shell and model downloads.
 
 Release procedure: [docs/release-process.md](docs/release-process.md). The screenshots in this README are rendered from the real renderer pages by `tools/readme-media/` (see its README).

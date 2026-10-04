@@ -1,0 +1,658 @@
+import { describe, it, expect } from "vitest";
+import { filterVariants, cleanVariantText, jaccardWords, MIN_KEPT, toLogMeta, type FilterInput } from "../../src/main/utils/variant-filter.js";
+import { positionsFor } from "../../src/main/utils/reply-positions.js";
+import { CASES, leaksScreenText } from "../fixtures/conversations/spike-corpus.js";
+
+const CTX = {
+  lastMessage: "ciao, ho visto che la PR sul login è ferma da due giorni, la review la fai tu o la giro a Paolo?",
+  transcript: "INTERLOCUTORE (Marta): ciao, ho visto che la PR sul login è ferma da due giorni, la review la fai tu o la giro a Paolo?\nINTERLOCUTORE (Marta): te lo chiedo perché venerdì dovremmo rilasciare e quella è bloccante",
+  counterpart: "Marta",
+  userDisplayName: "Danilo Franco",
+  language: "it" as const,
+};
+const V = (key: string, text: string) => ({ key, label: key, text });
+function run(variants: FilterInput["variants"], over: Partial<FilterInput> = {}) {
+  return filterVariants({ ...CTX, variants, ...over });
+}
+const GOOD_A = V("accept", "Ci penso io, la review la faccio oggi pomeriggio così venerdì siamo tranquilli.");
+const GOOD_B = V("decline", "Io questa settimana non riesco a prenderla, meglio se la fa qualcun altro.");
+const GOOD_C = V("defer", "Fammi controllare l'agenda e ti dico entro stasera se ce la faccio.");
+
+describe("cleanVariantText", () => {
+  it("strips markdown, wrapping quotes, label prefixes and collapses whitespace", () => {
+    expect(cleanVariantText('  **Risposta:** "Ci  penso io,\n confermo."  ')).toBe("Ci penso io, confermo.");
+    expect(cleanVariantText("«Per me va bene, procediamo»")).toBe("Per me va bene, procediamo");
+    expect(cleanVariantText("Reply: _sure_, I'll take it.")).toBe("sure, I'll take it.");
+  });
+});
+
+describe("filterVariants — each rule, positive and negative", () => {
+  it("keeps three good variants unchanged in order", () => {
+    const r = run([GOOD_A, GOOD_B, GOOD_C]);
+    expect(r.kept.map((v) => v.key)).toEqual(["accept", "decline", "defer"]);
+    expect(r.dropped).toEqual([]);
+  });
+
+  it("length: below 20 or above 280 chars is dropped, 20 and 280 are kept", () => {
+    expect(run([V("accept", "x".repeat(19)), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "length" }]);
+    expect(run([V("accept", "Va bene, ci penso io."), GOOD_B, GOOD_C]).dropped).toEqual([]); // 21 chars
+    expect(run([V("accept", "ok ".repeat(94).trim()), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "length" }]); // 281
+    expect(run([V("accept", "ab ".repeat(93) + "c"), GOOD_B, GOOD_C]).dropped).toEqual([]); // 280
+  });
+
+  it("done-action: first-person completed actions are dropped (it and en)", () => {
+    for (const t of ["Ho già preso in carico la PR, la chiudo entro oggi.", "Ho appena inviato la review a Paolo.", "Ho corretto il problema del lockfile.", "I've already sent the payment yesterday.", "I just fixed the build this morning."]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "done-action" }]);
+    }
+    expect(run([V("accept", "Ho visto la PR, la prendo io e la chiudo entro oggi."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  describe("done-action: precision (già/appena needs a participle) and grounding (measured against the live server)", () => {
+    // Bug measured on the real model (5 generations, 2/5 hit this): "ho già
+    // altri impegni" is a COMMITMENT, not a completed action — "altri" is a
+    // plain noun, not a participle — but the old "\p{L}+" after
+    // "già"/"appena" accepted any word at all, so it read as done-action with
+    // the wrong reported rule. Both examples below carry no digits or
+    // invented commitment phrase either, so with the fix they are fully
+    // kept — not just "not done-action".
+    it("già/appena followed by a noun (not a participle) is not this rule's business", () => {
+      expect(run([GOOD_A, V("decline", "Non posso, ho già altri impegni quel pomeriggio."), GOOD_C]).dropped).toEqual([]);
+      // "due" parses as the number 2 (number-words.ts) and isn't anchored in
+      // CTX's transcript, so this is legitimately dropped — by
+      // unanchored-number, never by done-action.
+      const r = run([GOOD_A, V("decline", "Ho appena due minuti, poi ti richiamo."), GOOD_C]).dropped;
+      expect(r.find((d) => d.key === "decline")?.rule).not.toBe("done-action");
+    });
+
+    // The suffix restriction must not swallow the true-positive shapes the
+    // rule exists for.
+    it("già/appena followed by a real participle still fires (ato/ito/uto/so/sto/tto)", () => {
+      for (const t of ["Ho già inviato tutto ieri sera.", "Ho appena corretto la bozza, controlla pure.", "Ho già girato a Paolo, se ne occupa lui."]) {
+        expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "done-action" }]);
+      }
+    });
+
+    // Its twin, hasInventedCommitment, was fixed to ground the CAPTURED
+    // predicate (not "everything to end of sentence" — that shape let filler
+    // words outvote the invented content, round 2). done-action reuses the
+    // exact same mechanism (contentWords + the same <0.5 threshold), applied
+    // to whichever alternative of DONE_ACTION matched.
+    it("invented completed actions — not grounded in the transcript — are still dropped (5 shapes)", () => {
+      for (const t of [
+        "Ho già corretto il documento e te lo rimando.",
+        "Ho appena finito il report, controllalo pure.",
+        "Ho girato tutto al team stamattina.",
+        "L'ho già sistemata ieri sera.",
+        "I've already sent the updated file to Sarah.",
+      ]) {
+        expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "done-action" }]);
+      }
+    });
+
+    // A completed action IS supported by the transcript when the SAME
+    // action word recurs there — a true statement, wrongly dropped before
+    // this fix because done-action never checked grounding at all.
+    it("a completed action whose own word recurs in the transcript is grounded and kept (2 shapes)", () => {
+      const askedCorrected = { ...CTX, transcript: `${CTX.transcript}\nINTERLOCUTORE (Marta): hai già corretto l'errore nel modulo di login?` };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Sì, ho già corretto l'errore, è tutto a posto.")], askedCorrected).dropped).toEqual([]);
+      const askedForwarded = { ...CTX, transcript: `${CTX.transcript}\nINTERLOCUTORE (Marta): hai già girato il documento a Paolo?` };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Sì, l'ho già girato ieri pomeriggio.")], askedForwarded).dropped).toEqual([]);
+    });
+
+    // Same phrase, transcript that never talks about the object at all: the
+    // OBJECT mentioned in a done-action clause (e.g. "la PR") is not what
+    // grounding checks — only the action word itself is — so a same-topic
+    // transcript does not, by itself, save an invented claim. This is the
+    // same "Ho già preso in carico la PR…" shape as the invented-actions
+    // test above, spelled out here to make the boundary explicit: sharing
+    // the conversation's TOPIC is not the same as the claimed ACTION being
+    // true.
+    it("sharing the conversation's topic does not ground an invented action", () => {
+      // Note: this is NOT the default CTX — its transcript happens to
+      // contain the literal words "ho visto" (Marta's own line), which
+      // would ground "visto" for real and defeat the point of this test.
+      const talksAboutPrOnly = {
+        ...CTX,
+        transcript: "INTERLOCUTORE (Marta): ciao, la PR sul login è ferma da due giorni, la fai tu o la giro a Paolo?",
+        lastMessage: "ciao, la PR sul login è ferma da due giorni, la fai tu o la giro a Paolo?",
+      };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Sì, ho già visto la PR, ci penso io.")], talksAboutPrOnly).dropped)
+        .toEqual([{ key: "defer", rule: "done-action" }]);
+    });
+  });
+
+  it("invented-reason: a decline/reject_offer with a causal clause not grounded in the context is dropped", () => {
+    const invented = "Non riesco a occuparmene perché ho un carico di lavoro pesante in questo periodo.";
+    expect(run([GOOD_A, V("decline", invented), GOOD_C]).dropped).toEqual([{ key: "decline", rule: "invented-reason" }]);
+    expect(run([GOOD_A, V("reject_offer", "Per ora non procedo, dato che il budget interno è stato tagliato."), GOOD_C]).dropped).toEqual([{ key: "reject_offer", rule: "invented-reason" }]);
+    // Grounded reason: the words after the connective are in the transcript.
+    expect(run([GOOD_A, V("decline", "Non riesco a prenderla io perché venerdì dovremmo rilasciare."), GOOD_C]).dropped).toEqual([]);
+    // Same invented clause on an accept is not this rule's business.
+    expect(run([V("accept", "La prendo io perché ho un carico di lavoro leggero in questo periodo."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  it("invented-reason: stock invented commitments are dropped on any position", () => {
+    for (const t of ["Non posso, sono in riunione tutto il giorno.", "Ci penso io appena esco, ora sono fuori sede.", "I'm in a meeting all afternoon, will look later."]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "invented-reason" }]);
+    }
+  });
+
+  describe("invented-reason: the INVENTED_COMMITMENT family (Important 5)", () => {
+    // "sono impegnato con un'altra cosa" used a head+predicate combination
+    // ("sono impegnato…") the old fixed phrase list never covered (found by
+    // review: the excuse passed the filter untouched).
+    it("catches the excuse the old fixed phrase list missed: 'sono impegnato con un'altra cosa'", () => {
+      expect(run([GOOD_A, V("decline", "Non posso, sono impegnato con un'altra cosa."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
+
+    it("still catches two more invented excuses the family broadening must not lose", () => {
+      expect(run([GOOD_A, V("reject_offer", "Per ora non se ne parla, sono occupato con un altro cliente."), GOOD_C]).dropped)
+        .toEqual([{ key: "reject_offer", rule: "invented-reason" }]);
+      expect(run([GOOD_A, V("decline", "Non ce la faccio, ho una riunione con un cliente importante."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
+
+    // The false positive the old blind regex had: a genuine "sono in
+    // riunione" the transcript itself supports must be KEPT, not dropped
+    // just because it matches the family's lexical shape.
+    it("keeps a commitment claim the transcript actually grounds, even reworded", () => {
+      const grounded = {
+        ...CTX,
+        lastMessage: "so che sei in riunione fino alle 15, ma riesci a guardare il lockfile dopo?",
+        transcript: "INTERLOCUTORE (Marta): so che sei in riunione fino alle 15, ma riesci a guardare il lockfile dopo?",
+      };
+      expect(run([GOOD_A, V("decline", "Sono in riunione fino alle 15, poi ci guardo."), GOOD_C], grounded).dropped)
+        .toEqual([]);
+      // The exact same claim, unsupported by a DIFFERENT transcript, is still invented.
+      expect(run([GOOD_A, V("decline", "Sono in riunione fino alle 15, poi ci guardo."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
+
+    it("keeps other legitimate declines untouched by the family (no sono/ho commitment head at all)", () => {
+      expect(run([GOOD_A, V("decline", "Sul lockfile non riesco a intervenire adesso, ci guardo più tardi."), GOOD_C]).dropped)
+        .toEqual([]);
+      expect(run([GOOD_A, V("decline", "Non riesco a occuparmene ora, magari Paolo può darci un'occhiata."), GOOD_C]).dropped)
+        .toEqual([]);
+    });
+
+    it("keeps another family predicate ('sono in ferie') when the transcript itself grounds it", () => {
+      const grounded = {
+        ...CTX,
+        lastMessage: "puoi dare un'occhiata al deploy anche se sei in ferie questa settimana?",
+        transcript: "INTERLOCUTORE (Marta): puoi dare un'occhiata al deploy anche se sei in ferie questa settimana?",
+      };
+      expect(run([GOOD_A, V("decline", "Sono in ferie questa settimana, mi dispiace."), GOOD_C], grounded).dropped)
+        .toEqual([]);
+    });
+
+    // A causal justification stays the OTHER rule's business (hasInventedReason,
+    // gated to decline/reject_offer-style keys): the family regex must not
+    // also catch it, ungated, on a position where it doesn't apply.
+    it("does not let a generic causal 'ho …' clause leak into the ungated family check on a non-gated key", () => {
+      expect(run([V("accept", "La prendo io perché ho un carico di lavoro leggero in questo periodo."), GOOD_B, GOOD_C]).dropped)
+        .toEqual([]);
+    });
+
+    // Round 2, found by review: hasInventedCommitment used to ground
+    // "predicate + everything left in the sentence" because the predicate
+    // was a lookahead, never consumed into m[0]. Ordinary filler words in
+    // the variant's own trailing clause ("tutto il giorno", "questa
+    // settimana") could then coincidentally recur in a LONGER transcript and
+    // outvote the invented predicate — on a realistic ~700-char transcript
+    // naming no commitment of the user's own, 5 of 6 invented excuses
+    // survived. Grounding only the CAPTURED predicate (not the trailing
+    // words) makes the verdict independent of transcript length.
+    it("stays invented-reason regardless of transcript length (the length-sensitivity bug)", () => {
+      const dilutingTurn = "\nINTERLOCUTORE (Marta): comunque non c'è tutto questo fretta, prendi il tempo che ti serve, fammi sapere entro il giorno.";
+      const longer = { ...CTX, transcript: CTX.transcript + dilutingTurn };
+      const excuses = [
+        "Non posso, sono in riunione tutto il giorno.",
+        "Non posso, sono in ferie questa settimana.",
+        "Non riesco, ho una riunione con il cliente.",
+        "Non posso adesso, sono impegnato con un altro cliente questa settimana.",
+        "Non ce la faccio, sono fuori sede tutto il giorno.",
+      ];
+      for (const text of excuses) {
+        expect(run([GOOD_A, V("decline", text), GOOD_C]).dropped, `short: ${text}`)
+          .toEqual([{ key: "decline", rule: "invented-reason" }]);
+        // Same excuse, longer transcript with only ordinary filler words
+        // added (no real commitment named): must NOT flip to kept.
+        expect(run([GOOD_A, V("decline", text), GOOD_C], longer).dropped, `long: ${text}`)
+          .toEqual([{ key: "decline", rule: "invented-reason" }]);
+      }
+      expect(run([V("accept", "I can't, I'm in a meeting all day."), GOOD_B, GOOD_C]).dropped)
+        .toEqual([{ key: "accept", rule: "invented-reason" }]);
+    });
+
+    // The two headless entries from the old fixed phrase list ("out of
+    // office", "altre attività urgenti") have no first-person head to pair
+    // with, so they stay bare alternatives in the regex rather than being
+    // lost when the list became a family (round 1 dropped them by accident).
+    it("still catches the two headless entries from the old fixed phrase list", () => {
+      expect(run([GOOD_A, V("decline", "Non posso, out of office fino a lunedì."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+      expect(run([GOOD_A, V("decline", "Non ce la faccio, ho altre attività urgenti."), GOOD_C]).dropped)
+        .toEqual([{ key: "decline", rule: "invented-reason" }]);
+    });
+  });
+
+  describe("REASON_KEYS: hasInventedReason's gating set (Important 6)", () => {
+    // Before the fix, kind = "alternative" produces keys first/second/defer,
+    // and REASON_KEYS only had decline/reject_offer: the intersection was
+    // empty, so hasInventedReason never ran on ANY alternative-kind variant.
+    // A CAUSAL-only clause (no "sono"/"ho" family head, so the ungated
+    // Important-5 check does not also catch it) on "defer" is the case
+    // that was completely blind.
+    it("now runs hasInventedReason on 'defer', closing the alternative-kind blind spot", () => {
+      const invented = V("defer", "Ti dico domani, perché il budget del progetto è già stato riallocato altrove.");
+      expect(run([GOOD_A, GOOD_B, invented]).dropped).toEqual([{ key: "defer", rule: "invented-reason" }]);
+      // Same clause, grounded in the transcript, must stay kept.
+      const grounded = { ...CTX, transcript: `${CTX.transcript}\nINTERLOCUTORE (Marta): occhio che il budget del progetto è già stato riallocato altrove.` };
+      expect(run([GOOD_A, GOOD_B, V("defer", "Ti dico domani, perché il budget del progetto è già stato riallocato altrove.")], grounded).dropped)
+        .toEqual([]);
+    });
+
+    // Deliberately excluded (decision documented on REASON_KEYS itself):
+    // "first"/"second" just name a choice, nothing to justify.
+    it("deliberately leaves 'first'/'second' unchecked by hasInventedReason", () => {
+      const invented = V("first", "Scelgo la prima, perché il budget del progetto è già stato riallocato altrove.");
+      expect(run([invented, GOOD_B, GOOD_C]).dropped).toEqual([]);
+    });
+  });
+
+  it("signature: ends with the counterpart's or the user's name, or a formal closing with a name", () => {
+    for (const t of ["Ci penso io e la chiudo oggi. Grazie, Marta", "Ci penso io e la chiudo oggi. A presto, Marta.", "Ci penso io e la chiudo entro oggi. Danilo", "Confermo la revisione per venerdì. Cordiali saluti, Francesca Bianchi"]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "signature" }]);
+    }
+    // A vocative at the start is fine.
+    expect(run([V("accept", "Ciao Marta, ci penso io e la chiudo entro oggi."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  it("unanchored-number: digits and number words must appear in the context", () => {
+    const quote = { ...CTX, transcript: "OGGETTO: Preventivo\nINTERLOCUTORE (Francesca Bianchi): Il totale è 4.850 euro IVA esclusa, con inizio lavori entro tre settimane.", lastMessage: "Il totale è 4.850 euro IVA esclusa, con inizio lavori entro tre settimane." };
+    expect(run([V("accept_offer", "Confermo il preventivo di quattro mila ottocento cinquanta euro, procediamo."), GOOD_B, GOOD_C], quote).dropped).toEqual([]);
+    expect(run([V("accept_offer", "Confermo il preventivo di 4850 euro, procediamo pure."), GOOD_B, GOOD_C], quote).dropped).toEqual([]);
+    expect(run([V("accept_offer", "Confermo, ma entro due settimane e non tre."), GOOD_B, GOOD_C], quote).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    expect(run([V("accept_offer", "Confermo il preventivo di 4.900 euro, procediamo."), GOOD_B, GOOD_C], quote).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    expect(run([V("accept", "Ci penso io, la chiudo entro le 18 di oggi."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "unanchored-number" }]);
+    // Fix round 2 (review): "per cento" was stripped unconditionally by
+    // parseNumberWords, so an invented amount phrased as "per cento euro"
+    // (genuinely "a hundred euros", not a percentage) parsed to no number at
+    // all and slipped past this rule.
+    const noNumbers = { ...CTX, transcript: "INTERLOCUTORE (Marta): ciao, come procede?", lastMessage: "ciao, come procede?" };
+    expect(run([V("accept_offer", "Te lo faccio per cento euro, se ti va bene procediamo."), GOOD_B, GOOD_C], noNumbers).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    // Fix round 3 (review): a comma inside a compound numeral ("quattro
+    // mila, ottocento cinquanta") was read as a hard boundary, splitting a
+    // genuine 4850 into [4000, 850] — neither of which matches the context's
+    // "4.850" — and wrongly dropping a legitimate, grounded reply.
+    expect(run([V("accept_offer", "Confermo il preventivo di quattro mila, ottocento cinquanta euro, procediamo."), GOOD_B, GOOD_C], quote).dropped).toEqual([]);
+    // Fix round 3 (review): stripPercentIdioms ran before stripGratitudeIdioms,
+    // so the "mille" of "grazie mille" anchored the percent guard and ate a
+    // genuine "cento" — an invented amount then slipped past this rule.
+    expect(run([V("accept_offer", "Grazie mille per cento euro di anticipo, procediamo così."), GOOD_B, GOOD_C], noNumbers).dropped).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+  });
+
+  it("question-echo: Jaccard with the last message above 0.6 is dropped", () => {
+    const echo = "Ho visto che la PR sul login è ferma da due giorni: la review la faccio io, non la giro a Paolo.";
+    expect(jaccardWords(echo, CTX.lastMessage)).toBeGreaterThan(0.6);
+    expect(run([V("accept", echo), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "question-echo" }]);
+  });
+
+  it("language: a variant in the other language is dropped; unknown languages are never dropped", () => {
+    const en = "I can take the review today and we will be ready for the release on Friday.";
+    expect(run([V("accept", en), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "language" }]);
+    expect(run([V("accept", en), GOOD_B, GOOD_C], { language: "other" }).dropped).toEqual([]);
+    // GOOD_B/GOOD_C are unambiguously Italian (guessLanguage confidently
+    // returns "it" on them: 3 function-word hits each), so under a
+    // genuine "en" context they are correctly flagged too — that is the
+    // rule working, not a false positive. To isolate "the English variant
+    // is not wrongly dropped when the context is English", the other two
+    // fillers here are language-neutral (guessLanguage returns "other":
+    // each has only a single, non-decisive function-word hit) rather than
+    // confidently Italian.
+    const neutral1 = V("b", "Verificherò l'agenda giovedì mattina prima di rispondere.");
+    const neutral2 = V("c", "Ripasserò i documenti prima di lunedì mattina.");
+    expect(run([V("accept", en), neutral1, neutral2], { language: "en" }).dropped.map((d) => d.rule)).not.toContain("language");
+  });
+
+  it("instruction-echo: second-person imperatives copied from the prompt, or the example marker", () => {
+    for (const t of ["Verifichi e fai sapere a breve se riesci a occupartene.", "Rispondi in senso affermativo alla richiesta della review.", "Ci penso io, nello spirito di chi conferma volentieri."]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    }
+  });
+
+  it("near-duplicate: pairwise Jaccard above 0.75 keeps the first in set order", () => {
+    const dup = { ...GOOD_A, key: "defer" };
+    const r = run([GOOD_A, GOOD_B, dup]);
+    expect(r.kept.map((v) => v.key)).toEqual(["accept", "decline"]);
+    expect(r.dropped).toEqual([{ key: "defer", rule: "near-duplicate" }]);
+  });
+
+  it("returns the CLEANED text of kept variants and MIN_KEPT is 2", () => {
+    const r = run([V("accept", '  "Ci penso io, la chiudo entro oggi pomeriggio."  '), GOOD_B, GOOD_C]);
+    expect(r.kept[0]!.text).toBe("Ci penso io, la chiudo entro oggi pomeriggio."); // three kept
+    expect(MIN_KEPT).toBe(2);
+  });
+});
+
+/**
+ * Task 3 spike (Gemma 3, 2026-09-08): with a poor input ("ok?") on the
+ * `offer` position set, all three generated variants came back IDENTICAL to
+ * the canned voice examples baked into reply-positions.ts ("Per me va bene,
+ * procediamo.", etc.) — three boxed sentences that never engage with the
+ * real message. The reviewer's structural explanation: `alternative` gets a
+ * lexical anchor (the two concrete alternatives are interpolated into the
+ * prompt text), but `offer` and `generic` don't — so with poor input the
+ * abstract voice is the only content a small model has to draw from, and it
+ * echoes it verbatim. Extended here to `generic` too (not just `offer`,
+ * where it was observed): the structural cause applies equally to both.
+ * `alternative` is deliberately excluded — it has the anchor the other two
+ * lack, per the reviewer's explanation above.
+ */
+describe("instruction-echo: verbatim copies of the canned generic/offer voice examples (Task 3 Gemma 3 regression)", () => {
+  it("drops every offer-set variant that reproduces its canned example verbatim", () => {
+    const poor = { ...CTX, lastMessage: "ok?", transcript: "INTERLOCUTORE (Marta): ok?" };
+    const r = run(
+      [
+        V("accept_offer", "Per me va bene, procediamo."),
+        V("reject_offer", "Per ora lascio stare, grazie."),
+        V("request_changes", "Prima di confermare avrei bisogno di un dettaglio."),
+      ],
+      poor,
+    );
+    expect(r.dropped).toEqual([
+      { key: "accept_offer", rule: "instruction-echo" },
+      { key: "reject_offer", rule: "instruction-echo" },
+      { key: "request_changes", rule: "instruction-echo" },
+    ]);
+    expect(r.kept).toEqual([]);
+  });
+
+  it("drops a generic-set variant that reproduces its canned example verbatim too", () => {
+    expect(run([V("accept", "Ci penso io, confermo."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+  });
+
+  it("does not drop a legitimate variant that merely shares ordinary words with a canned example", () => {
+    // GOOD_A shares "ci penso io" with the accept example but is not a copy of it.
+    expect(run([GOOD_A, GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  // reply-positions.ts's offer-anchor fix (offer-terms.ts) interpolates a
+  // real amount/deadline into the offer voice's DESCRIPTIVE clause, never
+  // into the quoted "Nello spirito di: «…»" example itself — so
+  // CANNED_EXAMPLES (built here from a bare, term-less positionsFor call)
+  // must keep recognizing a verbatim copy even when the generation that
+  // produced it actually ran with offerTerms set. This is the "prova di
+  // rottura" the derivation needs: if the anchor ever leaked into the
+  // quoted example, this test would start failing (the copy text would no
+  // longer match CANNED_EXAMPLES's un-anchored set) instead of silently
+  // weakening the filter.
+  it("still catches a verbatim example copy when the offer voice carried an amount/deadline anchor", () => {
+    const anchored = positionsFor({ kind: "offer", language: "it", offerTerms: { amount: "4.850 euro", deadline: "tre settimane" } });
+    expect(anchored[0]!.voice).toContain("l'importo di 4.850 euro e la scadenza di tre settimane");
+    const r = run([
+      V("accept_offer", "Per me va bene, procediamo."),
+      V("reject_offer", "Per ora lascio stare, grazie."),
+      V("request_changes", "Prima di confermare avrei bisogno di un dettaglio."),
+    ]);
+    expect(r.dropped).toEqual([
+      { key: "accept_offer", rule: "instruction-echo" },
+      { key: "reject_offer", rule: "instruction-echo" },
+      { key: "request_changes", rule: "instruction-echo" },
+    ]);
+  });
+});
+
+describe("jaccardWords", () => {
+  const A = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi";
+  it("ignores stopwords and case, 0 on empty", () => {
+    expect(jaccardWords("il gatto e la volpe", "IL GATTO E LA VOLPE")).toBe(1);
+    expect(jaccardWords("il e la di", "gatto")).toBe(0);
+    expect(jaccardWords("", "x")).toBe(0);
+  });
+  it("hits the exact spec thresholds: 0.611 and 0.765 are above, 0.588 and 0.737 below", () => {
+    expect(jaccardWords(A, "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda omicron pi rho sigma")).toBeCloseTo(11 / 18, 3);
+    expect(jaccardWords(A, "alpha beta gamma delta epsilon zeta eta theta iota kappa omicron pi rho")).toBeCloseTo(10 / 17, 3);
+    expect(jaccardWords(A, "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu omicron pi rho")).toBeCloseTo(13 / 17, 3);
+    expect(jaccardWords(A, `${A} omicron pi rho sigma tau`)).toBeCloseTo(14 / 19, 3);
+  });
+  it("the filter uses those thresholds: 0.611 echo dropped, 0.588 kept; 0.765 duplicate dropped, 0.737 kept", () => {
+    const base = { ...CTX, language: "other" as const, lastMessage: A, transcript: `INTERLOCUTORE (Marta): ${A}` };
+    const echo61 = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda omicron pi rho sigma";
+    const echo58 = "alpha beta gamma delta epsilon zeta eta theta iota kappa omicron pi rho";
+    expect(run([V("accept", echo61), GOOD_B, GOOD_C], base).dropped).toEqual([{ key: "accept", rule: "question-echo" }]);
+    expect(run([V("accept", echo58), GOOD_B, GOOD_C], base).dropped).toEqual([]);
+    const first = "omicron pi rho sigma tau upsilon phi chi psi omega alpha beta gamma delta";
+    const dup76 = "omicron pi rho sigma tau upsilon phi chi psi omega alpha beta gamma zeta eta theta";
+    const dup73 = `${first} zeta eta theta iota kappa`;
+    expect(run([V("accept", first), V("decline", dup76), GOOD_C], base).dropped).toEqual([{ key: "decline", rule: "near-duplicate" }]);
+    expect(run([V("accept", first), V("decline", dup73), GOOD_C], base).dropped).toEqual([]);
+  });
+});
+
+describe("filterVariants — privacy", () => {
+  it("toLogMeta carries only counts, keys and rules", () => {
+    const slack = CASES[0]!;
+    const r = filterVariants({ ...CTX, transcript: slack.ax, lastMessage: slack.ax, variants: [V("accept", `ZQXV-VARIANT-TEXT ${slack.ax}`), GOOD_B, GOOD_C] });
+    const meta = JSON.stringify(toLogMeta(r));
+    expect(leaksScreenText(meta, slack.ax)).toBe(false);
+    expect(meta).not.toContain("ZQXV");
+    expect(toLogMeta(r)).toEqual({ kept: expect.any(Number), dropped: expect.any(Array) });
+    for (const d of toLogMeta(r).dropped) expect(Object.keys(d).sort()).toEqual(["key", "rule"]);
+  });
+});
+
+/**
+ * Fix round 1 (review, verified by running the real modules): two Critical
+ * findings (numbers anchored by substring; a typographic apostrophe
+ * disabling done-action/invented-reason) and three Important ones (a dead
+ * causal alternative; instruction-echo muting the feature; idiomatic
+ * numbers). See task-4-report.md §Fix round 1 for the before/after proof.
+ */
+describe("Fix round 1 (review)", () => {
+  const quote = {
+    ...CTX,
+    lastMessage: "Il totale è 4.850 euro IVA esclusa, con inizio lavori entro tre settimane.",
+    transcript: "OGGETTO: Preventivo\nINTERLOCUTORE (Francesca Bianchi): Il totale è 4.850 euro IVA esclusa, con inizio lavori entro tre settimane.",
+    counterpart: "Francesca",
+  };
+
+  it("Critical 1 — unanchored-number: a substring of an anchored number is not itself anchored", () => {
+    // "4.850" contains "850", "485", "48", "8", "5" as substrings, and word
+    // numerals for some of them, but none of these was ever said.
+    for (const bad of ["850 euro", "485 euro", "48 ore", "5 giorni", "85 euro", "8 giorni", "otto giorni", "cinque giorni"]) {
+      expect(run([V("accept_offer", `Confermo, direi ${bad} circa.`), GOOD_B, GOOD_C], quote).dropped, bad).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    }
+  });
+
+  it("Critical 2 — done-action and invented-reason fire through a typographic apostrophe (U+2019)", () => {
+    expect(run([V("accept", "I’ve already sent the payment yesterday."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "done-action" }]);
+    expect(run([V("accept", "I’m in a meeting all afternoon."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "invented-reason" }]);
+  });
+
+  it("Important — 'a causa del …' is recognized as causal, and grounds it against the context like 'perché'", () => {
+    const invented = "Non riesco a prenderla, a causa del blocco totale del mio sprint interno.";
+    expect(run([V("decline", invented), GOOD_A, GOOD_C]).dropped).toEqual([{ key: "decline", rule: "invented-reason" }]);
+  });
+
+  it("Important — instruction-echo no longer drops ordinary second-person replies", () => {
+    for (const t of [
+      "Puoi contare su di me, la review la faccio oggi pomeriggio.",
+      "Puoi girarla a Paolo, io questa settimana non ce la faccio.",
+      "Scegli tu come preferisci, per me vanno bene entrambe.",
+      "Fai sapere a Paolo che la review la faccio io.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+    // The two instruction-shaped phrasings it exists to catch still fire.
+    expect(run([V("accept", "Verifichi e fai sapere a breve se riesci a occupartene."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(run([V("accept", "Rispondi in senso affermativo alla richiesta della review."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+  });
+
+  it("Important — idiomatic 'per cento'/'grazie' numbers don't trip unanchored-number", () => {
+    const pctCtx = { ...CTX, lastMessage: "siamo al 90%?", transcript: "INTERLOCUTORE (Marta): siamo al 90%?" };
+    expect(run([V("accept", "Il novanta per cento del lavoro è già in review."), GOOD_B, GOOD_C], pctCtx).dropped).toEqual([]);
+    expect(run([V("accept", "Grazie mille per la segnalazione, la guardo subito."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  it("legitimate — signature: a formal closing with no name is not a signature", () => {
+    expect(run([V("accept", "Confermo la revisione per venerdì. Cordiali saluti."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+
+  it("legitimate — question-echo: a realistic reply that reuses some of the question's words is kept", () => {
+    const realistic = "La review della PR sul login la faccio io, non serve girarla a Paolo.";
+    expect(jaccardWords(realistic, CTX.lastMessage)).toBeLessThanOrEqual(0.6);
+    expect(run([V("accept", realistic), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+});
+
+/**
+ * Fix round 2 (review, verified by running the real modules): an Important
+ * finding (an invented price slipping past unanchored-number via a
+ * mis-stripped "per cento") and three Minor ones (a typographic apostrophe
+ * in the counterpart/user NAME, rather than the variant text, still
+ * defeating `signature`; the elided causal form "a causa dell'…"; and
+ * instruction-echo not crossing a sentence boundary).
+ */
+describe("Fix round 2 (review)", () => {
+  it("signature: a typographic apostrophe in the counterpart's name (not just the variant text) is normalized", () => {
+    expect(
+      run([V("accept", "Ci penso io. Grazie, D’Angelo"), GOOD_B, GOOD_C], { counterpart: "D’Angelo" }).dropped,
+    ).toEqual([{ key: "accept", rule: "signature" }]);
+  });
+
+  it("done-action: MODIFIER LETTER APOSTROPHE (U+02BC) is normalized like the typographic apostrophes", () => {
+    expect(run([V("accept", "Iʼve already sent the payment yesterday."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "done-action" }]);
+  });
+
+  it("invented-reason: the elided causal form 'a causa dell'…' is recognized as causal", () => {
+    const invented = "Non ce la faccio a causa dell'imprevisto totale del mio sprint interno.";
+    expect(run([V("decline", invented), GOOD_A, GOOD_C]).dropped).toEqual([{ key: "decline", rule: "invented-reason" }]);
+  });
+
+  it("instruction-echo: the two-sentence form ('Verifichi la situazione.' + 'Fai sapere...') is still caught", () => {
+    expect(run([V("accept", "Verifichi la situazione. Fai sapere a breve come procedere."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    // Legitimate replies from fix round 1 stay kept.
+    expect(run([V("accept", "Puoi girarla a Paolo, io questa settimana non ce la faccio."), GOOD_B, GOOD_C]).dropped).toEqual([]);
+  });
+});
+
+/**
+ * Fix round 3 (review, verified by running the real modules): two Important
+ * findings in number-words.ts (a comma inside a compound numeral read as a
+ * hard boundary; strip order letting the "mille" of a gratitude idiom
+ * anchor the percent guard — both covered at the unit level above and at
+ * the filter level in the "unanchored-number" test) and two Minor ones here
+ * (instruction-echo's widened gap catching ordinary second-person replies
+ * on two sentences; apostrophe normalization applied to the variant but not
+ * to lastMessage/transcript in the context comparisons).
+ */
+describe("Fix round 3 (review)", () => {
+  it("instruction-echo: 'verifichi' is only an instruction when it opens a sentence, not mid-sentence", () => {
+    for (const t of [
+      "Preferisco che la verifichi Marta. Fai sapere anche a Paolo, grazie.",
+      "Non serve che verifichi io. Fai sapere tu a Paolo come procedere.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+    // The sentence-start forms it exists to catch are still caught.
+    expect(run([V("accept", "Verifichi la situazione. Fai sapere a breve come procedere."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(run([V("accept", "Verifichi e fai sapere a breve se riesci a occupartene."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(run([V("accept", "Rispondi in senso affermativo alla richiesta della review."), GOOD_B, GOOD_C]).dropped).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+  });
+
+  it("question-echo: MODIFIER LETTER APOSTROPHE (U+02BC) is normalized on the context side too, not just the variant", () => {
+    const withModifierLetterApostrophe = {
+      ...CTX,
+      lastMessage: "Hai controllato lʼagenda di oggi pomeriggio prima della review?",
+      transcript: "INTERLOCUTORE (Marta): Hai controllato lʼagenda di oggi pomeriggio prima della review?",
+    };
+    const echo = "Ho controllato lʼagenda di oggi pomeriggio prima della review, confermo.";
+    expect(run([V("accept", echo), GOOD_B, GOOD_C], withModifierLetterApostrophe).dropped).toEqual([{ key: "accept", rule: "question-echo" }]);
+  });
+
+  it("near-duplicate: unaffected by the apostrophe fix (both variant texts already agree via cleanVariantText)", () => {
+    const withApostrophe = V("accept", "Ci penso io, prendo in carico lʼintervento e confermo entro stasera se riesco.");
+    const dup = { ...withApostrophe, key: "defer" };
+    const r = run([withApostrophe, GOOD_B, dup]);
+    expect(r.kept.map((v) => v.key)).toEqual(["accept", "decline"]);
+    expect(r.dropped).toEqual([{ key: "defer", rule: "near-duplicate" }]);
+  });
+});
+
+/**
+ * Fix round 4 (review): two Minor/Important findings, both in the number-
+ * anchoring safety net.
+ *
+ * (1) number-words.ts: a comma inside a compound numeral (round 3's
+ * SOFT_BARRIER) also fired when the comma separated two DISTINCT numbers
+ * spoken as an enumeration or a negotiated range ("il budget? mille, duemila
+ * al massimo" — haggling over a budget), fusing them into one wrong
+ * whitelist value and breaking unanchored-number in both directions: an
+ * invented number got through, and a genuine one got rejected. Covered at
+ * the unit level in number-words.test.ts; covered here at the filter level
+ * with both directions of the damage.
+ *
+ * (2) variant-filter.ts: round 3 anchored the INSTRUCTION_ECHO "verifichi"
+ * match to the start of a sentence to stop it firing on ordinary
+ * second-person Italian mid-sentence, but the anchor `^` only fires right at
+ * the start of the whole string — a list prefix or a "Ti scrivo:" preamble
+ * that cleanVariantText does not strip defeats it, letting an instruction
+ * echo through as if it were a real reply.
+ */
+describe("Fix round 4 (review)", () => {
+  it("unanchored-number: a comma-separated range in the transcript no longer fuses into one wrong whitelist value", () => {
+    const budgetCtx = {
+      ...CTX,
+      lastMessage: "il budget? mille, duemila al massimo",
+      transcript: "INTERLOCUTORE (Marta): il budget? mille, duemila al massimo",
+    };
+    // Maglia aperta (pre-fix): the fused whitelist {3000} let an invented
+    // "tremila" through.
+    expect(
+      run([V("accept_offer", "Per me vanno bene tremila euro, procediamo pure così."), GOOD_B, GOOD_C], budgetCtx).dropped,
+    ).toEqual([{ key: "accept_offer", rule: "unanchored-number" }]);
+    // Maglia stretta (pre-fix): the same fused whitelist rejected the
+    // genuine "duemila" the counterpart actually said.
+    expect(
+      run([V("accept_offer", "Con duemila euro riesco a chiudere tutto entro venerdì."), GOOD_B, GOOD_C], budgetCtx).dropped,
+    ).toEqual([]);
+  });
+
+  it("instruction-echo: the anchor also catches 'verifichi' after a list-prefix or a preamble colon cleanVariantText does not strip", () => {
+    for (const t of [
+      "- Verifichi la situazione. Fai sapere a breve come procedere.",
+      "Ti scrivo: verifichi la situazione e fai sapere a breve come procedere.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    }
+    // Already-correct pre-fix (the guillemets are stripped by
+    // cleanVariantText before this check runs, and ". " was already
+    // anchored) — the widened anchor must not change these.
+    expect(
+      run([V("accept", "«Verifichi la situazione. Fai sapere a breve come procedere.»"), GOOD_B, GOOD_C]).dropped,
+    ).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    expect(
+      run([V("accept", "Ok. Verifichi la situazione; fai sapere a breve come procedere."), GOOD_B, GOOD_C]).dropped,
+    ).toEqual([{ key: "accept", rule: "instruction-echo" }]);
+    // Round 3's legitimate mid-sentence 'verifichi' replies stay kept: the
+    // widened anchor is still anchored (^ / after sentence punctuation),
+    // not a bare search for "verifichi" anywhere.
+    for (const t of [
+      "Preferisco che la verifichi Marta. Fai sapere anche a Paolo, grazie.",
+      "Non serve che verifichi io. Fai sapere tu a Paolo come procedere.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+    // Round 1's legitimate second-person replies stay kept too.
+    for (const t of [
+      "Puoi contare su di me, la review la faccio oggi pomeriggio.",
+      "Puoi girarla a Paolo, io questa settimana non ce la faccio.",
+      "Scegli tu come preferisci, per me vanno bene entrambe.",
+      "Fai sapere a Paolo che la review la faccio io.",
+    ]) {
+      expect(run([V("accept", t), GOOD_B, GOOD_C]).dropped, t).toEqual([]);
+    }
+  });
+});

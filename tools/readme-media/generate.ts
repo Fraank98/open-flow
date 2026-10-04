@@ -39,6 +39,7 @@ const FRAME_SHOTS = [
   { name: "setup-quality", title: "open-flow Setup", page: "setup.html", w: 640, h: 620, q: "step=tier" },
   { name: "settings-dictation", title: "open-flow Settings", page: "preferences.html", w: 640, h: 600, q: "scenario=installed&tab=dictation" },
   { name: "settings-models", title: "open-flow Settings", page: "preferences.html", w: 640, h: 600, q: "scenario=installed&tab=models" },
+  { name: "settings-reply", title: "open-flow Settings", page: "preferences.html", w: 640, h: 600, q: "scenario=reply-on&tab=reply" },
 ];
 
 // Copy of injectMock() from tools/renderer-preview/build.ts (that module runs main() on import).

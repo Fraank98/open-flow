@@ -106,6 +106,9 @@ input.switch:checked::after { transform: translateX(16px); }
 .model-actions { grid-column: 2; grid-row: 1 / span 4; display: flex; align-items: center; gap: 6px; }
 .badge { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--track); color: var(--muted); }
 .badge.active { background: var(--accent); color: var(--on-accent); }
+.badge.alpha { background: var(--warning-bg); color: var(--warning); margin-left: 4px; font-size: 10px; padding: 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+.alpha-note { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; padding: 8px 12px; border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 8px; background: var(--warning-bg); font-size: 12px; color: var(--text); }
+.alpha-note-title { font-size: 12px; font-weight: 600; color: var(--warning); }
 .badge.installed { background: var(--success-bg); color: var(--success); }
 .dl-progress { display: flex; align-items: center; gap: 8px; }
 .dl-progress progress { width: 90px; height: 6px; accent-color: var(--accent); }
@@ -126,3 +129,24 @@ input.switch:checked::after { transform: translateX(16px); }
 .panel-status { min-height: 18px; margin-top: 14px; font-size: 12px; color: var(--muted); }
 .panel-status.error { color: var(--danger); font-weight: 500; }
 .panel-status.ok { color: var(--success); }
+
+/* Reply suggestions tab */
+.guard { margin-top: 8px; }
+.guard:empty { display: none; }
+.reply-state { margin-top: 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.reply-state[data-tone="ok"] { color: var(--success); }
+.reply-state[data-tone="error"] { color: var(--danger); }
+.reply-state button.link { font-weight: 500; color: var(--danger); text-decoration: underline; }
+.reply-state:empty { display: none; }
+#tab-reply .row input[type=text] { width: 200px; flex: none; }
+#tab-reply .row-desc.invalid { color: var(--danger); font-weight: 500; }
+.model-details { grid-column: 1 / -1; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.model-details summary { cursor: pointer; width: fit-content; }
+.model-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.model-details p { margin-top: 6px; line-height: 1.5; }
+#tab-reply input.recorder { text-align: center; cursor: pointer; caret-color: transparent; }
+#tab-reply input.recorder:focus { border-color: var(--accent); }
+.app-actions { display: flex; gap: 8px; margin-top: 10px; }
+.dict-list li .app-icon { width: 16px; height: 16px; margin-right: 8px; flex: none; }
+.dict-list li .app-icon.blank { visibility: hidden; }
+.app-id { color: var(--muted); font-size: 11px; margin-left: 4px; }

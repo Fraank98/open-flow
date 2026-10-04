@@ -176,10 +176,261 @@ async function init() {
   });
   renderDict();
 
+  // ── Reply suggestions ──
+  // Every control saves its own field through prefs:update. None of these fields
+  // needs a restart: the main process reconfigures the reply server and the
+  // shortcut from its onSaved hook.
+  let replyApps = Array.isArray(prefs.replyApps) ? [...prefs.replyApps] : [];
+  // Optimistic until the first status poll lands, so the toggle isn't wrongly
+  // disabled in the common case (helper loaded fine).
+  let nativeOk = true;
+
+  $("#replyEnabled").checked = prefs.replySuggestionsEnabled === true;
+  $("#userDisplayName").value = prefs.userDisplayName ?? "";
+  $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
+
+  /** The reply model chosen in the cards (its install state is the live one on the card). */
+  function selectedReplyModel() {
+    return catalog.reply.find((m) => m.id === prefs.replyModelId) ?? catalog.reply[0];
+  }
+
+  /** The same list serves both modes; the label and a warning follow the mode. */
+  function updateReplyAppsModeUI() {
+    const view = L.replyAppsView($("#replyAppsMode").value, replyApps.length);
+    $("#replyAppsModeLabel").textContent = view.label;
+    const warn = $("#replyAppsModeWarning");
+    warn.hidden = !view.warning;
+    warn.textContent = view.warning || "";
+  }
+  $("#replyAppsMode").addEventListener("change", () => {
+    updateReplyAppsModeUI();
+    void save({ replyAppsMode: $("#replyAppsMode").value }, "reply");
+  });
+
+  // Readable names and icons for the bundle ids in the list, resolved by the main process.
+  const appInfo = new Map(); // lower-case bundle id -> { bundleId, name, icon }
+
+  function renderReplyApps() {
+    const list = $("#replyAppList");
+    list.innerHTML = "";
+    replyApps.forEach((id, i) => {
+      const label = L.appRowLabel(id, appInfo.get(id.toLowerCase()));
+      const li = document.createElement("li");
+      const icon = document.createElement("img");
+      icon.className = "app-icon";
+      icon.alt = "";
+      const src = appInfo.get(id.toLowerCase())?.icon;
+      if (src) icon.src = src; else icon.classList.add("blank");
+      const text = document.createElement("span");
+      text.className = "dict-term";
+      text.textContent = label.primary;
+      if (label.secondary) {
+        const small = document.createElement("span");
+        small.className = "app-id";
+        small.textContent = label.secondary;
+        text.append(" ", small);
+      }
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "danger";
+      rm.textContent = "×";
+      rm.setAttribute("aria-label", `Remove ${label.primary}`);
+      rm.addEventListener("click", () => {
+        replyApps.splice(i, 1);
+        renderReplyApps();
+        void save({ replyApps }, "reply");
+      });
+      li.append(icon, text, rm);
+      list.appendChild(li);
+    });
+    // The list content decides which warning applies, so every add/remove refreshes it.
+    updateReplyAppsModeUI();
+  }
+
+  async function resolveReplyApps(ids) {
+    const missing = ids.filter((id) => !appInfo.has(id.toLowerCase()));
+    if (missing.length === 0) return;
+    try {
+      for (const info of await api.resolveApps(missing)) appInfo.set(info.bundleId.toLowerCase(), info);
+    } catch {
+      /* names are a nicety: the list falls back to bundle ids */
+    }
+    renderReplyApps();
+  }
+
+  function addReplyApp(raw) {
+    const id = (raw ?? "").trim();
+    if (!id) return;
+    replyApps = replyApps.filter((a) => a.toLowerCase() !== id.toLowerCase());
+    replyApps.push(id);
+    renderReplyApps();
+    void save({ replyApps }, "reply");
+  }
+
+  $("#replyAppPick").addEventListener("click", async () => {
+    try {
+      const picked = await api.pickApp();
+      if (!picked) return; // cancelled
+      appInfo.set(picked.bundleId.toLowerCase(), picked);
+      addReplyApp(picked.bundleId);
+    } catch (err) {
+      say("reply", L.cleanIpcError(err), "error");
+    }
+  });
+  renderReplyApps();
+  void resolveReplyApps(replyApps);
+
+  // ── Shortcut recorder ──
+  // The field is a recorder, not a text box: focus it and press the combination.
+  // An invalid combination is never saved; the reason appears under the field.
+  const HOTKEY_HINT = "It can't use Option: dictation does.";
+  const hotkeyField = $("#replyHotkey");
+  const hotkeyStatus = $("#replyHotkeyStatus");
+
+  function showSavedShortcut() {
+    hotkeyField.value = L.acceleratorLabel(prefs.replySuggestionsHotkey);
+    hotkeyStatus.textContent = HOTKEY_HINT;
+    hotkeyStatus.classList.remove("invalid");
+  }
+  showSavedShortcut();
+
+  hotkeyField.addEventListener("focus", () => {
+    api.recorderActive(true);
+    hotkeyField.value = "";
+    hotkeyField.placeholder = "Press shortcut…";
+  });
+  hotkeyField.addEventListener("blur", () => {
+    api.recorderActive(false);
+    hotkeyField.placeholder = "";
+    showSavedShortcut();
+  });
+  // Main swallowed ⌘Q/⌘W/… before the page saw it: say why nothing was recorded.
+  api.onReservedKey(() => {
+    hotkeyStatus.textContent = L.hotkeyReasonText("system-reserved");
+    hotkeyStatus.classList.add("invalid");
+  });
+  window.addEventListener("beforeunload", () => api.recorderActive(false));
+  hotkeyField.addEventListener("keydown", async (e) => {
+    const bare = !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+    // Tab, with or without Shift, keeps keyboard navigation: Shift+Tab walks back
+    // out of the field and is never a shortcut (the validator refuses Shift alone).
+    if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) return;
+    e.preventDefault();
+    if (e.key === "Escape" && bare) {
+      hotkeyField.blur();
+      return;
+    }
+    const accelerator = L.acceleratorFromKeyEvent(e);
+    if (accelerator === null) return; // only modifiers so far
+    hotkeyField.value = L.acceleratorLabel(accelerator);
+    const check = await api.validateReplyHotkey(accelerator);
+    if (!check.ok) {
+      hotkeyStatus.textContent = L.hotkeyReasonText(check.reason);
+      hotkeyStatus.classList.add("invalid");
+      return;
+    }
+    hotkeyStatus.textContent = HOTKEY_HINT;
+    hotkeyStatus.classList.remove("invalid");
+    if (accelerator === prefs.replySuggestionsHotkey) return;
+    await save({ replySuggestionsHotkey: accelerator }, "reply");
+    showShortcutHint();
+    void refreshReplyStatus();
+    hotkeyField.blur();
+  });
+
+  /**
+   * The feature cannot be switched on without a name and without the selected
+   * model on disk. The toggle is never forced off, and it is only disabled
+   * while it is off: a preference already saved as "on" (e.g. the model was
+   * deleted afterwards) keeps its value and can still be switched off, with the
+   * impediment spelled out.
+   */
+  function refreshReplyGuards() {
+    const model = selectedReplyModel();
+    const message = L.replyGuardMessage({
+      name: $("#userDisplayName").value,
+      modelInstalled: model.installed,
+      tierLabel: model.label,
+      nativeOk,
+    });
+    $("#replyEnabled").disabled = L.replyToggleDisabled(message, $("#replyEnabled").checked);
+    $("#replyGuard").textContent = message;
+  }
+  $("#userDisplayName").addEventListener("input", refreshReplyGuards);
+  $("#userDisplayName").addEventListener("change", () => {
+    void save({ userDisplayName: $("#userDisplayName").value.trim() }, "reply");
+  });
+  $("#replyEnabled").addEventListener("change", () => {
+    void save({ replySuggestionsEnabled: $("#replyEnabled").checked }, "reply");
+    refreshReplyGuards(); // an unmet requirement locks the toggle once it is off
+  });
+  refreshReplyGuards();
+
+  /** One sentence for the model/shortcut state; "failed" is a Retry button. */
+  function renderReplyState(view, detail) {
+    const el = $("#replyServerState");
+    el.textContent = "";
+    el.dataset.tone = view.tone;
+    if (!view.text) return;
+    if (view.action === "retry") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "link";
+      retry.textContent = view.text;
+      retry.addEventListener("click", () => {
+        // Saving an unchanged toggle no longer restarts the server: ask for it explicitly.
+        say("reply", "Retrying…", "ok");
+        void api.retryReply().then(() => refreshReplyStatus());
+      });
+      el.appendChild(retry);
+    } else {
+      el.textContent = view.text;
+    }
+    // The raw error is for the tooltip only: it can be long and technical.
+    if (detail) el.title = detail; else el.removeAttribute("title");
+  }
+
+  function showShortcutHint() {
+    $("#replyShortcutHint").textContent = L.acceleratorLabel(prefs.replySuggestionsHotkey);
+  }
+  showShortcutHint();
+
+  async function refreshReplyStatus() {
+    const s = await api.replyStatus();
+    // While booting nativeOk is a placeholder: assume the helper is there.
+    const available = s.nativeOk || s.booting;
+    if (available !== nativeOk) {
+      nativeOk = available;
+      refreshReplyGuards();
+    }
+    renderReplyState(L.replyStatusView(s, prefs.replySuggestionsHotkey), s.serverError);
+    const btn = $("#replyAppAddBlocked");
+    // lastBlockedBundleId is never cleared once set, so hide the button once
+    // that app is already in the list.
+    const alreadyListed = s.lastBlockedBundleId
+      ? replyApps.some((a) => a.toLowerCase() === s.lastBlockedBundleId.toLowerCase())
+      : true;
+    if (s.lastBlockedBundleId && !alreadyListed) {
+      btn.hidden = false;
+      const blocked = appInfo.get(s.lastBlockedBundleId.toLowerCase());
+      btn.textContent = `Add ${blocked?.name ?? s.lastBlockedBundleId}`;
+      btn.onclick = () => addReplyApp(s.lastBlockedBundleId);
+      // The name arrives asynchronously; the next poll shows it.
+      void resolveReplyApps([s.lastBlockedBundleId]);
+    } else {
+      btn.hidden = true;
+    }
+  }
+  void refreshReplyStatus();
+  const replyStatusTimer = setInterval(() => { void refreshReplyStatus(); }, 2000);
+  window.addEventListener("beforeunload", () => clearInterval(replyStatusTimer));
+
   // ------------------------------------------------------------ models
   const groups = [
-    { kind: "whisper", containerId: "whisper-models", models: catalog.whisper, prefKey: "whisperModelId" },
-    { kind: "llm", containerId: "llm-models", models: catalog.llm, prefKey: "llmModelId" },
+    { kind: "whisper", containerId: "whisper-models", models: catalog.whisper, prefKey: "whisperModelId", tab: "models" },
+    { kind: "llm", containerId: "llm-models", models: catalog.llm, prefKey: "llmModelId", tab: "models" },
+    // The reply cards reuse the same renderer; their feedback goes to the Reply tab.
+    { kind: "reply", containerId: "reply-tiers", models: catalog.reply, prefKey: "replyModelId", tab: "reply" },
   ];
   const rowRenderers = new Map(); // model id -> () => void
 
@@ -190,6 +441,8 @@ async function init() {
   function renderAllRows() {
     for (const fn of rowRenderers.values()) fn();
     refreshStorage();
+    // The reply toggle depends on whether the selected reply model is on disk.
+    refreshReplyGuards();
   }
 
   // One idempotent renderer per row: it always rebuilds the card from the model
@@ -236,6 +489,20 @@ async function init() {
     meta.textContent = L.modelMeta(m);
     row.appendChild(meta);
 
+    if (m.details) {
+      // Collapsed benchmark prose; the open state survives the re-renders a download causes.
+      const details = document.createElement("details");
+      details.className = "model-details";
+      details.open = m.detailsOpen === true;
+      const summary = document.createElement("summary");
+      summary.textContent = "Benchmark details";
+      const text = document.createElement("p");
+      text.textContent = m.details;
+      details.append(summary, text);
+      details.addEventListener("toggle", () => { m.detailsOpen = details.open; });
+      row.appendChild(details);
+    }
+
     const actions = document.createElement("div");
     actions.className = "model-actions";
     row.appendChild(actions);
@@ -274,7 +541,7 @@ async function init() {
       use.className = "primary";
       use.textContent = "Use";
       use.addEventListener("click", async () => {
-        await save({ [group.prefKey]: m.id }, "models", `Now using ${m.label}`);
+        await save({ [group.prefKey]: m.id }, group.tab, `Now using ${m.label}`);
         renderAllRows();
       });
       actions.appendChild(use);
@@ -291,11 +558,11 @@ async function init() {
           await api.deleteModel(group.kind, m.id);
           // Re-read what is on disk rather than assuming the delete worked.
           await refreshModels();
-          if (m.installed) say("models", `Couldn't delete ${m.label}: the file is still there.`, "error");
-          else say("models", `Deleted ${m.label}`, "ok");
+          if (m.installed) say(group.tab, `Couldn't delete ${m.label}: the file is still there.`, "error");
+          else say(group.tab, `Deleted ${m.label}`, "ok");
         } catch (err) {
           await refreshModels();
-          say("models", "Couldn't delete: " + L.cleanIpcError(err), "error");
+          say(group.tab, "Couldn't delete: " + L.cleanIpcError(err), "error");
         }
         renderAllRows();
       });
@@ -309,7 +576,7 @@ async function init() {
   async function refreshModels() {
     try {
       const fresh = await api.listModels();
-      for (const f of [...fresh.whisper, ...fresh.llm]) {
+      for (const f of [...fresh.whisper, ...fresh.llm, ...fresh.reply]) {
         const m = allModels().find((x) => x.id === f.id);
         if (m) m.installed = f.installed;
       }
@@ -320,7 +587,7 @@ async function init() {
   }
 
   function allModels() {
-    return [...catalog.whisper, ...catalog.llm];
+    return [...catalog.whisper, ...catalog.llm, ...catalog.reply];
   }
 
   // Follows one download to its end. A click starts it; on load it also
@@ -338,17 +605,21 @@ async function init() {
       const ok = await refreshModels();
       if (ok && !m.installed) {
         m.downloadFailed = true;
-        say("models", `${m.label} didn't finish downloading. Try again.`, "error");
+        say(group.tab, `${m.label} didn't finish downloading. Try again.`, "error");
       } else {
-        say("models", `Downloaded ${m.label}`, "ok");
+        say(group.tab, `Downloaded ${m.label}`, "ok");
+        // Downloading a reply model while the selected one is missing: use the new one.
+        if (group.kind === "reply" && m.installed && !selectedReplyModel().installed) {
+          await save({ replyModelId: m.id }, group.tab, `Downloaded ${m.label} — now using it`);
+        }
       }
     } catch (err) {
       await refreshModels();
       if (m.cancelling) {
-        say("models", `Download of ${m.label} paused. Download again to resume.`);
+        say(group.tab, `Download of ${m.label} paused. Download again to resume.`);
       } else {
         m.downloadFailed = true;
-        say("models", L.cleanIpcError(err), "error");
+        say(group.tab, L.cleanIpcError(err), "error");
       }
     } finally {
       m.downloading = false;

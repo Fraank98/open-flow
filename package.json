@@ -1,6 +1,6 @@
 {
   "name": "open-flow",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Local-first dictation app for macOS — Whisper + LLM cleanup",
   "author": "Danilo Franco",
   "private": true,
@@ -21,7 +21,11 @@
     "build:preload": "tsc --project tsconfig.preload.json",
     "build": "npm run clean && npm run build:main && npm run build:preload",
     "dev": "npm run build && electron dist/main/index.js",
-    "package": "npm run build && electron-builder --mac dmg --arm64"
+    "package": "npm run build && electron-builder --mac dmg --arm64",
+    "rebuild-native": "electron-rebuild -f --arch arm64",
+    "ax-probe": "tsc --project tsconfig.tools.json && electron dist-tools/tools/ax-context-probe.js",
+    "reply-bench": "tsx tools/reply-classifier-bench.ts",
+    "reply-pipeline-bench": "tsx tools/reply-pipeline-bench.ts"
   },
   "engines": {
     "node": ">=20"

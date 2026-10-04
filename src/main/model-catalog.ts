@@ -10,6 +10,8 @@ export type CatalogModel = ModelDescriptor & {
   licenseNote: string | null;
 };
 
+const GEMMA_3_LICENSE_NOTE = "Subject to Google's Gemma Terms of Use and Prohibited Use Policy.";
+// Gemma 4 is Apache-2.0 (https://ai.google.dev/gemma/docs/gemma_4_license): no note.
 const QWEN_3B_LICENSE_NOTE = "The 3B cleanup model is licensed for non-commercial use only.";
 
 // Whisper models from ggerganov/whisper.cpp on HuggingFace.
@@ -129,13 +131,118 @@ export const TIERS: readonly TierDescriptor[] = [
   },
 ];
 
-export function getModelById(kind: "whisper" | "llm", id: string): CatalogModel | undefined {
-  const list = kind === "whisper" ? WHISPER_MODELS : LLM_MODELS;
+// Reply-suggestion models: the two Gemma GGUFs of the spec's benchmark,
+// byte-exact. The "thinking on by default" finding (spec §Spike 3) was made on
+// THESE files; a different GGUF of the same family may template differently.
+export const REPLY_MODELS: readonly CatalogModel[] = [
+  {
+    id: "gemma-3-4b",
+    label: "Gemma 3 4B",
+    description: "Gemma 3 4B. Faster, a good fit for most Macs.",
+    ramBytes: 3_100_000_000,
+    licenseNote: GEMMA_3_LICENSE_NOTE,
+    filename: "gemma-3-4b-it-Q4_K_M.gguf",
+    sizeBytes: 2_489_894_016,
+    sha256: "04a43a22e8d2003deda5acc262f68ec1005fa76c735a9962a8c77042a74a7d19",
+    url: "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+  },
+  {
+    id: "gemma-4-e4b",
+    label: "Gemma 4 E4B",
+    description: "Gemma 4 E4B. Slower, best with 24 GB of RAM or more.",
+    ramBytes: 5_800_000_000,
+    licenseNote: null,
+    filename: "gemma-4-E4B-it-Q4_K_M.gguf",
+    sizeBytes: 4_977_171_584,
+    sha256: "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+    url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+  },
+];
+
+export interface ReplyTierDescriptor {
+  id: "default" | "max";
+  label: string;
+  /** Benchmark prose, shown collapsed under "Benchmark details" (never on the card line). */
+  benchmark: string;
+  replyModelId: string;
+}
+
+// The benchmark text reflects the Task 1 classifier benchmark, not an assumption
+// about which model is safer: "default" carries that name only because it is
+// DEFAULT_PREFS.replyModelId (spec-mandated pending the deterministic-gate
+// measurement), not because it scored better. No logic here depends on the
+// array order or on the "default"/"max" ids — getReplyTier looks up by id.
+// Inverting which model is the spec's default stays a DATA-only change,
+// confined to this file and preferences-store.ts, but it is at least four
+// edits across the two files, not one: DEFAULT_PREFS.replyModelId, BOTH
+// REPLY_TIERS[].replyModelId (so the UI still shows the right tier as
+// default), and swapping the two `benchmark` strings below — they are written
+// as per-model facts (percentages, latency) and would describe the wrong model
+// if left in place. The one-line card descriptions live on REPLY_MODELS.
+export const REPLY_TIERS: readonly ReplyTierDescriptor[] = [
+  {
+    id: "default",
+    label: "Standard",
+    benchmark:
+      "In the benchmark of the classifier alone, Gemma 3 4B misread 4 of 8 questions that were really asking for something only you know " +
+      '(for example "how often do you go to the gym?"). With the deterministic pre-gate that runs before the classifier (active in this build) ' +
+      "that drops to 1 of 8. Still check a proposal before you accept it.",
+    replyModelId: "gemma-3-4b",
+  },
+  {
+    id: "max",
+    label: "Maximum quality",
+    benchmark:
+      "In the benchmark, Gemma 4 E4B never mistook a question asking for a fact for one that needs a decision (0 false positives out of 8). " +
+      "It is slower (about 900 ms) and in 3 cases out of 12 it did not offer a reply that would have been appropriate. Recommended from 24 GB of RAM.",
+    replyModelId: "gemma-4-e4b",
+  },
+];
+
+/** What the Settings window needs to draw one reply-model card. */
+export interface ReplyCard {
+  /** The model id (cards are keyed by model, like the other kinds). */
+  id: string;
+  tierId: ReplyTierDescriptor["id"];
+  label: string;
+  description: string;
+  details: string;
+  sizeBytes: number;
+  ramBytes: number;
+  licenseNote: string | null;
+}
+
+/** One card per tier: the tier supplies the name and the benchmark prose, the model the one-line description and the sizes. */
+export function replyCards(): ReplyCard[] {
+  const cards: ReplyCard[] = [];
+  for (const tier of REPLY_TIERS) {
+    const model = REPLY_MODELS.find((m) => m.id === tier.replyModelId);
+    if (!model) continue;
+    cards.push({
+      id: model.id,
+      tierId: tier.id,
+      label: tier.label,
+      description: model.description,
+      details: tier.benchmark,
+      sizeBytes: model.sizeBytes,
+      ramBytes: model.ramBytes,
+      licenseNote: model.licenseNote,
+    });
+  }
+  return cards;
+}
+
+export function getModelById(kind: "whisper" | "llm" | "reply", id: string): CatalogModel | undefined {
+  const list = kind === "whisper" ? WHISPER_MODELS : kind === "llm" ? LLM_MODELS : REPLY_MODELS;
   return list.find((m) => m.id === id);
 }
 
 export function getTier(id: string): TierDescriptor | undefined {
   return TIERS.find((t) => t.id === id);
+}
+
+export function getReplyTier(id: string): ReplyTierDescriptor | undefined {
+  return REPLY_TIERS.find((t) => t.id === id);
 }
 
 /** The tier made of exactly this whisper + llm pair, if any (models picked one by one in Settings may match none). */

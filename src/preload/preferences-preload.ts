@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-type ModelKind = "whisper" | "llm";
+type ModelKind = "whisper" | "llm" | "reply";
 type Permission = "granted" | "denied" | "unknown";
 type Pane = "accessibility" | "microphone" | "automation";
 
@@ -18,6 +18,28 @@ interface ModelInfo {
   progress: { bytes: number; total: number } | null;
 }
 
+/** A reply card is a model plus the tier name and benchmark text. */
+interface ReplyModelInfo extends ModelInfo {
+  tierId: string;
+  /** Benchmark prose, shown collapsed. */
+  details: string;
+}
+
+interface ReplyStatusInfo {
+  serverState: string;
+  serverError: string | null;
+  hotkeyRegistered: boolean;
+  nativeOk: boolean;
+  lastBlockedBundleId: string | null;
+  booting: boolean;
+}
+
+interface AppInfo {
+  bundleId: string;
+  name: string | null;
+  icon: string | null;
+}
+
 interface PrefsApi {
   load: () => Promise<unknown>;
   /** Autosave: send only the fields that changed. Resolves with the saved prefs. */
@@ -26,6 +48,7 @@ interface PrefsApi {
   listModels: () => Promise<{
     whisper: ModelInfo[];
     llm: ModelInfo[];
+    reply: ReplyModelInfo[];
     languages: Array<{ id: string; label: string }>;
   }>;
   downloadModel: (kind: ModelKind, id: string) => Promise<void>;
@@ -41,6 +64,17 @@ interface PrefsApi {
   resetSetup: () => Promise<boolean>;
   appInfo: () => Promise<{ version: string }>;
   onShowTab: (cb: (tab: string) => void) => () => void;
+  replyStatus: () => Promise<ReplyStatusInfo>;
+  /** Re-applies the reply server (the Retry after a failed start). */
+  retryReply: () => Promise<void>;
+  validateReplyHotkey: (accelerator: string) => Promise<{ ok: boolean; reason?: string; accelerator?: string }>;
+  /** Tells main whether the shortcut recorder has focus (it then swallows the Command key equivalents). */
+  recorderActive: (active: boolean) => void;
+  /** Main swallowed a reserved Command key equivalent while the recorder was active. */
+  onReservedKey: (cb: () => void) => () => void;
+  /** Opens the app chooser; null when cancelled. */
+  pickApp: () => Promise<AppInfo | null>;
+  resolveApps: (bundleIds: string[]) => Promise<AppInfo[]>;
 }
 
 const api: PrefsApi = {
@@ -76,6 +110,19 @@ const api: PrefsApi = {
   },
   resetSetup: () => ipcRenderer.invoke("prefs:reset-setup"),
   appInfo: () => ipcRenderer.invoke("prefs:app-info"),
+  replyStatus: () => ipcRenderer.invoke("prefs:reply-status"),
+  retryReply: () => ipcRenderer.invoke("prefs:retry-reply"),
+  validateReplyHotkey: (accelerator) => ipcRenderer.invoke("prefs:validate-reply-hotkey", accelerator),
+  recorderActive: (active) => {
+    ipcRenderer.send("prefs:recorder-active", active);
+  },
+  onReservedKey: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("prefs:reserved-key", handler);
+    return () => ipcRenderer.removeListener("prefs:reserved-key", handler);
+  },
+  pickApp: () => ipcRenderer.invoke("prefs:pick-app"),
+  resolveApps: (bundleIds) => ipcRenderer.invoke("prefs:resolve-apps", bundleIds),
   onShowTab: (cb) => {
     const handler = (_e: unknown, tab: string) => cb(tab);
     ipcRenderer.on("prefs:show-tab", handler);

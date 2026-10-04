@@ -12,6 +12,16 @@ function deferred<T = void>() {
 }
 
 describe("DownloadTracker", () => {
+  it("tells progress listeners which download reported, whoever started it", async () => {
+    const tracker = new DownloadTracker();
+    const seen: Array<[string, { bytes: number; total: number }]> = [];
+    const off = tracker.onProgress((id, p) => seen.push([id, p]));
+    await tracker.start("m", async (_signal, report) => { report({ bytes: 1, total: 4 }); });
+    off();
+    await tracker.start("m", async (_signal, report) => { report({ bytes: 2, total: 4 }); });
+    expect(seen).toEqual([["m", { bytes: 1, total: 4 }]]);
+  });
+
   it("hands back the same promise to a second start while one is in flight", async () => {
     const tracker = new DownloadTracker();
     const d = deferred();

@@ -18,6 +18,16 @@ interface ActiveDownload {
  */
 export class DownloadTracker {
   private readonly active = new Map<string, ActiveDownload>();
+  private readonly progressListeners: Array<(id: string, p: TrackedProgress) => void> = [];
+
+  /** Called for every progress report of any download, whoever started it. */
+  onProgress(cb: (id: string, p: TrackedProgress) => void): () => void {
+    this.progressListeners.push(cb);
+    return () => {
+      const i = this.progressListeners.indexOf(cb);
+      if (i >= 0) this.progressListeners.splice(i, 1);
+    };
+  }
 
   start(
     id: string,
@@ -30,6 +40,7 @@ export class DownloadTracker {
     this.active.set(id, entry);
     entry.promise = run(abort.signal, (p) => {
       entry.progress = p;
+      for (const l of this.progressListeners) l(id, p);
     }).finally(() => {
       if (this.active.get(id) === entry) this.active.delete(id);
     });
