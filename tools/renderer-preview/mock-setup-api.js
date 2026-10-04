@@ -21,7 +21,7 @@
       transcriptionNote: "Recommended for most Macs.", recommended: true,
       sizeBytes: 487601967 + 1117320736, ramBytes: 2.4e9, installed: false, licenseNote: null },
     { id: "max", label: "Maximum quality", description: "Whisper Large v3 Turbo + Qwen 3B", summary: "Whisper Large v3 Turbo + Qwen 3B",
-      transcriptionNote: "Best accuracy. Needs 16 GB of RAM.", recommended: false,
+      transcriptionNote: "Best accuracy. Comfortable on 16 GB, slower on 8 GB.", recommended: false,
       sizeBytes: 1624555275 + 2104932768, ramBytes: 5.1e9, installed: false, licenseNote: LICENSE },
   ];
   // Statuses as the main process reports them. Accessibility is only ever

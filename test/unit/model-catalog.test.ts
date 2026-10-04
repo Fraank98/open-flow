@@ -67,7 +67,7 @@ describe("model catalog", () => {
     expect(getTier("fast")!.transcriptionNote).toBe("Same transcription as Balanced, lighter cleanup.");
     expect(getTier("balanced")!.transcriptionNote).toBe("Recommended for most Macs.");
     expect(getTier("balanced")!.recommended).toBe(true);
-    expect(getTier("max")!.transcriptionNote).toBe("Best accuracy. Needs 16 GB of RAM.");
+    expect(getTier("max")!.transcriptionNote).toBe("Best accuracy. Comfortable on 16 GB, slower on 8 GB.");
     expect(getTier("max")!.summary).toBe("Whisper Large v3 Turbo + Qwen 3B");
     for (const t of TIERS) expect(t.transcriptionNote.trim()).not.toBe("");
   });
