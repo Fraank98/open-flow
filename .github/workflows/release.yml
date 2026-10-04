@@ -73,6 +73,8 @@ jobs:
     # build. A main push with no version bump stops at `decide`.
     if: needs.decide.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
+    # A hung step must fail in minutes, not sit until GitHub's 6h default.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -81,8 +83,16 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install cmake
-        run: brew install cmake
+      # Same cache (path and key) as ci.yml, so a release reuses the binaries
+      # CI already built on main. A from-scratch engine build hung twice on
+      # 2026-10-04 while cutting v0.3.1, so it is also time-boxed below. The
+      # cache covers build-tmp too, so a hit restores the headers as well.
+      - name: Cache native binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: resources/bin
+          key: native-bins-v2-${{ runner.os }}-${{ hashFiles('scripts/fetch-binaries.sh') }}
 
       # Build the whisper.cpp / llama.cpp engines FIRST. This also produces the
       # whisper.cpp headers (resources/bin/build-tmp/whisper.cpp/include) that
@@ -90,7 +100,11 @@ jobs:
       # on install via node-gyp, so the headers MUST exist before it runs —
       # otherwise the build fails with "'whisper.h' file not found".
       - name: Build native engines
-        run: npm run fetch-binaries
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
+        timeout-minutes: 30
+        run: |
+          brew install cmake
+          npm run fetch-binaries
 
       - name: Install deps
         run: npm ci
