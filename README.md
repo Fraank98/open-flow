@@ -149,7 +149,7 @@ Dictation tools that feel instant usually send your voice to a server. open-flow
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/settings-reply-dark.png">
-    <img src="docs/media/settings-reply-light.png" width="520" alt="Settings, Reply suggestions tab with the Alpha badge: the feature switched on, the Standard reply model installed, the apps list and the shortcut.">
+    <img src="docs/media/settings-reply-light.png" width="520" alt="Settings, Reply suggestions tab with the Alpha badge: the feature switched on with the Standard reply model ready, your name and the Command+Control+R shortcut.">
   </picture>
 </p>
 
