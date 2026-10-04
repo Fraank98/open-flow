@@ -1,0 +1,70 @@
+/* Shared colour tokens for the setup and settings windows.
+   Light is the default; dark follows the system via prefers-color-scheme.
+   data-theme="light|dark" on <html> forces a theme (used by the preview harness). */
+:root {
+  color-scheme: light;
+  --bg: #f5f5f7;
+  --panel: #ffffff;
+  --panel-hover: #ececf0;
+  --panel-selected: #e8f1ff;
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --accent: #0a6cff;
+  --accent-hover: #005ae0;
+  --on-accent: #ffffff;
+  --border: #d2d2d7;
+  --track: #d8d8de;
+  --kbd-bg: #e4e4ea;
+  --danger: #c4261d;
+  --danger-bg: #fdecea;
+  --success: #1d7a34;
+  --success-bg: #e3f5e8;
+  --warning: #8a5a00;
+  --warning-bg: #fff4d6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1e1e1e;
+    --panel: #2a2a2c;
+    --panel-hover: #34343a;
+    --panel-selected: #2f3340;
+    --text: #f2f2f4;
+    --muted: #a1a1a8;
+    --accent: #0a84ff;
+    --accent-hover: #3d9bff;
+    --on-accent: #ffffff;
+    --border: #3a3a3c;
+    --track: #3a3a3c;
+    --kbd-bg: #444448;
+    --danger: #ff6a60;
+    --danger-bg: #4a2523;
+    --success: #4cd267;
+    --success-bg: #1f3a28;
+    --warning: #ffcc66;
+    --warning-bg: #40351a;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1e1e1e;
+  --panel: #2a2a2c;
+  --panel-hover: #34343a;
+  --panel-selected: #2f3340;
+  --text: #f2f2f4;
+  --muted: #a1a1a8;
+  --accent: #0a84ff;
+  --accent-hover: #3d9bff;
+  --on-accent: #ffffff;
+  --border: #3a3a3c;
+  --track: #3a3a3c;
+  --kbd-bg: #444448;
+  --danger: #ff6a60;
+  --danger-bg: #4a2523;
+  --success: #4cd267;
+  --success-bg: #1f3a28;
+  --warning: #ffcc66;
+  --warning-bg: #40351a;
+}

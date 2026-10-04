@@ -1,22 +1,23 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; font-family: -apple-system, system-ui, sans-serif; background: #1e1e1e; color: #eee; }
-#root { max-width: 560px; margin: 0 auto; padding: 32px; }
+html, body { min-height: 100%; font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+#root { max-width: 640px; margin: 0 auto; padding: 20px 28px 24px; }
 
-header { margin-bottom: 24px; }
-header h1 { font-size: 18px; opacity: 0.7; font-weight: 500; }
+header { margin-bottom: 16px; }
+header h1 { font-size: 18px; color: var(--muted); font-weight: 500; }
 
-/* Step indicator */
-.stepper { list-style: none; display: flex; gap: 8px; margin-top: 14px; }
-.stepper li { flex: 1; height: 4px; border-radius: 2px; background: #3a3a3c; transition: background 200ms ease; }
-.stepper li.done { background: #0a84ff; }
-.stepper li.current { background: #0a84ff; }
-.stepper li.upcoming { background: #3a3a3c; }
+/* Step indicator: a bar per step with a text label (colour is never the only cue). */
+.stepper { list-style: none; display: flex; gap: 8px; margin-top: 12px; }
+.stepper li { flex: 1; font-size: 11px; color: var(--muted); padding-top: 8px; border-top: 4px solid var(--track); transition: border-color 200ms ease; }
+.stepper li.done { border-top-color: var(--accent); }
+.stepper li.current { border-top-color: var(--accent); color: var(--text); font-weight: 600; }
 
 .step { display: none; }
 .step.active { display: block; }
-.step h2 { font-size: 22px; margin-bottom: 14px; outline: none; }
+.step h2 { font-size: 21px; margin-bottom: 12px; outline: none; }
 .step p { margin-bottom: 14px; line-height: 1.5; }
-.muted { opacity: 0.72; font-size: 13px; }
+.step ul { margin: 0 0 14px 20px; line-height: 1.5; }
+.step li { margin-bottom: 8px; }
+.muted { color: var(--muted); font-size: 13px; }
 
 /* Subtle entrance for the active step; disabled under reduced-motion. */
 @media (prefers-reduced-motion: no-preference) {
@@ -24,45 +25,72 @@ header h1 { font-size: 18px; opacity: 0.7; font-weight: 500; }
   @keyframes step-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 }
 
-.actions { display: flex; gap: 10px; align-items: center; margin-top: 24px; }
+.actions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
 
 button {
-  background: #2a2a2c; color: #fff; border: 1px solid #3a3a3c;
-  padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit;
 }
-button:hover:not(:disabled) { background: #34343a; }
+button:hover:not(:disabled) { background: var(--panel-hover); }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
-button:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
-button.primary { background: #0a84ff; border-color: #0a84ff; padding: 10px 20px; font-size: 14px; }
-button.primary:hover:not(:disabled) { background: #1090ff; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); padding: 9px 20px; font-size: 14px; }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 button.secondary { margin-right: auto; } /* push primary action to the right */
 
-.perm { padding: 14px; background: #2a2a2c; border-radius: 8px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.perm-info { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
-.perm strong { font-size: 14px; }
-.perm-hint { font-size: 12px; opacity: 0.65; }
-.status { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: #4a4a4a; white-space: nowrap; }
-.status.granted { background: #2c6e2c; color: #fff; }
-.status.denied { background: #8a3a3a; color: #fff; }
+/* Permission cards: name and status badge on the first row (badge always top right),
+   description below, action button under the description. */
+.perm {
+  padding: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px;
+  display: grid; grid-template-columns: 1fr auto; column-gap: 12px; row-gap: 6px; align-items: start;
+}
+.perm strong { font-size: 14px; grid-column: 1; grid-row: 1; }
+.perm .status { grid-column: 2; grid-row: 1; justify-self: end; }
+.perm-hint { grid-column: 1 / -1; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.perm-actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px; }
+.perm-actions:empty, .perm-actions:not(:has(button:not(.hidden))) { display: none; }
+.status { font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 10px; background: var(--track); color: var(--muted); white-space: nowrap; }
+.status.granted { background: var(--success-bg); color: var(--success); }
+.status.denied { background: var(--danger-bg); color: var(--danger); }
+.status.pending { background: var(--track); color: var(--muted); }
 
 /* Tier cards behave as radios */
-#tier-list { display: flex; flex-direction: column; gap: 10px; }
+#tier-list { display: flex; flex-direction: column; gap: 8px; }
 .tier {
-  width: 100%; text-align: left; padding: 14px; background: #2a2a2c; color: #fff;
-  border-radius: 8px; cursor: pointer; border: 2px solid transparent; font: inherit;
+  width: 100%; text-align: left; padding: 11px 14px; background: var(--panel); color: var(--text);
+  border-radius: 10px; cursor: pointer; border: 2px solid var(--border); font: inherit;
 }
-.tier:hover { background: #34343a; }
-.tier[aria-checked="true"] { border-color: #0a84ff; background: #2f3340; }
-.tier:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
-.tier strong { display: block; margin-bottom: 4px; font-size: 14px; }
-.tier .desc { font-size: 12px; opacity: 0.8; }
+.tier:hover { background: var(--panel-hover); }
+.tier[aria-checked="true"] { border-color: var(--accent); background: var(--panel-selected); }
+.tier:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tier-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.tier-title { font-size: 14px; font-weight: 600; }
+.tier-line { display: block; font-size: 12px; color: var(--muted); line-height: 1.45; margin-top: 2px; }
+.tier-line.tier-summary { color: var(--text); }
+.tier-line.license-note { color: var(--warning); margin-top: 6px; }
+.badge { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--accent); color: var(--on-accent); }
+.badge.soft { background: var(--success-bg); color: var(--success); }
+.free-space { margin-top: 10px; margin-bottom: 0; font-size: 13px; color: var(--muted); }
+.free-space.low { color: var(--danger); font-weight: 600; }
 
 .progress-container { margin-top: 20px; }
 .progress-label { font-size: 13px; margin-bottom: 6px; }
-.progress-bytes { font-size: 12px; opacity: 0.72; margin-top: 4px; font-variant-numeric: tabular-nums; }
-progress { width: 100%; height: 6px; }
+.progress-bytes { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+progress { width: 100%; height: 6px; accent-color: var(--accent); }
+#dl-hint { margin-top: 14px; }
 
-.error { background: #8a3a3a; padding: 12px; border-radius: 8px; margin-top: 12px; font-size: 13px; }
-.hidden { display: none; }
+.error { background: var(--danger-bg); color: var(--text); border: 1px solid var(--danger); padding: 12px 14px; border-radius: 10px; margin-top: 14px; font-size: 13px; line-height: 1.45; }
+.error strong { display: block; color: var(--danger); margin-bottom: 2px; }
+.hidden { display: none !important; }
 
-kbd { background: #444; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
+.toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 18px 0 4px; cursor: pointer; }
+.toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+.live-status { font-size: 15px; font-weight: 600; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin: 6px 0 14px; }
+.live-status.pasted { color: var(--success); }
+
+kbd { background: var(--kbd-bg); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
+.actions button.primary { margin-left: auto; }
+
+/* Fix buttons under the final step's status message: left-aligned, not the footer row. */
+.actions.inline { margin-top: 4px; }
+.actions.inline button.primary { margin-left: 0; }

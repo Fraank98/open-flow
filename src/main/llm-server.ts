@@ -11,6 +11,11 @@ export interface LLMServerOptions {
   /** Max time to wait for /health to return 200 (ms). */
   startupTimeoutMs?: number;
   /**
+   * After /health first answers 200, wait this long (ms) and confirm our own
+   * child is still alive before declaring success. Default 300.
+   */
+  healthySettleMs?: number;
+  /**
    * Prompt used to warm the Metal kernels AND prime the prefix cache. Pass
    * the real cleanup-prompt template so the system-instructions prefix is
    * already in the KV cache when the first user dictation arrives.
@@ -185,14 +190,26 @@ export class LLMServer {
       if (hasExited()) {
         throw new Error("llama-server exited before becoming healthy");
       }
+      let ok = false;
       try {
         const res = await fetch(url, {
           signal: AbortSignal.timeout(1_000),
         });
-        if (res.ok) return;
+        ok = res.ok;
         // llama-server returns 503 while loading model. Keep polling.
       } catch {
         // ECONNREFUSED while server is starting up. Keep polling.
+      }
+      if (ok) {
+        // A 200 doesn't prove it came from OUR child: an orphaned llama-server
+        // from a previous run still holds the port and answers /health, while
+        // our child dies on bind. Give that exit time to land, then insist the
+        // child we spawned is the one still alive.
+        await new Promise((r) => setTimeout(r, this.opts.healthySettleMs ?? 300));
+        if (hasExited()) {
+          throw new Error("llama-server exited before becoming healthy");
+        }
+        return;
       }
       await new Promise((r) => setTimeout(r, 250));
     }

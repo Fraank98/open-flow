@@ -24,3 +24,10 @@ coverage/
 
 # electron-builder output
 release/
+
+# Renderer preview harness output
+tools/renderer-preview/out/
+
+# README media generator output and its local GIF encoder deps
+tools/readme-media/out/
+tools/readme-media/.deps/

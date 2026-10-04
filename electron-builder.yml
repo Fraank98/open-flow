@@ -80,6 +80,9 @@ mac:
   gatekeeperAssess: false
   identity: null
   icon: resources/icons/app-icon.png
+  extendInfo:
+    NSMicrophoneUsageDescription: "open-flow records your voice only while you hold the Option key. Audio never leaves your Mac."
+    NSAppleEventsUsageDescription: "open-flow asks System Events to press ⌘V so the transcript lands in the app you're typing in."
 
 dmg:
   title: "open-flow ${version}"

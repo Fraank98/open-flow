@@ -13,6 +13,8 @@ export interface Logger {
   warn(msg: string, meta?: Record<string, unknown>): Promise<void>;
   info(msg: string, meta?: Record<string, unknown>): Promise<void>;
   debug(msg: string, meta?: Record<string, unknown>): Promise<void>;
+  /** Turn debug.log writing on or off at runtime (no restart needed). */
+  setDebug(enabled: boolean): void;
   flush(): Promise<void>;
 }
 
@@ -21,6 +23,7 @@ export function createLogger(opts: LoggerOptions): Logger {
   const errorFile = join(opts.dir, "error.log");
   const debugFile = join(opts.dir, "debug.log");
   let initialized = false;
+  let debugEnabled = opts.debug;
 
   async function init(): Promise<void> {
     if (initialized) return;
@@ -97,8 +100,11 @@ export function createLogger(opts: LoggerOptions): Logger {
       await writeLine(errorFile, format("INFO", msg, meta));
     },
     async debug(msg, meta) {
-      if (!opts.debug) return;
+      if (!debugEnabled) return;
       await writeLine(debugFile, format("DEBUG", msg, meta));
+    },
+    setDebug(enabled) {
+      debugEnabled = enabled;
     },
     async flush() {
       // appendFile already flushes per call

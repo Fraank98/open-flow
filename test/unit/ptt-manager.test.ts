@@ -67,3 +67,13 @@ describe("PTTManager diagnostics", () => {
     expect(cancelled).not.toHaveBeenCalled();
   });
 });
+
+describe("PTTManager.requestTrust", () => {
+  it("forwards to the native addon and returns its answer", () => {
+    const fake = makeFakeNative();
+    const requestTrust = vi.fn(() => false);
+    const ptt = new PTTManager({ native: { ...fake.native, requestTrust } });
+    expect(ptt.requestTrust()).toBe(false);
+    expect(requestTrust).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;background:transparent}
+  body{width:960px;height:520px;font-family:-apple-system,system-ui,sans-serif;position:relative;overflow:hidden}
+  .desk{position:absolute;inset:0;background:#e3e7ee}
+  .dark .desk{background:#1b1f2a}
+  .win{position:absolute;left:80px;right:80px;top:48px;bottom:0;background:#fff;border-radius:12px 12px 0 0;
+       box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 6px 18px rgba(0,0,0,.14)}
+  .dark .win{background:#2b2b2e;box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 0 .5px rgba(255,255,255,.12)}
+  .bar{height:38px;border-bottom:1px solid #e5e5e7;display:flex;align-items:center;padding:0 14px;gap:8px;border-radius:12px 12px 0 0;background:#f6f6f7}
+  .dark .bar{background:#38383b;border-color:#48484b}
+  .bar i{width:12px;height:12px;border-radius:50%;display:block}
+  .bar .t{flex:1;text-align:center;font-size:13px;color:#6e6e73;margin-right:52px}
+  .doc{padding:34px 56px;font-size:17px;line-height:1.6;color:#1d1d1f;max-width:620px}
+  .dark .doc{color:#e8e8ea}
+  .doc .caret{display:inline-block;width:2px;height:20px;background:#0a6cff;vertical-align:-3px;margin-left:1px}
+  iframe{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);width:420px;height:124px;border:0;background:transparent}
+</style></head>
+<body class="">
+<div class="desk"></div>
+<div class="win">
+  <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">meeting-notes.md</span></div>
+  <div class="doc">
+    <p><b>Follow-ups from today's call</b></p>
+    <p>Send the revised estimate to Marta by Thursday, and ask whether the staging environment can be ready before the demo.<span id="dict"></span><span class="caret"></span></p>
+  </div>
+</div>
+<iframe id="ov"></iframe>
+<script>
+ const q=new URLSearchParams(location.search);
+ if(q.get("theme")==="dark")document.body.className="dark";
+ const ov=document.getElementById("ov");
+ if(q.get("hide")==="1"){ov.remove();}else{ov.src="overlay.html?state="+(q.get("state")||"recording")+"&partial="+encodeURIComponent(q.get("partial")||"");}
+ if(q.get("pasted")==="1")document.getElementById("dict").textContent=" Also check with Luca whether the API keys were rotated after the audit.";
+ </script>
+</body></html>
