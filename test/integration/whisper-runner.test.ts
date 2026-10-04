@@ -15,6 +15,9 @@ async function exists(p: string): Promise<boolean> {
   try { await access(p); return true; } catch { return false; }
 }
 
+// Generous timeouts on purpose: a cold GitHub macOS runner compiles Metal shaders on
+// the first start of llama.cpp v0.4.0 (and whisper.cpp shares the cold-start cost), which can exceed 30s. Production timeouts in src/
+// are unchanged on purpose; these are limits of the test, not of the app.
 describe("WhisperRunner (integration)", () => {
   let server: WhisperServer;
   let runner: WhisperRunner;
@@ -30,14 +33,14 @@ describe("WhisperRunner (integration)", () => {
       binaryPath: SERVER_BIN,
       modelPath: MODEL,
       port: TEST_PORT,
-      startupTimeoutMs: 30_000,
+      startupTimeoutMs: 120_000,
     });
     await server.start();
     runner = new WhisperRunner({
       endpoint: server.getEndpoint(),
-      timeoutMs: 30_000,
+      timeoutMs: 60_000,
     });
-  }, 60_000);
+  }, 150_000);
 
   afterAll(() => {
     server?.stop();
@@ -51,7 +54,7 @@ describe("WhisperRunner (integration)", () => {
     });
     expect(result.text.toLowerCase()).toContain("test");
     expect(result.text.length).toBeGreaterThan(0);
-  }, 30_000);
+  }, 90_000);
 
   it("transcribes a short Italian clip", async () => {
     const wav = await readFile(join(ROOT, "test", "fixtures", "audio", "it-short-clean.wav"));
@@ -60,7 +63,7 @@ describe("WhisperRunner (integration)", () => {
       language: "auto",
     });
     expect(result.text.toLowerCase()).toMatch(/marco|mail|grazie/);
-  }, 30_000);
+  }, 90_000);
 
   it("returns empty text for pure silence", async () => {
     const wav = await readFile(join(ROOT, "test", "fixtures", "audio", "silence.wav"));
@@ -69,5 +72,5 @@ describe("WhisperRunner (integration)", () => {
       language: "auto",
     });
     expect(result.text.length).toBeLessThan(30);
-  }, 30_000);
+  }, 90_000);
 });

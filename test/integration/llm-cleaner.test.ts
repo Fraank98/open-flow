@@ -22,6 +22,9 @@ interface Sample {
   expectedAbsent: string[];
 }
 
+// Generous timeouts on purpose: a cold GitHub macOS runner compiles Metal shaders on
+// llama.cpp v0.4.0's first start, which can exceed 30s. Production timeouts in src/
+// are unchanged on purpose; these are limits of the test, not of the app.
 describe("LLMCleaner (integration)", () => {
   let server: LLMServer;
   let samples: Sample[];
@@ -41,10 +44,10 @@ describe("LLMCleaner (integration)", () => {
       modelPath: MODEL,
       port: TEST_PORT,
       contextSize: 1024,
-      startupTimeoutMs: 30_000,
+      startupTimeoutMs: 120_000,
     });
     await server.start();
-  }, 60_000);
+  }, 150_000);
 
   afterAll(() => {
     server?.stop();
@@ -53,7 +56,7 @@ describe("LLMCleaner (integration)", () => {
   it("removes disfluencies and adds punctuation (English)", async () => {
     const cleaner = new LLMCleaner({
       endpoint: server.getEndpoint(),
-      timeoutMs: 15_000,
+      timeoutMs: 60_000,
       maxTokens: 256,
     });
     const sample = samples.find((s) => s.id === "en-disfluencies-1")!;
@@ -62,12 +65,12 @@ describe("LLMCleaner (integration)", () => {
     // We test the HTTP runner, not the model quality.
     expect(result.text.length).toBeGreaterThan(0);
     expect(typeof result.usedFallback).toBe("boolean");
-  }, 30_000);
+  }, 90_000);
 
   it("returns fallback to raw if model produces empty output", async () => {
     const cleaner = new LLMCleaner({
       endpoint: server.getEndpoint(),
-      timeoutMs: 15_000,
+      timeoutMs: 60_000,
       maxTokens: 1, // force a tiny output that the sanitizer will probably reject
     });
     const result = await cleaner.clean("um yes hello");
@@ -76,5 +79,5 @@ describe("LLMCleaner (integration)", () => {
     } else {
       expect(result.text.length).toBeGreaterThan(0);
     }
-  }, 30_000);
+  }, 90_000);
 });
