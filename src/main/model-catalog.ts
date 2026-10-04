@@ -72,7 +72,7 @@ export const TIERS: readonly TierDescriptor[] = [
   {
     id: "max",
     label: "Maximum quality",
-    description: "Large v3 Turbo + 3B cleanup. ~3.5 GB total. Best accuracy, disfluency-aware.",
+    description: "Large v3 Turbo + 3B cleanup. ~3.7 GB total. Best accuracy, disfluency-aware. The 3B cleanup model is licensed for non-commercial use only.",
     whisperId: "whisper-large-v3-turbo",
     llmId: "qwen-3b",
   },

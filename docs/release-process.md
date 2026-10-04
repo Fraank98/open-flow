@@ -51,11 +51,13 @@ Result: `release/open-flow-<version>-arm64.dmg`.
 
 ## Installer UX (unsigned)
 
-The `.dmg` is unsigned (no Apple Developer ID). Users will see "open-flow cannot be opened because Apple cannot check it for malicious software" on first launch. Workaround:
+The `.dmg` is unsigned (no Apple Developer ID). Users will see "Apple could not verify "open-flow" is free of malware" (older macOS: "cannot be opened because Apple cannot check it for malicious software") on first launch. Workarounds:
 
-1. Right-click the app in Applications → Open
-2. Click "Open" in the dialog
-3. Future launches work normally
+1. **macOS 15 and later:** double-click the app once (it is blocked), open System Settings → Privacy & Security, scroll to *Security* and click **Open Anyway** next to the open-flow message, then confirm. This is the only GUI route on these versions.
+2. **Older macOS:** right-click the app in Applications → Open, then click "Open" in the dialog.
+3. **Any version, Terminal:** `xattr -dr com.apple.quarantine /Applications/open-flow.app`, then launch normally.
+
+Future launches work normally.
 
 This is acceptable for the beta phase. To make installation seamless, enroll in the Apple Developer Program ($99/year) and:
 - Set `identity` in `electron-builder.yml` to the Developer ID name
@@ -73,13 +75,19 @@ Follow semver. Pre-1.0:
 
 ## What gets shipped in the .dmg
 
-- Electron runtime (~150 MB)
+- Electron runtime (~230 MB, `Contents/Frameworks/`)
 - The compiled app (`dist/`)
 - Renderer assets (`src/renderer/**/*.html|css|js`)
-- Native binaries: `whisper-cli` + `llama-cli` (arm64, ~1.2 MB combined)
+- Native engines in `Contents/Resources/bin/` (arm64): `whisper-server`, `llama-server`, and the Silero VAD model `ggml-silero-v6.2.0.bin`
+- Their dylibs: `libwhisper*` / `libggml*` in `lib/` and `libllama*` / `libggml*` in `lib-llama/` (separate directories because the two engines vendor different ggml builds under the same filenames)
+- The two native addons, `ptt_monitor.node` and `whisper_stream.node` (unpacked from the asar)
+- `licenses/`: `LICENSE.txt`, `THIRD_PARTY_NOTICES.md`, and Electron's `LICENSE.electron.txt` and `LICENSES.chromium.html` (electron-builder strips Electron's own license files on macOS, so `extraResources` copies them back)
 - App icon
 
 What does NOT ship:
 - AI models — downloaded on first launch
 - Test fixtures — `test/` is excluded
 - Source TypeScript — only compiled `.js` ships
+
+After `npm run package`, check the bundle with
+`ls release/mac-arm64/open-flow.app/Contents/Resources/licenses/`.
