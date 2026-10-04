@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22">
+  <!-- Menubar template image: pure black on transparent (macOS recolours it). -->
+  <g fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 2.5 11.5 C 3.6 4.5 7 4.5 8.1 11.5 C 8.6 14 9.9 14 10.5 11.5 H 13.5"/>
+    <path d="M 17.2 5.5 V 16.5"/>
+    <path d="M 15.2 5.5 H 19.2"/>
+    <path d="M 15.2 16.5 H 19.2"/>
+  </g>
+</svg>

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="body"><path d="M 627.36 100 c 103.834 0 155.751 0 195.41 20.207 a 185.4 185.4 0 0 1 81.023 81.023 c 20.207 39.659 20.207 91.576 20.207 195.41 L 924 627.36 c 0 103.834 0 155.751 -20.207 195.41 a 185.4 185.4 0 0 1 -81.023 81.023 c -39.659 20.207 -91.576 20.207 -195.41 20.207 L 396.64 924 c -103.834 0 -155.751 0 -195.41 -20.207 a 185.4 185.4 0 0 1 -81.023 -81.023 c -20.207 -39.659 -20.207 -91.576 -20.207 -195.41 L 100 396.64 c 0 -103.834 0 -155.751 20.207 -195.41 a 185.4 185.4 0 0 1 81.023 -81.023 c 39.659 -20.207 91.576 -20.207 195.41 -20.207 Z"/></clipPath>
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="128%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".30"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".55"/>
+      <stop offset=".35" stop-color="#fff" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".0"/>
+    </linearGradient>
+
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C8DFF"/>
+      <stop offset=".55" stop-color="#4F5BFF"/>
+      <stop offset="1" stop-color="#7A2FE8"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="300" cy="200" r="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="0" y1="330" x2="0" y2="700">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E4E9FF"/>
+    </linearGradient>
+    <filter id="inkShadow" x="-10%" y="-30%" width="120%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#1E1B6B" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)"><path d="M 627.36 100 c 103.834 0 155.751 0 195.41 20.207 a 185.4 185.4 0 0 1 81.023 81.023 c 20.207 39.659 20.207 91.576 20.207 195.41 L 924 627.36 c 0 103.834 0 155.751 -20.207 195.41 a 185.4 185.4 0 0 1 -81.023 81.023 c -39.659 20.207 -91.576 20.207 -195.41 20.207 L 396.64 924 c -103.834 0 -155.751 0 -195.41 -20.207 a 185.4 185.4 0 0 1 -81.023 -81.023 c -20.207 -39.659 -20.207 -91.576 -20.207 -195.41 L 100 396.64 c 0 -103.834 0 -155.751 20.207 -195.41 a 185.4 185.4 0 0 1 81.023 -81.023 c 39.659 -20.207 91.576 -20.207 195.41 -20.207 Z" fill="url(#bg)"/></g>
+  <g clip-path="url(#body)">
+
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#sheen)"/>
+    <g fill="none" stroke="url(#ink)" stroke-width="62" stroke-linecap="round" stroke-linejoin="round" filter="url(#inkShadow)">
+      <path d="M 200 512 C 231.7 312.5 264.3 312.5 296.0 512 C 327.7 711.5 360.3 711.5 392.0 512 C 423.7 392.3 456.3 392.3 488.0 512 C 518 556 568 512 608 512 L 700 512"/>
+      <!-- text caret (I-beam) -->
+      <path d="M 782 410 V 614"/>
+      <path d="M 740 410 H 824"/>
+      <path d="M 740 614 H 824"/>
+    </g>
+    <path d="M 627.36 100 c 103.834 0 155.751 0 195.41 20.207 a 185.4 185.4 0 0 1 81.023 81.023 c 20.207 39.659 20.207 91.576 20.207 195.41 L 924 627.36 c 0 103.834 0 155.751 -20.207 195.41 a 185.4 185.4 0 0 1 -81.023 81.023 c -39.659 20.207 -91.576 20.207 -195.41 20.207 L 396.64 924 c -103.834 0 -155.751 0 -195.41 -20.207 a 185.4 185.4 0 0 1 -81.023 -81.023 c -20.207 -39.659 -20.207 -91.576 -20.207 -195.41 L 100 396.64 c 0 -103.834 0 -155.751 20.207 -195.41 a 185.4 185.4 0 0 1 81.023 -81.023 c 39.659 -20.207 91.576 -20.207 195.41 -20.207 Z" fill="none" stroke="url(#rim)" stroke-width="4"/>
+  </g>
+</svg>
