@@ -1,6 +1,6 @@
 {
   "name": "open-flow",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local-first dictation app for macOS — Whisper + LLM cleanup",
   "author": "Danilo Franco",
   "private": true,
