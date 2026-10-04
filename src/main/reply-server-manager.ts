@@ -1,6 +1,7 @@
 import { getModelById } from "./model-catalog.js";
 import type { ModelDescriptor } from "./utils/model-paths.js";
 import type { ReplyServerState } from "../shared/reply-types.js";
+import type { DownloadTracker } from "./utils/download-tracker.js";
 import type { Logger } from "./logger.js";
 
 /** The subset of LLMServer the manager needs; a factory builds the real one
@@ -14,13 +15,16 @@ export interface ReplyServerLike {
 
 export interface ReplyModelManagerLike {
   isInstalled(desc: ModelDescriptor): Promise<boolean>;
-  download(desc: ModelDescriptor, onProgress?: (p: { bytes: number; total: number }) => void): Promise<void>;
+  download(desc: ModelDescriptor, onProgress?: (p: { bytes: number; total: number }) => void, opts?: { signal?: AbortSignal }): Promise<void>;
   getInstalledPath(desc: ModelDescriptor): string;
 }
 
 export interface ReplyServerManagerDeps {
   createServer: (modelPath: string) => ReplyServerLike;
   modelManager: ReplyModelManagerLike;
+  /** Shared with the Settings window: a download started here shows up on its
+   *  card, and one the card already started is joined instead of repeated. */
+  downloads: DownloadTracker;
   logger: Pick<Logger, "info" | "error">;
 }
 
@@ -152,12 +156,14 @@ export class ReplyServerManager {
       if (!installed) {
         this.setState("downloading");
         const t0 = Date.now();
-        await this.deps.modelManager.download(desc, (p) => {
-          // No progress for a feature the user has already turned off or
-          // moved on from.
-          if (generation !== this.generation) return;
-          for (const l of this.progressListeners) l(p);
-        });
+        await this.deps.downloads.start(desc.id, (signal, report) =>
+          this.deps.modelManager.download(desc, (p) => {
+            report(p);
+            // No progress for a feature the user has already turned off or
+            // moved on from.
+            if (generation !== this.generation) return;
+            for (const l of this.progressListeners) l(p);
+          }, { signal }));
         void this.deps.logger.info("reply model downloaded", { modelId: desc.id, ms: Date.now() - t0 });
         // Superseded while the download was in flight: nothing was started,
         // so there is nothing to stop. Note this does not abort the HTTP

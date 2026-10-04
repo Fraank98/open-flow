@@ -85,21 +85,23 @@ export class PTTManager extends EventEmitter {
       opts.native ?? loadNativeAddon(opts.appRoot ?? "", opts.isPackaged ?? false);
   }
 
-  start(): void {
-    if (this.running) return;
+  /** Returns true when the monitor is installed (or already was), false when trust is missing. */
+  start(): boolean {
+    if (this.running) return true;
     if (!this.native.isTrusted()) {
       // Trigger the macOS prompt (shows the standard "open Settings" dialog).
       this.native.requestTrust();
       this.emit("trustRequired");
-      return;
+      return false;
     }
     const installed = this.native.start((state, detail) => this.handleState(state, detail));
     if (!installed) {
       this.emit("trustRequired");
-      return;
+      return false;
     }
     this.running = true;
     this.emit("ready");
+    return true;
   }
 
   stop(): void {
@@ -113,6 +115,11 @@ export class PTTManager extends EventEmitter {
 
   isTrusted(): boolean {
     return this.native.isTrusted();
+  }
+
+  /** Asks macOS for Accessibility (shows the system prompt and lists the app in System Settings). */
+  requestTrust(): boolean {
+    return this.native.requestTrust();
   }
 
   private handleState(state: NativePttState, detail?: string): void {

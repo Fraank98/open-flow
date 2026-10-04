@@ -1,98 +1,205 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <link rel="stylesheet" href="./lib/theme.css" />
     <link rel="stylesheet" href="./preferences.css" />
-    <title>open-flow preferences</title>
+    <title>open-flow Settings</title>
   </head>
   <body>
+    <!-- Tabs are generic: a new tab is one <button role="tab" data-tab="x"> plus
+         one <section role="tabpanel" id="tab-x">. No script change needed. -->
+    <header class="tabs" role="tablist" aria-label="Settings sections">
+      <button type="button" role="tab" data-tab="general" id="tabbtn-general" aria-controls="tab-general">General</button>
+      <button type="button" role="tab" data-tab="dictation" id="tabbtn-dictation" aria-controls="tab-dictation">Dictation</button>
+      <button type="button" role="tab" data-tab="models" id="tabbtn-models" aria-controls="tab-models">Models</button>
+      <button type="button" role="tab" data-tab="reply" id="tabbtn-reply" aria-controls="tab-reply" aria-label="Reply suggestions (alpha)">Reply suggestions <span class="badge alpha" aria-hidden="true">Alpha</span></button>
+      <button type="button" role="tab" data-tab="advanced" id="tabbtn-advanced" aria-controls="tab-advanced">Advanced</button>
+    </header>
+
+    <div id="restart-banner" class="banner" role="status" hidden>
+      <span>Restart open-flow to apply your model changes.</span>
+      <button type="button" id="restart-now" class="primary">Restart now</button>
+    </div>
+
     <main id="root">
-      <h1>Preferences</h1>
+      <section id="tab-general" role="tabpanel" aria-labelledby="tabbtn-general" hidden>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Open open-flow at login</span>
+            <span class="row-desc">It's a menubar app — it stays out of your way.</span>
+          </span>
+          <input type="checkbox" class="switch" id="launchAtLogin" />
+        </label>
 
-      <section>
-        <label>Hotkey</label>
-        <input id="hotkey" type="text" value="Hold Option" readonly />
-        <p class="muted">Push-to-talk on either Option key. Custom hotkey not configurable yet.</p>
-      </section>
-
-      <section>
-        <label>Language</label>
-        <select id="language"></select>
-      </section>
-
-      <section>
-        <label>Whisper model</label>
-        <div id="whisper-models" class="model-list"></div>
-      </section>
-
-      <section>
-        <label>LLM cleanup model</label>
-        <div id="llm-models" class="model-list"></div>
-      </section>
-
-      <section>
-        <label><input type="checkbox" id="cleanup" /> LLM cleanup (removes "ehm", adds punctuation — may hallucinate on small models / Italian)</label>
-      </section>
-
-      <section>
-        <label><input type="checkbox" id="spokenPunctuation" /> Literal spoken punctuation commands</label>
-        <p class="muted">Forces "comma"/"period"/"virgola"/"punto" etc. to become symbols even when the LLM thinks they are normal words. Useful if the LLM keeps missing your intent — but it will also misinterpret nouns like "my period" or "il punto della questione".</p>
-      </section>
-
-      <section>
-        <label for="dictInput">Dictionary</label>
-        <p class="muted">Preferred spellings for names, products, and jargon. Applied to every transcript (no restart needed) and used to nudge Whisper toward the right spelling.</p>
-        <div class="dict-add">
-          <input id="dictInput" type="text" placeholder="e.g. Wispr Flow" />
-          <button id="dictAdd" type="button">Add</button>
+        <div class="row">
+          <label class="row-text" for="language">
+            <span class="row-title">Language</span>
+            <span class="row-desc">What you dictate in. Auto-detect works for most people.</span>
+          </label>
+          <select id="language"></select>
         </div>
-        <ul id="dictList" class="dict-list"></ul>
+
+        <div class="row">
+          <span class="row-text">
+            <span class="row-title">Dictation key</span>
+            <span class="row-desc">Custom shortcuts are coming later.</span>
+          </span>
+          <span class="static-value">Hold ⌥ Option (left or right)</span>
+        </div>
+
+        <h2 class="group-title">Permissions</h2>
+        <ul id="permissions" class="perm-list"></ul>
+        <div class="inline-actions">
+          <button type="button" id="permissions-recheck">Check again</button>
+        </div>
+
+        <p class="panel-status" aria-live="polite"></p>
       </section>
 
-      <section>
-        <label><input type="checkbox" id="replyEnabled" /> Reply suggestions (leggi la conversazione sotto il mouse e proponi tre risposte)</label>
-        <p class="muted">Spenta per default. Accesa carica un secondo modello: la RAM torna identica a oggi appena la spegni. Richiede il tuo nome e il modello del tier scelto.</p>
-        <p class="muted" id="replyServerState">Stato del modello di risposta: —</p>
+      <section id="tab-dictation" role="tabpanel" aria-labelledby="tabbtn-dictation" hidden>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">
+              Clean up with the local model
+              <span class="restart-badge" data-restart-for="useLlmCleanup" hidden></span>
+            </span>
+            <span class="row-desc">Removes "uh", "ehm" and false starts. Punctuation comes from Whisper either way. Turn off to paste Whisper's raw text.</span>
+          </span>
+          <input type="checkbox" class="switch" id="useLlmCleanup" />
+        </label>
 
-        <label for="userDisplayName">Il tuo nome nelle chat e nelle mail</label>
-        <input id="userDisplayName" type="text" placeholder="es. Danilo Franco" />
-        <p class="muted">Serve a capire quali messaggi sono tuoi. Confrontato su nome completo e su primo nome.</p>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Spoken punctuation commands</span>
+            <span class="row-desc">"comma", "period", "virgola", "punto" become symbols — even when they're ordinary words.</span>
+          </span>
+          <input type="checkbox" class="switch" id="spokenPunctuation" />
+        </label>
 
-        <label for="replyHotkey">Scorciatoia</label>
-        <input id="replyHotkey" type="text" placeholder="Command+Control+R" />
-        <p class="muted" id="replyHotkeyStatus">Non può contenere Option: la dettatura usa Hold Option.</p>
+        <div class="block">
+          <label class="row-title" for="dictInput">Dictionary</label>
+          <p class="row-desc">Preferred spellings for names and jargon. Applied right away.</p>
+          <div class="dict-add">
+            <input id="dictInput" type="text" placeholder="e.g. Kubernetes" autocomplete="off" />
+            <button id="dictAdd" type="button">Add</button>
+          </div>
+          <ul id="dictList" class="dict-list"></ul>
+        </div>
 
-        <label>Qualità del modello di risposta</label>
+        <p class="panel-status" aria-live="polite"></p>
+      </section>
+
+      <section id="tab-reply" role="tabpanel" aria-labelledby="tabbtn-reply" hidden>
+        <div class="alpha-note" role="note">
+          <strong class="alpha-note-title">Alpha</strong>
+          <span>This feature is still being tested and improved. Suggestions can be wrong or miss context — always read them before sending.</span>
+        </div>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Suggest replies</span>
+            <span class="row-desc">Press <span id="replyShortcutHint">⌃⌘R</span> over a chat or an email to get three replies. Runs a second model on your Mac. Off by default.</span>
+          </span>
+          <input type="checkbox" class="switch" id="replyEnabled" />
+        </label>
+        <p class="row-desc guard" id="replyGuard" aria-live="polite"></p>
+        <p class="reply-state" id="replyServerState" aria-live="polite"></p>
+
+        <div class="row">
+          <label class="row-text" for="userDisplayName">
+            <span class="row-title">Your name</span>
+            <span class="row-desc">As it appears in your chats and mails, so open-flow can tell your messages from theirs.</span>
+          </label>
+          <input id="userDisplayName" type="text" placeholder="e.g. Danilo Franco" autocomplete="off" />
+        </div>
+
+        <div class="row">
+          <label class="row-text" for="replyHotkey">
+            <span class="row-title">Shortcut</span>
+            <span class="row-desc" id="replyHotkeyStatus">It can't use Option: dictation does.</span>
+          </label>
+          <input id="replyHotkey" type="text" class="recorder" readonly autocomplete="off" aria-label="Shortcut: focus and press the combination" />
+        </div>
+
+        <h2 class="group-title">Reply model</h2>
         <div id="reply-tiers" class="model-list"></div>
 
-        <label id="replyAppsModeLabel" for="replyAppsMode">App in cui leggere</label>
-        <select id="replyAppsMode">
-          <option value="allowlist">Solo queste app (consigliato)</option>
-          <option value="blocklist">Tutte tranne queste</option>
-        </select>
-        <p class="muted" id="replyAppsModeWarning" hidden></p>
-        <div class="dict-add">
-          <input id="replyAppInput" type="text" placeholder="bundle id, es. com.apple.mail" />
-          <button id="replyAppAdd" type="button">Aggiungi</button>
+        <h2 class="group-title" id="replyAppsModeLabel">Apps to read</h2>
+        <div class="row">
+          <label class="row-text" for="replyAppsMode">
+            <span class="row-title">Mode</span>
+          </label>
+          <select id="replyAppsMode">
+            <option value="allowlist">Only these apps (recommended)</option>
+            <option value="blocklist">All apps except these</option>
+          </select>
         </div>
-        <button id="replyAppAddBlocked" type="button" class="danger" hidden>Aggiungi l'ultima app rifiutata</button>
+        <p class="row-desc guard" id="replyAppsModeWarning" hidden></p>
+        <div class="app-actions">
+          <button id="replyAppPick" type="button">Add app…</button>
+          <button id="replyAppAddBlocked" type="button" hidden>Add the last blocked app</button>
+        </div>
         <ul id="replyAppList" class="dict-list"></ul>
+
+        <p class="panel-status" aria-live="polite"></p>
       </section>
 
-      <section>
-        <label><input type="checkbox" id="launchAtLogin" /> Launch open-flow at login</label>
+      <section id="tab-models" role="tabpanel" aria-labelledby="tabbtn-models" hidden>
+        <h2 class="group-title">
+          Speech recognition
+          <span class="restart-badge" data-restart-for="whisperModelId" hidden></span>
+        </h2>
+        <div id="whisper-models" class="model-list"></div>
+
+        <h2 class="group-title">
+          Text cleanup
+          <span class="restart-badge" data-restart-for="llmModelId" hidden></span>
+        </h2>
+        <div id="llm-models" class="model-list"></div>
+
+        <div class="storage">
+          <span id="storage-summary"></span>
+          <button type="button" id="reveal-models">Show in Finder</button>
+        </div>
+
+        <p class="panel-status" aria-live="polite"></p>
       </section>
 
-      <section>
-        <label><input type="checkbox" id="debug" /> Debug logging</label>
+      <section id="tab-advanced" role="tabpanel" aria-labelledby="tabbtn-advanced" hidden>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Debug logging</span>
+            <span class="row-desc">Writes detailed logs for bug reports. Applied right away.</span>
+          </span>
+          <input type="checkbox" class="switch" id="debugLogging" />
+        </label>
+
+        <div class="row">
+          <span class="row-text">
+            <span class="row-title">Logs</span>
+            <span class="row-desc">~/Library/Logs/open-flow</span>
+          </span>
+          <button type="button" id="open-logs">Open Logs</button>
+        </div>
+
+        <div class="row">
+          <span class="row-text">
+            <span class="row-title">Setup assistant</span>
+            <span class="row-desc">Walk through permissions and model download again. Your models stay on disk.</span>
+          </span>
+          <button type="button" id="reset-setup">Run setup again</button>
+        </div>
+
+        <div class="about">
+          <span id="app-version">open-flow</span>
+          <button type="button" id="open-project" class="link">github.com/Fraank98/open-flow</button>
+        </div>
+
+        <p class="panel-status" aria-live="polite"></p>
       </section>
-
-      <div class="actions">
-        <button id="save" class="primary">Save</button>
-        <span id="status" class="status"></span>
-      </div>
-
-      <script src="./preferences.js"></script>
     </main>
+
+    <script src="./lib/settings-logic.js"></script>
+    <script src="./preferences.js"></script>
   </body>
 </html>

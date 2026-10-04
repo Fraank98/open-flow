@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ReplyServerManager, type ReplyServerLike } from "../../src/main/reply-server-manager.js";
+import { DownloadTracker } from "../../src/main/utils/download-tracker.js";
 import type { ModelDescriptor } from "../../src/main/utils/model-paths.js";
 
 /** A promise the test releases on its own schedule, to put a job mid-`await`. */
@@ -54,7 +55,9 @@ function env(over: {
   const installedGates: Array<ReturnType<typeof deferred<void>>> = [];
   const logger = { info: vi.fn(async () => {}), error: vi.fn(async () => {}) };
   const states: string[] = [];
+  const downloads = new DownloadTracker();
   const m = new ReplyServerManager({
+    downloads,
     createServer: (modelPath) => {
       const gate = over.deferStart ? deferred<void>() : null;
       if (gate) startGates.push(gate);
@@ -78,7 +81,7 @@ function env(over: {
   });
   m.onStateChange((s) => states.push(s));
   return {
-    m, servers, download, logger, states, installedGates,
+    m, servers, download, downloads, logger, states, installedGates,
     releaseDownload: () => downloadGate?.resolve(),
     releaseStart: (i = 0) => startGates[i]?.resolve(),
     releaseInstalled: (i = 0) => installedGates[i]?.resolve(),
@@ -114,6 +117,31 @@ describe("ReplyServerManager.apply", () => {
     expect(download).toHaveBeenCalledTimes(1);
     expect((download.mock.calls[0]![0] as ModelDescriptor).id).toBe("gemma-4-e4b");
     expect(progress).toEqual([{ bytes: 1, total: 2 }]);
+  });
+
+  it("runs the download through the shared tracker, so the Settings card sees it in progress", async () => {
+    const { m, downloads, releaseDownload, states } = env({ installed: [], deferDownload: true });
+    const applied = m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
+    await vi.waitFor(() => expect(states).toContain("downloading"));
+    expect(downloads.isActive("gemma-3-4b")).toBe(true);
+    releaseDownload();
+    await applied;
+    expect(downloads.isActive("gemma-3-4b")).toBe(false);
+    expect(m.getState()).toBe("ready");
+  });
+
+  it("joins a download the Settings card already started instead of downloading twice", async () => {
+    const { m, downloads, download } = env({ installed: [] });
+    let finish!: () => void;
+    const cardRun = vi.fn((_signal: AbortSignal, _report: (p: { bytes: number; total: number }) => void) => new Promise<void>((r) => { finish = r; }));
+    void downloads.start("gemma-3-4b", cardRun);
+    const applied = m.apply({ enabled: true, replyModelId: "gemma-3-4b" });
+    await vi.waitFor(() => expect(m.getState()).toBe("downloading"));
+    expect(download).not.toHaveBeenCalled();
+    finish();
+    await applied;
+    expect(download).not.toHaveBeenCalled();
+    expect(cardRun).toHaveBeenCalledTimes(1);
   });
 
   it("download failure → failed with lastError, no server created", async () => {

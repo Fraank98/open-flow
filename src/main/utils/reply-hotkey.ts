@@ -5,15 +5,25 @@
  * (then a CHORD that cancels it, with a flicker of the recording pill).
  * Command+1/2/3 and Escape are the pill's temporary shortcuts (Task 8):
  * they cannot also be the trigger.
+ * Shift alone is not a modifier here: Shift+letter is capital-letter typing and
+ * Shift+Tab is focus navigation, and a global shortcut would swallow them in
+ * every app. Command or Control is required.
  */
 export const REPLY_HOTKEY_DEFAULT: string = "Command+Control+R";
 
 export type AcceleratorValidation =
   | { ok: true; accelerator: string }
-  | { ok: false; reason: "contains-option" | "no-modifier" | "no-key" | "reserved-key" };
+  | { ok: false; reason: "contains-option" | "no-modifier" | "no-key" | "reserved-key" | "shift-only" | "system-reserved" };
 
 const MODIFIERS = new Set(["command", "cmd", "control", "ctrl", "commandorcontrol", "cmdorctrl", "shift", "super", "meta"]);
+const COMMAND_OR_CONTROL = new Set(["command", "cmd", "control", "ctrl", "commandorcontrol", "cmdorctrl", "super", "meta"]);
+// Spellings of Command (CommandOrControl is Command on macOS).
+const COMMAND_ONLY = new Set(["command", "cmd", "commandorcontrol", "cmdorctrl", "super", "meta"]);
 const OPTION_LIKE = new Set(["alt", "option", "altgr"]);
+// Command+<key> combinations macOS (or the app menu) owns: quit, close, hide,
+// minimize, app switcher, Spotlight, Settings, window cycling. Registering one
+// globally would either fight the system or make the Settings window unusable.
+const COMMAND_RESERVED_KEYS = new Set(["q", "w", "h", "m", "tab", "space", ",", "`"]);
 const RESERVED_KEYS = new Set(["1", "2", "3", "escape", "esc"]);
 
 export function validateReplyAccelerator(accelerator: string): AcceleratorValidation {
@@ -25,8 +35,22 @@ export function validateReplyAccelerator(accelerator: string): AcceleratorValida
   const modifiers = lower.filter((p) => MODIFIERS.has(p));
   if (keys.length !== 1) return { ok: false, reason: "no-key" };
   if (modifiers.length === 0) return { ok: false, reason: "no-modifier" };
+  if (!modifiers.some((m) => COMMAND_OR_CONTROL.has(m))) return { ok: false, reason: "shift-only" };
   if (RESERVED_KEYS.has(keys[0]!)) return { ok: false, reason: "reserved-key" }; // keys.length === 1, so keys[0] exists
+  if (COMMAND_RESERVED_KEYS.has(keys[0]!) && modifiers.length === 1 && COMMAND_ONLY.has(modifiers[0]!)) return { ok: false, reason: "system-reserved" };
   return { ok: true, accelerator };
+}
+
+/**
+ * True for a keydown that is exactly one of those Command key equivalents
+ * (Electron's `before-input-event` shape, `key` being the typed character).
+ * The Settings window uses it to swallow them while the shortcut recorder has
+ * focus, so pressing them records instead of quitting/closing/hiding the app.
+ */
+export function isSystemReservedKeyEvent(input: { key: string; meta: boolean; control: boolean; shift: boolean; alt: boolean }): boolean {
+  if (!input.meta || input.control || input.shift || input.alt) return false;
+  const key = input.key === " " ? "space" : input.key.toLowerCase();
+  return COMMAND_RESERVED_KEYS.has(key);
 }
 
 export interface ReplyHotkeyReconciliation {
@@ -51,4 +75,24 @@ export interface ReplyHotkeyReconciliation {
 export function reconcileReplyAccelerator(savedPreference: string, current: string): ReplyHotkeyReconciliation {
   const accelerator = validateReplyAccelerator(savedPreference).ok ? savedPreference : REPLY_HOTKEY_DEFAULT;
   return { accelerator, rebuild: accelerator !== current };
+}
+
+export interface ReplyPrefsSlice {
+  replySuggestionsEnabled: boolean;
+  replyModelId: string;
+  replySuggestionsHotkey: string;
+}
+
+/**
+ * What a saved preferences change requires: the reply server is only touched
+ * when the toggle or the model changed (saving the user's name must not reload
+ * a multi-GB model), the hotkey only when the toggle or the shortcut changed.
+ * The explicit Retry in Settings does not go through here.
+ */
+export function replyChangesToApply(prev: ReplyPrefsSlice, next: ReplyPrefsSlice): { server: boolean; hotkey: boolean } {
+  const enabledChanged = prev.replySuggestionsEnabled !== next.replySuggestionsEnabled;
+  return {
+    server: enabledChanged || prev.replyModelId !== next.replyModelId,
+    hotkey: enabledChanged || prev.replySuggestionsHotkey !== next.replySuggestionsHotkey,
+  };
 }

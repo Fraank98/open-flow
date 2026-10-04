@@ -32,11 +32,11 @@ export const ESCAPE_ACCELERATOR = "Escape";
 /** Neutral, fixed strings. A flash NEVER carries the reason for an
  *  abstention: the reason would describe what was on screen (spec §Errori). */
 export const FLASH_TEXT = {
-  appNotAllowed: "App non abilitata — aggiungila nelle preferenze",
-  modelLoading: "Modello in caricamento…",
-  modelFailed: "Modello non disponibile",
-  noUserName: "Imposta il tuo nome nelle preferenze",
-  copyOnly: "Copiato — incolla con ⌘V",
+  appNotAllowed: "App not enabled — add it in Settings",
+  modelLoading: "Model loading…",
+  modelFailed: "Model unavailable",
+  noUserName: "Set your name in Settings",
+  copyOnly: "Copied — paste with ⌘V",
 } as const;
 
 export type ReplyCoordinatorState = "idle" | "reading" | "thinking" | "suggesting" | "injecting";

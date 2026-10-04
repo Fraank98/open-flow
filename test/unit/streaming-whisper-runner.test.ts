@@ -47,6 +47,13 @@ function makeFakeNative(opts: { chunkResolveMs?: number; deferFinalize?: boolean
     requestAbort: () => {
       calls.push("requestAbort");
       resolve("", { queueMs: 0, execMs: 3, aborted: true });
+      // The abort flag is global native-side: it cuts short whichever pass is
+      // in flight, the deferred final pass included.
+      if (pendingFinalizeCb) {
+        const cb = pendingFinalizeCb;
+        pendingFinalizeCb = null;
+        cb(null, "", { queueMs: 0, execMs: 3, aborted: true });
+      }
     },
     finalize: (_lang: string, cb: ChunkCb) => {
       calls.push("finalize");
@@ -174,6 +181,49 @@ describe("StreamingWhisperRunner.finalize", () => {
     expect(text).toBe("final text");
     // requestAbort must come after the in-flight chunk and before the final pass.
     expect(fake.calls).toEqual(["start", "processChunk", "requestAbort", "finalize"]);
+  });
+});
+
+describe("StreamingWhisperRunner.cancel", () => {
+  it("aborts the final pass so finalize() settles instead of running to completion", async () => {
+    const fake = makeFakeNative({ deferFinalize: true });
+    const runner = new StreamingWhisperRunner({ modelPath: "m", chunkIntervalMs: 10_000, native: fake.native });
+    const events: Array<{ phase: string; aborted: boolean }> = [];
+    runner.on("timing", (e) => events.push(e));
+    runner.start("it");
+    const p = runner.finalize("it");
+    expect(fake.calls).toEqual(["start", "finalize"]);
+
+    runner.cancel();
+
+    expect(fake.calls).toEqual(["start", "finalize", "requestAbort"]);
+    expect(await p).toBe("");
+    expect(events.find((e) => e.phase === "final")).toMatchObject({ phase: "final", aborted: true });
+  });
+
+  it("aborts an in-flight chunk and emits no partial for it", async () => {
+    const fake = makeFakeNative({ chunkResolveMs: 5000 });
+    const runner = new StreamingWhisperRunner({ modelPath: "m", chunkIntervalMs: 5, native: fake.native });
+    const partials: unknown[] = [];
+    runner.on("partial", (e) => partials.push(e));
+    runner.start("it");
+    await delay(25); // let exactly one chunk go in flight
+    expect(fake.hasPending()).toBe(true);
+
+    runner.cancel();
+    await delay(10);
+
+    expect(fake.calls).toEqual(["start", "processChunk", "requestAbort"]);
+    expect(fake.hasPending()).toBe(false);
+    expect(partials).toEqual([]);
+  });
+
+  it("does not raise the native abort when nothing is in flight", () => {
+    const fake = makeFakeNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", chunkIntervalMs: 10_000, native: fake.native });
+    runner.start("it");
+    runner.cancel();
+    expect(fake.calls).toEqual(["start"]);
   });
 });
 

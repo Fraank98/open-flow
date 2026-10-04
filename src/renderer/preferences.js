@@ -1,38 +1,135 @@
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
+const L = window.OpenFlowSettingsLogic;
+const api = window.openFlowPrefs;
 
-// Fields that the running main-process can't pick up without a relaunch:
-// the hotkey accelerator is registered once at startup, Whisper / LLM models
-// are loaded into their respective servers at boot, and the llama-server is
-// only started at launch when LLM cleanup is enabled — so toggling cleanup
-// must restart too (turning it on at runtime otherwise falls back to raw
-// text until the next launch). Changes to any of these flip the Save button
-// into "Save & Restart".
-// hotkeyAccelerator is not user-configurable yet (PTT is hardcoded to
-// Option in the native addon), so it never triggers a restart.
-// Reply suggestions fields (replySuggestionsEnabled, replySuggestionsHotkey,
-// replyModelId, replyAppsMode, replyApps, userDisplayName) never enter this
-// list: the second llama-server is reconciled by ReplyServerManager.apply
-// at save time, the hotkey is re-registered by applyReplyHotkey, and the
-// name/apps/mode are read fresh from disk on every hotkey press — none of
-// them needs a relaunch.
-const RESTART_REQUIRED_FIELDS = ["whisperModelId", "llmModelId", "useLlmCleanup"];
+// ---------------------------------------------------------------- tabs
+// Generic: every [role=tab][data-tab=X] pairs with #tab-X. Nothing here lists
+// tab ids, so a new section is just a new button and a new panel in the HTML.
+const tabButtons = [...document.querySelectorAll('[role="tab"][data-tab]')];
+const TAB_IDS = tabButtons.map((b) => b.dataset.tab);
+const TAB_KEY = "openflow.settings.tab";
 
+function readStoredTab() {
+  try {
+    return localStorage.getItem(TAB_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function showTab(id, { focus = false } = {}) {
+  const target = TAB_IDS.includes(id) ? id : "general";
+  for (const btn of tabButtons) {
+    const on = btn.dataset.tab === target;
+    btn.setAttribute("aria-selected", String(on));
+    btn.tabIndex = on ? 0 : -1;
+    const panel = document.getElementById("tab-" + btn.dataset.tab);
+    if (panel) panel.hidden = !on;
+    if (on && focus) btn.focus();
+  }
+  try {
+    localStorage.setItem(TAB_KEY, target);
+  } catch {
+    /* storage can be unavailable; the tab just isn't remembered */
+  }
+}
+
+for (const btn of tabButtons) {
+  btn.addEventListener("click", () => showTab(btn.dataset.tab));
+  btn.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const i = tabButtons.indexOf(btn);
+    const next = tabButtons[(i + (e.key === "ArrowRight" ? 1 : tabButtons.length - 1)) % tabButtons.length];
+    showTab(next.dataset.tab, { focus: true });
+  });
+}
+
+// A hash (set by "Check permissions…" in the tray) wins over the remembered tab.
+showTab(location.hash ? L.tabFromHash(location.hash, TAB_IDS) : (readStoredTab() ?? "general"));
+api.onShowTab((tab) => showTab(L.tabFromHash("#" + tab, TAB_IDS)));
+
+// ---------------------------------------------------------------- feedback
+const statusTimers = new WeakMap();
+
+/** Local feedback line of a panel: "Saved", "Downloaded …", or an error. */
+function say(tabId, text, kind) {
+  const el = document.querySelector(`#tab-${tabId} .panel-status`);
+  if (!el) return;
+  clearTimeout(statusTimers.get(el));
+  el.textContent = text;
+  el.className = "panel-status" + (kind ? " " + kind : "");
+  if (kind !== "error" && text) {
+    statusTimers.set(el, setTimeout(() => { el.textContent = ""; el.className = "panel-status"; }, 4000));
+  }
+}
+
+// ---------------------------------------------------------------- restart state
+async function refreshRestart() {
+  let fields = [];
+  try {
+    fields = (await api.restartStatus()).fields;
+  } catch {
+    /* keep the previous state */
+    return;
+  }
+  for (const badge of document.querySelectorAll("[data-restart-for]")) {
+    const text = L.restartBadgeFor(badge.dataset.restartFor, fields);
+    badge.hidden = !text;
+    badge.textContent = text || "";
+  }
+  $("#restart-banner").hidden = !L.bannerVisible(fields);
+}
+
+$("#restart-now").addEventListener("click", () => {
+  $("#restart-now").disabled = true;
+  $("#restart-now").textContent = "Restarting…";
+  api.relaunch();
+});
+
+// ---------------------------------------------------------------- init
 async function init() {
-  const prefs = await window.openFlowPrefs.load();
-  const initialPrefs = { ...prefs };
-  const catalog = await window.openFlowPrefs.listModels();
+  const prefs = await api.load();
+  const catalog = await api.listModels();
 
-  // Hotkey input is read-only (display only). The PTTManager uses the
-  // native addon's Option monitor, not Electron's globalShortcut.
-  $("#hotkey").value = "Hold Option";
-  $("#debug").checked = prefs.debugLogging;
-  $("#cleanup").checked = prefs.useLlmCleanup !== false;
-  $("#launchAtLogin").checked = prefs.launchAtLogin !== false;
-  $("#spokenPunctuation").checked = prefs.spokenPunctuation === true;
+  /** Saves a partial right away; reports in the given tab's status line. */
+  async function save(patch, tabId, okText = "Saved") {
+    try {
+      Object.assign(prefs, await api.update(patch));
+      say(tabId, okText, "ok");
+    } catch (err) {
+      say(tabId, "Couldn't save: " + L.cleanIpcError(err), "error");
+    }
+    await refreshRestart();
+  }
 
-  // Working copy of the dictionary terms; rendered as a removable list.
+  // Toggles share one rule: the element id is the preference name.
+  const toggles = [
+    ["launchAtLogin", "general", prefs.launchAtLogin !== false],
+    ["useLlmCleanup", "dictation", prefs.useLlmCleanup !== false],
+    ["spokenPunctuation", "dictation", prefs.spokenPunctuation === true],
+    ["debugLogging", "advanced", prefs.debugLogging === true],
+  ];
+  for (const [key, tab, value] of toggles) {
+    const el = document.getElementById(key);
+    el.checked = value;
+    el.addEventListener("change", () => save({ [key]: el.checked }, tab));
+  }
+
+  // Language
+  const langSel = $("#language");
+  for (const lang of catalog.languages) {
+    const opt = document.createElement("option");
+    opt.value = lang.id;
+    opt.textContent = lang.label;
+    if (lang.id === prefs.language) opt.selected = true;
+    langSel.appendChild(opt);
+  }
+  langSel.addEventListener("change", () => save({ language: langSel.value }, "general"));
+
+  // Dictionary
   let dictTerms = Array.isArray(prefs.dictionary) ? [...prefs.dictionary] : [];
 
   function renderDict() {
@@ -45,13 +142,12 @@ async function init() {
       span.textContent = term;
       const rm = document.createElement("button");
       rm.type = "button";
-      rm.className = "danger";
       rm.textContent = "×";
       rm.setAttribute("aria-label", `Remove ${term}`);
       rm.addEventListener("click", () => {
         dictTerms.splice(i, 1);
         renderDict();
-        refreshSaveButton();
+        void save({ dictionary: dictTerms }, "dictation");
       });
       li.append(span, rm);
       list.appendChild(li);
@@ -67,7 +163,7 @@ async function init() {
     dictTerms.push(term);
     input.value = "";
     renderDict();
-    refreshSaveButton();
+    void save({ dictionary: dictTerms }, "dictation");
     input.focus();
   }
 
@@ -81,215 +177,246 @@ async function init() {
   renderDict();
 
   // ── Reply suggestions ──
+  // Every control saves its own field through prefs:update. None of these fields
+  // needs a restart: the main process reconfigures the reply server and the
+  // shortcut from its onSaved hook.
   let replyApps = Array.isArray(prefs.replyApps) ? [...prefs.replyApps] : [];
-  let replyTierId = (catalog.replyTiers.find((t) => t.modelId === prefs.replyModelId) ?? catalog.replyTiers[0]).id;
+  // Optimistic until the first status poll lands, so the toggle isn't wrongly
+  // disabled in the common case (helper loaded fine).
+  let nativeOk = true;
 
   $("#replyEnabled").checked = prefs.replySuggestionsEnabled === true;
   $("#userDisplayName").value = prefs.userDisplayName ?? "";
-  // No `?? "Command+Control+R"` fallback: preferencesStore.load() always
-  // merges DEFAULT_PREFS, so replySuggestionsHotkey is never undefined here
-  // (found by review, Minor 8.3 — the fallback was dead code and a third
-  // copy of the same literal, alongside utils/reply-hotkey.ts and
-  // preferences-store.ts).
-  $("#replyHotkey").value = prefs.replySuggestionsHotkey;
   $("#replyAppsMode").value = prefs.replyAppsMode ?? "allowlist";
 
-  /** The same list serves both modes, and switching the dropdown silently
-   *  redefines what it means: allowlist reads ONLY these apps, blocklist
-   *  reads every app EXCEPT these. The label and a warning change with the
-   *  mode instead of leaving that to the reader to notice on their own. */
-  function updateReplyAppsModeUI() {
-    const mode = $("#replyAppsMode").value;
-    $("#replyAppsModeLabel").textContent = mode === "blocklist" ? "App da escludere" : "App in cui leggere";
-    const warn = $("#replyAppsModeWarning");
-    if (mode !== "blocklist") {
-      warn.hidden = true;
-      return;
-    }
-    warn.hidden = false;
-    warn.textContent = replyApps.length > 0
-      ? "In tutte le altre app il contesto verrà letto."
-      : "Nessuna app esclusa: con questa impostazione la feature non leggerà nulla.";
+  /** The reply model chosen in the cards (its install state is the live one on the card). */
+  function selectedReplyModel() {
+    return catalog.reply.find((m) => m.id === prefs.replyModelId) ?? catalog.reply[0];
   }
-  $("#replyAppsMode").addEventListener("change", updateReplyAppsModeUI);
+
+  /** The same list serves both modes; the label and a warning follow the mode. */
+  function updateReplyAppsModeUI() {
+    const view = L.replyAppsView($("#replyAppsMode").value, replyApps.length);
+    $("#replyAppsModeLabel").textContent = view.label;
+    const warn = $("#replyAppsModeWarning");
+    warn.hidden = !view.warning;
+    warn.textContent = view.warning || "";
+  }
+  $("#replyAppsMode").addEventListener("change", () => {
+    updateReplyAppsModeUI();
+    void save({ replyAppsMode: $("#replyAppsMode").value }, "reply");
+  });
+
+  // Readable names and icons for the bundle ids in the list, resolved by the main process.
+  const appInfo = new Map(); // lower-case bundle id -> { bundleId, name, icon }
 
   function renderReplyApps() {
     const list = $("#replyAppList");
     list.innerHTML = "";
     replyApps.forEach((id, i) => {
+      const label = L.appRowLabel(id, appInfo.get(id.toLowerCase()));
       const li = document.createElement("li");
-      const span = document.createElement("span");
-      span.className = "dict-term";
-      span.textContent = id;
+      const icon = document.createElement("img");
+      icon.className = "app-icon";
+      icon.alt = "";
+      const src = appInfo.get(id.toLowerCase())?.icon;
+      if (src) icon.src = src; else icon.classList.add("blank");
+      const text = document.createElement("span");
+      text.className = "dict-term";
+      text.textContent = label.primary;
+      if (label.secondary) {
+        const small = document.createElement("span");
+        small.className = "app-id";
+        small.textContent = label.secondary;
+        text.append(" ", small);
+      }
       const rm = document.createElement("button");
       rm.type = "button";
       rm.className = "danger";
       rm.textContent = "×";
-      rm.setAttribute("aria-label", `Remove ${id}`);
-      rm.addEventListener("click", () => { replyApps.splice(i, 1); renderReplyApps(); });
-      li.append(span, rm);
+      rm.setAttribute("aria-label", `Remove ${label.primary}`);
+      rm.addEventListener("click", () => {
+        replyApps.splice(i, 1);
+        renderReplyApps();
+        void save({ replyApps }, "reply");
+      });
+      li.append(icon, text, rm);
       list.appendChild(li);
     });
-    // The list content decides which blocklist warning applies (empty vs
-    // non-empty), so every add/remove must refresh it too, not just a mode
-    // switch.
+    // The list content decides which warning applies, so every add/remove refreshes it.
     updateReplyAppsModeUI();
   }
+
+  async function resolveReplyApps(ids) {
+    const missing = ids.filter((id) => !appInfo.has(id.toLowerCase()));
+    if (missing.length === 0) return;
+    try {
+      for (const info of await api.resolveApps(missing)) appInfo.set(info.bundleId.toLowerCase(), info);
+    } catch {
+      /* names are a nicety: the list falls back to bundle ids */
+    }
+    renderReplyApps();
+  }
+
   function addReplyApp(raw) {
     const id = (raw ?? "").trim();
     if (!id) return;
     replyApps = replyApps.filter((a) => a.toLowerCase() !== id.toLowerCase());
     replyApps.push(id);
     renderReplyApps();
+    void save({ replyApps }, "reply");
   }
-  $("#replyAppAdd").addEventListener("click", () => { addReplyApp($("#replyAppInput").value); $("#replyAppInput").value = ""; });
-  $("#replyAppInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); addReplyApp($("#replyAppInput").value); $("#replyAppInput").value = ""; }
+
+  $("#replyAppPick").addEventListener("click", async () => {
+    try {
+      const picked = await api.pickApp();
+      if (!picked) return; // cancelled
+      appInfo.set(picked.bundleId.toLowerCase(), picked);
+      addReplyApp(picked.bundleId);
+    } catch (err) {
+      say("reply", L.cleanIpcError(err), "error");
+    }
   });
   renderReplyApps();
+  void resolveReplyApps(replyApps);
 
-  function renderReplyTiers() {
-    const container = $("#reply-tiers");
-    container.innerHTML = "";
-    for (const t of catalog.replyTiers) {
-      const row = document.createElement("div");
-      row.className = "model-row" + (t.id === replyTierId ? " selected" : "");
-      row.dataset.id = t.id;
-      const name = document.createElement("span");
-      name.className = "name";
-      name.textContent = `${t.label} — ${t.description}`;
-      const size = document.createElement("span");
-      size.className = "size";
-      size.textContent = `${(t.sizeBytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-      const badge = document.createElement("span");
-      badge.className = "badge" + (t.installed ? " installed" : "");
-      badge.textContent = t.installed ? "installed" : "not installed";
-      const actions = document.createElement("span");
-      actions.className = "row-actions";
-      if (!t.installed) {
-        const dl = document.createElement("button");
-        dl.textContent = "Download";
-        dl.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          dl.disabled = true;
-          dl.textContent = "0%";
-          const off = window.openFlowPrefs.onDownloadProgress((p) => {
-            if (p.id === t.modelId && p.total > 0) dl.textContent = Math.floor((p.bytes / p.total) * 100) + "%";
-          });
-          try {
-            await window.openFlowPrefs.downloadModel("reply", t.modelId);
-            t.installed = true;
-            renderReplyTiers();
-            $("#status").textContent = `Scaricato ${t.label}. Seleziona il tier e salva.`;
-            // This is the primary path to turning the feature on: without
-            // this the checkbox stays disabled, with no explanation, until
-            // something unrelated (a name edit, a tier click) happens to
-            // re-run the guard.
-            refreshReplyGuards();
-          } catch (err) {
-            dl.disabled = false;
-            dl.textContent = "Retry";
-            $("#status").textContent = "Download failed: " + err.message;
-          } finally { off(); }
-        });
-        actions.appendChild(dl);
-      }
-      row.append(name, size, badge, actions);
-      row.addEventListener("click", (e) => {
-        if (e.target.tagName === "BUTTON") return;
-        replyTierId = t.id;
-        renderReplyTiers();
-        refreshReplyGuards();
-      });
-      container.appendChild(row);
+  // ── Shortcut recorder ──
+  // The field is a recorder, not a text box: focus it and press the combination.
+  // An invalid combination is never saved; the reason appears under the field.
+  const HOTKEY_HINT = "It can't use Option: dictation does.";
+  const hotkeyField = $("#replyHotkey");
+  const hotkeyStatus = $("#replyHotkeyStatus");
+
+  function showSavedShortcut() {
+    hotkeyField.value = L.acceleratorLabel(prefs.replySuggestionsHotkey);
+    hotkeyStatus.textContent = HOTKEY_HINT;
+    hotkeyStatus.classList.remove("invalid");
+  }
+  showSavedShortcut();
+
+  hotkeyField.addEventListener("focus", () => {
+    api.recorderActive(true);
+    hotkeyField.value = "";
+    hotkeyField.placeholder = "Press shortcut…";
+  });
+  hotkeyField.addEventListener("blur", () => {
+    api.recorderActive(false);
+    hotkeyField.placeholder = "";
+    showSavedShortcut();
+  });
+  // Main swallowed ⌘Q/⌘W/… before the page saw it: say why nothing was recorded.
+  api.onReservedKey(() => {
+    hotkeyStatus.textContent = L.hotkeyReasonText("system-reserved");
+    hotkeyStatus.classList.add("invalid");
+  });
+  window.addEventListener("beforeunload", () => api.recorderActive(false));
+  hotkeyField.addEventListener("keydown", async (e) => {
+    const bare = !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+    // Tab, with or without Shift, keeps keyboard navigation: Shift+Tab walks back
+    // out of the field and is never a shortcut (the validator refuses Shift alone).
+    if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) return;
+    e.preventDefault();
+    if (e.key === "Escape" && bare) {
+      hotkeyField.blur();
+      return;
     }
-  }
-  renderReplyTiers();
+    const accelerator = L.acceleratorFromKeyEvent(e);
+    if (accelerator === null) return; // only modifiers so far
+    hotkeyField.value = L.acceleratorLabel(accelerator);
+    const check = await api.validateReplyHotkey(accelerator);
+    if (!check.ok) {
+      hotkeyStatus.textContent = L.hotkeyReasonText(check.reason);
+      hotkeyStatus.classList.add("invalid");
+      return;
+    }
+    hotkeyStatus.textContent = HOTKEY_HINT;
+    hotkeyStatus.classList.remove("invalid");
+    if (accelerator === prefs.replySuggestionsHotkey) return;
+    await save({ replySuggestionsHotkey: accelerator }, "reply");
+    showShortcutHint();
+    void refreshReplyStatus();
+    hotkeyField.blur();
+  });
 
-  function selectedTier() {
-    return catalog.replyTiers.find((t) => t.id === replyTierId) ?? catalog.replyTiers[0];
-  }
-
-  const HOTKEY_MESSAGES = {
-    "contains-option": "Option è riservata alla dettatura (Hold Option): scegli un'altra combinazione.",
-    "no-modifier": "Serve almeno un modificatore (Command, Control, Shift).",
-    "no-key": "Serve un tasto oltre ai modificatori.",
-    "reserved-key": "1, 2, 3 ed Esc sono le scorciatoie della pill mentre è visibile.",
-  };
-  /** Gates the global Save button only while the feature is (or is being
-   *  left) switched on: an invalid hotkey sitting in this field must not
-   *  block saving an unrelated change — language, dictionary, models —
-   *  while the feature is off. */
-  async function validateHotkeyField() {
-    const r = await window.openFlowPrefs.validateReplyHotkey($("#replyHotkey").value.trim());
-    $("#replyHotkeyStatus").textContent = r.ok
-      ? "Non può contenere Option: la dettatura usa Hold Option."
-      : (HOTKEY_MESSAGES[r.reason] ?? "Acceleratore non valido.");
-    $("#save").disabled = !r.ok && $("#replyEnabled").checked;
-    return r.ok;
-  }
-  $("#replyHotkey").addEventListener("input", () => { void validateHotkeyField(); });
-
-  /** The feature cannot be switched on without a name and without the tier's
-   *  model on disk: the parser cannot assign roles without the name, and the
-   *  server cannot start without the file. Never force the checkbox off —
-   *  a preference already saved as "on" (e.g. the tier's model was deleted
-   *  after enabling) must not silently flip to "off" on some unrelated Save
-   *  just because Preferences happened to be reopened: it stays disabled,
-   *  with the impediment spelled out, and whatever it already was is what
-   *  gets saved. */
+  /**
+   * The feature cannot be switched on without a name and without the selected
+   * model on disk. The toggle is never forced off, and it is only disabled
+   * while it is off: a preference already saved as "on" (e.g. the model was
+   * deleted afterwards) keeps its value and can still be switched off, with the
+   * impediment spelled out.
+   */
   function refreshReplyGuards() {
-    const tier = selectedTier();
-    const nameOk = $("#userDisplayName").value.trim().length > 0;
-    const box = $("#replyEnabled");
-    const blockers = [];
-    if (!nameOk) blockers.push("inserisci il tuo nome");
-    if (!tier.installed) blockers.push(`scarica ${tier.label}`);
-    // Same fixed string refreshReplyStatus already shows in the status line
-    // below (no new copy): without this, checking the box while the native
-    // addon failed to load starts the reply llama-server for a feature that
-    // can never register a hotkey (found by review — Important 2).
-    if (!nativeOk) blockers.push("addon non caricabile: feature disattivata per questa sessione");
-    box.disabled = blockers.length > 0;
-    if (blockers.length > 0) {
-      $("#status").textContent = `Per accendere le proposte di risposta: ${blockers.join(", ")}.`;
-    }
-    // The checkbox's checked state is one of the two inputs to the Save
-    // gate above, so a guard refresh (which can follow a checkbox change)
-    // must recompute it too.
-    void validateHotkeyField();
+    const model = selectedReplyModel();
+    const message = L.replyGuardMessage({
+      name: $("#userDisplayName").value,
+      modelInstalled: model.installed,
+      tierLabel: model.label,
+      nativeOk,
+    });
+    $("#replyEnabled").disabled = L.replyToggleDisabled(message, $("#replyEnabled").checked);
+    $("#replyGuard").textContent = message;
   }
   $("#userDisplayName").addEventListener("input", refreshReplyGuards);
-  $("#replyEnabled").addEventListener("change", refreshReplyGuards);
-  // Optimistic default: the first refreshReplyStatus() (async) hasn't landed
-  // yet when refreshReplyGuards() first runs below, so the checkbox isn't
-  // wrongly disabled for the common case (addon loaded fine) while waiting.
-  let nativeOk = true;
+  $("#userDisplayName").addEventListener("change", () => {
+    void save({ userDisplayName: $("#userDisplayName").value.trim() }, "reply");
+  });
+  $("#replyEnabled").addEventListener("change", () => {
+    void save({ replySuggestionsEnabled: $("#replyEnabled").checked }, "reply");
+    refreshReplyGuards(); // an unmet requirement locks the toggle once it is off
+  });
   refreshReplyGuards();
 
+  /** One sentence for the model/shortcut state; "failed" is a Retry button. */
+  function renderReplyState(view, detail) {
+    const el = $("#replyServerState");
+    el.textContent = "";
+    el.dataset.tone = view.tone;
+    if (!view.text) return;
+    if (view.action === "retry") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "link";
+      retry.textContent = view.text;
+      retry.addEventListener("click", () => {
+        // Saving an unchanged toggle no longer restarts the server: ask for it explicitly.
+        say("reply", "Retrying…", "ok");
+        void api.retryReply().then(() => refreshReplyStatus());
+      });
+      el.appendChild(retry);
+    } else {
+      el.textContent = view.text;
+    }
+    // The raw error is for the tooltip only: it can be long and technical.
+    if (detail) el.title = detail; else el.removeAttribute("title");
+  }
+
+  function showShortcutHint() {
+    $("#replyShortcutHint").textContent = L.acceleratorLabel(prefs.replySuggestionsHotkey);
+  }
+  showShortcutHint();
+
   async function refreshReplyStatus() {
-    const s = await window.openFlowPrefs.replyStatus();
-    if (s.nativeOk !== nativeOk) {
-      nativeOk = s.nativeOk;
+    const s = await api.replyStatus();
+    // While booting nativeOk is a placeholder: assume the helper is there.
+    const available = s.nativeOk || s.booting;
+    if (available !== nativeOk) {
+      nativeOk = available;
       refreshReplyGuards();
     }
-    const parts = [`stato: ${s.serverState}`];
-    if (s.serverError) parts.push(`errore: ${s.serverError}`);
-    if (!s.nativeOk) parts.push("addon non caricabile: feature disattivata per questa sessione");
-    if (s.serverState === "ready" && !s.hotkeyRegistered) parts.push("scorciatoia occupata da un'altra app");
-    $("#replyServerState").textContent = `Modello di risposta — ${parts.join(" · ")}`;
+    renderReplyState(L.replyStatusView(s, prefs.replySuggestionsHotkey), s.serverError);
     const btn = $("#replyAppAddBlocked");
-    // lastBlockedBundleId is never cleared once set (it survives past apps
-    // the user has since added), so the button must hide itself once that
-    // app is already in the list — otherwise it stays on screen forever
-    // after being acted on.
+    // lastBlockedBundleId is never cleared once set, so hide the button once
+    // that app is already in the list.
     const alreadyListed = s.lastBlockedBundleId
       ? replyApps.some((a) => a.toLowerCase() === s.lastBlockedBundleId.toLowerCase())
       : true;
     if (s.lastBlockedBundleId && !alreadyListed) {
       btn.hidden = false;
-      btn.textContent = `Aggiungi ${s.lastBlockedBundleId}`;
+      const blocked = appInfo.get(s.lastBlockedBundleId.toLowerCase());
+      btn.textContent = `Add ${blocked?.name ?? s.lastBlockedBundleId}`;
       btn.onclick = () => addReplyApp(s.lastBlockedBundleId);
+      // The name arrives asynchronously; the next poll shows it.
+      void resolveReplyApps([s.lastBlockedBundleId]);
     } else {
       btn.hidden = true;
     }
@@ -298,229 +425,307 @@ async function init() {
   const replyStatusTimer = setInterval(() => { void refreshReplyStatus(); }, 2000);
   window.addEventListener("beforeunload", () => clearInterval(replyStatusTimer));
 
-  const langSel = $("#language");
-  for (const lang of catalog.languages) {
-    const opt = document.createElement("option");
-    opt.value = lang.id;
-    opt.textContent = lang.label;
-    if (lang.id === prefs.language) opt.selected = true;
-    langSel.appendChild(opt);
+  // ------------------------------------------------------------ models
+  const groups = [
+    { kind: "whisper", containerId: "whisper-models", models: catalog.whisper, prefKey: "whisperModelId", tab: "models" },
+    { kind: "llm", containerId: "llm-models", models: catalog.llm, prefKey: "llmModelId", tab: "models" },
+    // The reply cards reuse the same renderer; their feedback goes to the Reply tab.
+    { kind: "reply", containerId: "reply-tiers", models: catalog.reply, prefKey: "replyModelId", tab: "reply" },
+  ];
+  const rowRenderers = new Map(); // model id -> () => void
+
+  function refreshStorage() {
+    $("#storage-summary").textContent = L.storageSummary([...catalog.whisper, ...catalog.llm]);
   }
 
-  function renderModels(containerId, models, selectedId, kind) {
-    const container = $("#" + containerId);
-    container.innerHTML = "";
-    for (const m of models) {
-      const row = document.createElement("div");
-      row.className = "model-row" + (m.id === selectedId ? " selected" : "");
-      row.dataset.id = m.id;
+  function renderAllRows() {
+    for (const fn of rowRenderers.values()) fn();
+    refreshStorage();
+    // The reply toggle depends on whether the selected reply model is on disk.
+    refreshReplyGuards();
+  }
 
-      const nameEl = document.createElement("span");
-      nameEl.className = "name";
-      nameEl.textContent = m.label;
-      const sizeEl = document.createElement("span");
-      sizeEl.className = "size";
-      sizeEl.textContent = `${(m.sizeBytes / 1024 / 1024).toFixed(0)} MB`;
-      const badgeEl = document.createElement("span");
-      badgeEl.className = "badge" + (m.installed ? " installed" : "");
-      badgeEl.textContent = m.installed ? "installed" : "not installed";
-      row.append(nameEl, sizeEl, badgeEl);
+  // One idempotent renderer per row: it always rebuilds the card from the model
+  // state ({installed, downloading}) plus the selected id, and always attaches
+  // the handlers, so a row can be re-rendered any number of times without
+  // leaving a dead button behind.
+  function renderRow(row, m, group) {
+    const view = L.modelRowView(m, prefs[group.prefKey]);
+    row.classList.toggle("active", view.primaryAction === "active");
+    row.innerHTML = "";
 
-      const actionsEl = document.createElement("span");
-      actionsEl.className = "row-actions";
-      row.appendChild(actionsEl);
+    const head = document.createElement("div");
+    head.className = "model-head";
+    const name = document.createElement("span");
+    name.className = "model-name";
+    name.textContent = m.label;
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    if (view.primaryAction === "active") {
+      badge.textContent = "Active";
+      badge.classList.add("active");
+    } else if (m.installed) {
+      badge.textContent = "Installed";
+      badge.classList.add("installed");
+    } else {
+      badge.textContent = "Not downloaded";
+    }
+    head.append(name, badge);
 
-      function getCurrentlySelected() {
-        return $(`#${containerId} .selected`)?.dataset.id;
-      }
+    const desc = document.createElement("div");
+    desc.className = "model-desc";
+    desc.textContent = m.description;
+    row.append(head, desc);
 
-      function setInstalled(installed) {
-        m.installed = installed;
-        badgeEl.classList.toggle("installed", installed);
-        badgeEl.textContent = installed ? "installed" : "not installed";
-        actionsEl.innerHTML = "";
-        if (installed) {
-          if (m.id !== getCurrentlySelected()) {
-            const delBtn = document.createElement("button");
-            delBtn.textContent = "Delete";
-            delBtn.className = "danger";
-            delBtn.addEventListener("click", async (e) => {
-              e.stopPropagation();
-              if (m.id === getCurrentlySelected()) {
-                $("#status").textContent = "Switch to another model + Save first, then delete this one.";
-                return;
-              }
-              delBtn.disabled = true;
-              delBtn.textContent = "Deleting…";
-              try {
-                await window.openFlowPrefs.deleteModel(kind, m.id);
-                setInstalled(false);
-                $("#status").textContent = `Deleted ${m.label}.`;
-              } catch (err) {
-                $("#status").textContent = "Delete failed: " + err.message;
-                delBtn.disabled = false;
-                delBtn.textContent = "Delete";
-              }
-            });
-            actionsEl.appendChild(delBtn);
-          }
-        } else {
-          const dlBtn = document.createElement("button");
-          dlBtn.textContent = "Download";
-          dlBtn.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            dlBtn.textContent = "0%";
-            dlBtn.disabled = true;
-            const off = window.openFlowPrefs.onDownloadProgress((p) => {
-              if (p.id === m.id && p.total > 0) {
-                dlBtn.textContent = Math.floor((p.bytes / p.total) * 100) + "%";
-              }
-            });
-            try {
-              await window.openFlowPrefs.downloadModel(kind, m.id);
-              setInstalled(true);
-              $("#status").textContent = `Downloaded ${m.label}. Click the row to select it, then Save.`;
-            } catch (err) {
-              dlBtn.textContent = "Retry";
-              dlBtn.disabled = false;
-              $("#status").textContent = "Download failed: " + err.message;
-            } finally {
-              off();
-            }
-          });
-          actionsEl.appendChild(dlBtn);
-        }
-      }
+    if (view.licenseNote) {
+      const note = document.createElement("div");
+      note.className = "license-note";
+      note.textContent = view.licenseNote;
+      row.appendChild(note);
+    }
 
-      setInstalled(m.installed);
+    const meta = document.createElement("div");
+    meta.className = "model-meta";
+    meta.textContent = L.modelMeta(m);
+    row.appendChild(meta);
 
-      row.addEventListener("click", (e) => {
-        if (e.target.tagName === "BUTTON") return;
-        if (!m.installed) {
-          $("#status").textContent = "Download this model before selecting it.";
-          return;
-        }
-        Array.from(container.children).forEach((c) => c.classList.remove("selected"));
-        row.classList.add("selected");
-        // Re-render Delete buttons: the row that just became selected must
-        // hide its Delete (you can't delete the active model), and others
-        // that are installed should show Delete again.
-        for (const r of container.children) {
-          const id = r.dataset.id;
-          const inst = id === m.id ? true : models.find((x) => x.id === id)?.installed;
-          const model = models.find((x) => x.id === id);
-          if (!model) continue;
-          // Reuse setInstalled-equivalent by re-rendering the actions cell only
-          const actionsCell = r.querySelector(".row-actions");
-          if (!actionsCell) continue;
-          actionsCell.innerHTML = "";
-          if (inst && id !== m.id) {
-            const delBtn = document.createElement("button");
-            delBtn.textContent = "Delete";
-            delBtn.className = "danger";
-            delBtn.addEventListener("click", async (ev) => {
-              ev.stopPropagation();
-              if (id === getCurrentlySelected()) {
-                $("#status").textContent = "Switch to another model + Save first, then delete this one.";
-                return;
-              }
-              delBtn.disabled = true;
-              delBtn.textContent = "Deleting…";
-              try {
-                await window.openFlowPrefs.deleteModel(kind, id);
-                model.installed = false;
-                const badge = r.querySelector(".badge");
-                badge.classList.remove("installed");
-                badge.textContent = "not installed";
-                actionsCell.innerHTML = "";
-                const dl = document.createElement("button");
-                dl.textContent = "Download";
-                actionsCell.appendChild(dl);
-                $("#status").textContent = `Deleted ${model.label}.`;
-              } catch (err) {
-                $("#status").textContent = "Delete failed: " + err.message;
-                delBtn.disabled = false;
-                delBtn.textContent = "Delete";
-              }
-            });
-            actionsCell.appendChild(delBtn);
-          } else if (!inst) {
-            const dl = document.createElement("button");
-            dl.textContent = "Download";
-            actionsCell.appendChild(dl);
-          }
-        }
+    if (m.details) {
+      // Collapsed benchmark prose; the open state survives the re-renders a download causes.
+      const details = document.createElement("details");
+      details.className = "model-details";
+      details.open = m.detailsOpen === true;
+      const summary = document.createElement("summary");
+      summary.textContent = "Benchmark details";
+      const text = document.createElement("p");
+      text.textContent = m.details;
+      details.append(summary, text);
+      details.addEventListener("toggle", () => { m.detailsOpen = details.open; });
+      row.appendChild(details);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "model-actions";
+    row.appendChild(actions);
+
+    if (m.downloading) {
+      const wrap = document.createElement("span");
+      wrap.className = "dl-progress";
+      const bar = document.createElement("progress");
+      bar.max = 100;
+      bar.value = m.progressPct ?? 0;
+      bar.setAttribute("aria-label", `Downloading ${m.label}`);
+      const pct = document.createElement("span");
+      pct.className = "pct";
+      pct.textContent = (m.progressPct ?? 0) + "%";
+      const cancel = document.createElement("button");
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", () => {
+        m.cancelling = true;
+        api.cancelDownload(m.id);
       });
+      wrap.append(bar, pct, cancel);
+      actions.appendChild(wrap);
+      return;
+    }
 
-      container.appendChild(row);
+    if (view.primaryAction === "download") {
+      const dl = document.createElement("button");
+      dl.textContent = m.downloadFailed ? "Retry" : "Download";
+      dl.addEventListener("click", () => startDownload(m, group));
+      actions.appendChild(dl);
+      return;
+    }
+
+    if (view.primaryAction === "use") {
+      const use = document.createElement("button");
+      use.className = "primary";
+      use.textContent = "Use";
+      use.addEventListener("click", async () => {
+        await save({ [group.prefKey]: m.id }, group.tab, `Now using ${m.label}`);
+        renderAllRows();
+      });
+      actions.appendChild(use);
+    }
+
+    if (view.canDelete) {
+      const del = document.createElement("button");
+      del.className = "danger";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        del.disabled = true;
+        del.textContent = "Deleting…";
+        try {
+          await api.deleteModel(group.kind, m.id);
+          // Re-read what is on disk rather than assuming the delete worked.
+          await refreshModels();
+          if (m.installed) say(group.tab, `Couldn't delete ${m.label}: the file is still there.`, "error");
+          else say(group.tab, `Deleted ${m.label}`, "ok");
+        } catch (err) {
+          await refreshModels();
+          say(group.tab, "Couldn't delete: " + L.cleanIpcError(err), "error");
+        }
+        renderAllRows();
+      });
+      actions.appendChild(del);
     }
   }
 
-  renderModels("whisper-models", catalog.whisper, prefs.whisperModelId, "whisper");
-  renderModels("llm-models", catalog.llm, prefs.llmModelId, "llm");
-
-  function buildNextPrefs() {
-    const selectedWhisper = $("#whisper-models .selected")?.dataset.id ?? prefs.whisperModelId;
-    const selectedLlm = $("#llm-models .selected")?.dataset.id ?? prefs.llmModelId;
-    return {
-      ...prefs,
-      // hotkeyAccelerator is fixed in this build; preserve whatever was
-      // already saved instead of writing the read-only display string.
-      hotkeyAccelerator: prefs.hotkeyAccelerator,
-      language: langSel.value,
-      whisperModelId: selectedWhisper,
-      llmModelId: selectedLlm,
-      debugLogging: $("#debug").checked,
-      useLlmCleanup: $("#cleanup").checked,
-      launchAtLogin: $("#launchAtLogin").checked,
-      spokenPunctuation: $("#spokenPunctuation").checked,
-      dictionary: dictTerms,
-      userDisplayName: $("#userDisplayName").value.trim(),
-      replySuggestionsEnabled: $("#replyEnabled").checked,
-      replySuggestionsHotkey: $("#replyHotkey").value.trim(),
-      replyModelId: selectedTier().modelId,
-      replyAppsMode: $("#replyAppsMode").value,
-      replyApps,
-    };
+  // The main process is the source of truth for what is on disk: after a
+  // download or delete settles, re-read it instead of assuming the outcome (a
+  // download that "returned" may have been a no-op on a partial file).
+  async function refreshModels() {
+    try {
+      const fresh = await api.listModels();
+      for (const f of [...fresh.whisper, ...fresh.llm, ...fresh.reply]) {
+        const m = allModels().find((x) => x.id === f.id);
+        if (m) m.installed = f.installed;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  function needsRestart() {
-    const next = buildNextPrefs();
-    return RESTART_REQUIRED_FIELDS.some((k) => next[k] !== initialPrefs[k]);
+  function allModels() {
+    return [...catalog.whisper, ...catalog.llm, ...catalog.reply];
   }
 
-  function refreshSaveButton() {
-    $("#save").textContent = needsRestart() ? "Save & Restart" : "Save";
+  // Follows one download to its end. A click starts it; on load it also
+  // re-attaches to a download already running in the main process (the window
+  // was closed and reopened): the main side hands back the same promise, so this
+  // resolves when the download really finishes.
+  async function trackDownload(m, group) {
+    m.downloading = true;
+    m.cancelling = false;
+    m.downloadFailed = false;
+    m.progressPct = m.progress && m.progress.total > 0 ? Math.min(100, Math.floor((m.progress.bytes / m.progress.total) * 100)) : 0;
+    renderAllRows();
+    try {
+      await api.downloadModel(group.kind, m.id);
+      const ok = await refreshModels();
+      if (ok && !m.installed) {
+        m.downloadFailed = true;
+        say(group.tab, `${m.label} didn't finish downloading. Try again.`, "error");
+      } else {
+        say(group.tab, `Downloaded ${m.label}`, "ok");
+        // Downloading a reply model while the selected one is missing: use the new one.
+        if (group.kind === "reply" && m.installed && !selectedReplyModel().installed) {
+          await save({ replyModelId: m.id }, group.tab, `Downloaded ${m.label} — now using it`);
+        }
+      }
+    } catch (err) {
+      await refreshModels();
+      if (m.cancelling) {
+        say(group.tab, `Download of ${m.label} paused. Download again to resume.`);
+      } else {
+        m.downloadFailed = true;
+        say(group.tab, L.cleanIpcError(err), "error");
+      }
+    } finally {
+      m.downloading = false;
+      m.cancelling = false;
+      m.progress = null;
+      renderAllRows();
+    }
   }
 
-  // Update the button label live as the user changes inputs.
-  // hotkey input is read-only so we skip it.
-  for (const el of [
-    $("#language"),
-    $("#debug"),
-    $("#cleanup"),
-    $("#launchAtLogin"),
-    $("#spokenPunctuation"),
-  ]) {
-    el.addEventListener("input", refreshSaveButton);
-    el.addEventListener("change", refreshSaveButton);
+  function startDownload(m, group) {
+    m.progress = null;
+    return trackDownload(m, group);
   }
-  // Selection changes on model rows propagate via click handler; also
-  // refresh on a generic document click as a cheap catch-all.
-  document.addEventListener("click", refreshSaveButton);
-  refreshSaveButton();
 
-  $("#save").addEventListener("click", async () => {
-    const next = buildNextPrefs();
-    const shouldRestart = needsRestart();
-    await window.openFlowPrefs.save(next);
-    if (shouldRestart) {
-      $("#status").textContent = "Saved. Restarting…";
-      window.openFlowPrefs.relaunch();
-    } else {
-      $("#status").textContent = "Saved.";
+  api.onDownloadProgress((p) => {
+    const m = allModels().find((x) => x.id === p.id);
+    if (!m || !m.downloading || !(p.total > 0)) return;
+    const pct = Math.min(100, Math.floor((p.bytes / p.total) * 100));
+    if (pct === m.progressPct) return;
+    m.progressPct = pct;
+    rowRenderers.get(m.id)?.();
+  });
+
+  for (const group of groups) {
+    const container = $("#" + group.containerId);
+    container.innerHTML = "";
+    for (const m of group.models) {
+      const row = document.createElement("div");
+      row.className = "model-card";
+      row.dataset.id = m.id;
+      container.appendChild(row);
+      rowRenderers.set(m.id, () => renderRow(row, m, group));
+    }
+  }
+  renderAllRows();
+  // Downloads still running from before this window opened: pick them up.
+  for (const group of groups) {
+    for (const m of group.models) if (m.downloading) void trackDownload(m, group);
+  }
+
+  $("#reveal-models").addEventListener("click", () => api.revealModels());
+
+  // ------------------------------------------------------------ permissions
+  const PERMISSIONS = [
+    { key: "mic", pane: "microphone", name: "Microphone" },
+    { key: "accessibility", pane: "accessibility", name: "Accessibility" },
+    { key: "automation", pane: "automation", name: "Automation" },
+  ];
+
+  function renderPermissions(status) {
+    const list = $("#permissions");
+    list.innerHTML = "";
+    for (const p of PERMISSIONS) {
+      const row = L.permissionRow(status[p.key]);
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.className = "perm-name";
+      name.textContent = p.name;
+      const state = document.createElement("span");
+      state.className = "perm-state" + (row.granted ? " granted" : status[p.key] === "denied" ? " denied" : "");
+      state.textContent = row.text;
+      li.append(name, state);
+      if (!row.granted) {
+        const open = document.createElement("button");
+        open.textContent = "Open System Settings";
+        open.addEventListener("click", () => api.openSystemSettings(p.pane));
+        li.appendChild(open);
+      }
+      list.appendChild(li);
+    }
+  }
+
+  async function checkPermissions(probeAutomation) {
+    try {
+      renderPermissions(await api.permissionsStatus({ automation: probeAutomation }));
+    } catch (err) {
+      say("general", "Couldn't check permissions: " + L.cleanIpcError(err), "error");
+    }
+  }
+
+  $("#permissions-recheck").addEventListener("click", () => checkPermissions(true));
+  // Coming back from System Settings: refresh without running the Automation probe.
+  window.addEventListener("focus", () => checkPermissions(false));
+  void checkPermissions(false);
+
+  // ------------------------------------------------------------ advanced
+  $("#open-logs").addEventListener("click", () => api.openLogs());
+  $("#open-project").addEventListener("click", () => api.openProjectPage());
+  $("#reset-setup").addEventListener("click", async () => {
+    try {
+      await api.resetSetup();
+    } catch (err) {
+      say("advanced", L.cleanIpcError(err), "error");
     }
   });
+  api.appInfo().then((info) => {
+    $("#app-version").textContent = "open-flow " + info.version;
+  }).catch(() => undefined);
+
+  await refreshRestart();
 }
 
-init();
+init().catch((err) => {
+  const target = document.querySelector('[role="tabpanel"]:not([hidden]) .panel-status');
+  if (target) {
+    target.textContent = "Couldn't load settings: " + L.cleanIpcError(err);
+    target.className = "panel-status error";
+  }
+});
