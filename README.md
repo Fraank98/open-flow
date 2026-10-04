@@ -330,6 +330,8 @@ Configurable hotkey · signed and notarised builds (needs an Apple Developer ID)
 
 Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE) © 2026 Danilo Franco. Third-party components and model licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
