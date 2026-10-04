@@ -42,7 +42,7 @@
   const llm = [
     { id: "qwen-0.5b", label: "Qwen 2.5 0.5B", description: "Lightest cleanup. May over-edit.", sizeBytes: 491400032, ramBytes: 7e8, installed: full, licenseNote: null },
     { id: "qwen-1.5b", label: "Qwen 2.5 1.5B", description: "Recommended balance of speed and quality.", sizeBytes: 1117320736, ramBytes: 1.4e9, installed: true, licenseNote: null },
-    { id: "qwen-3b", label: "Qwen 2.5 3B", description: "Best cleanup. Needs 16 GB of RAM to stay snappy.", sizeBytes: 2104932768, ramBytes: 2.6e9, installed: base === "installed", licenseNote: LICENSE },
+    { id: "qwen-3b", label: "Qwen 2.5 3B", description: "Best cleanup. Slower on 8 GB Macs.", sizeBytes: 2104932768, ramBytes: 2.6e9, installed: base === "installed", licenseNote: LICENSE },
   ];
   const BENCH_STD = "In the benchmark of the classifier alone, Gemma 3 4B misread 4 of 8 questions that were really asking for something only you know (for example \"how often do you go to the gym?\"). With the deterministic pre-gate that runs before the classifier (active in this build) that drops to 1 of 8. Still check a proposal before you accept it.";
   const BENCH_MAX = "In the benchmark, Gemma 4 E4B never mistook a question asking for a fact for one that needs a decision (0 false positives out of 8). It is slower (about 900 ms) and in 3 cases out of 12 it did not offer a reply that would have been appropriate. Recommended from 24 GB of RAM.";

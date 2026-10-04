@@ -70,7 +70,7 @@ export const LLM_MODELS: readonly CatalogModel[] = [
   {
     id: "qwen-3b",
     label: "Qwen 2.5 3B",
-    description: "Best cleanup. Needs 16 GB of RAM to stay snappy.",
+    description: "Best cleanup. Slower on 8 GB Macs.",
     ramBytes: 2_600_000_000,
     licenseNote: QWEN_3B_LICENSE_NOTE,
     filename: "qwen2.5-3b-instruct-q4_k_m.gguf",
@@ -123,7 +123,7 @@ export const TIERS: readonly TierDescriptor[] = [
     label: "Maximum quality",
     description: "Whisper Large v3 Turbo + Qwen 3B",
     summary: "Whisper Large v3 Turbo + Qwen 3B",
-    transcriptionNote: "Best accuracy. Needs 16 GB of RAM.",
+    transcriptionNote: "Best accuracy. Comfortable on 16 GB, slower on 8 GB.",
     recommended: false,
     licenseNote: QWEN_3B_LICENSE_NOTE,
     whisperId: "whisper-large-v3-turbo",
