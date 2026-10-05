@@ -22,6 +22,7 @@ test/fixtures/models/
 
 # Vitest
 coverage/
+.vitest/
 
 # electron-builder output
 release/

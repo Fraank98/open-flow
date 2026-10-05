@@ -68,6 +68,8 @@ npm run lint && npm run typecheck && npm test
 CI runs the same checks on `macos-14`. Unit tests (`npm run test:unit`) are
 fast and need nothing else; integration tests (`npm run test:integration`)
 use the fixture models from `npm run fetch-test-models`.
+`npm run test:coverage` runs the unit tests and writes `coverage/index.html`;
+the thresholds are a regression guard, not a target.
 
 If your change touches the hotkey, audio, overlay or paste behaviour, also
 walk through [docs/electron-smoke-checklist.md](docs/electron-smoke-checklist.md)
