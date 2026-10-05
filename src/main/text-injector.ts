@@ -68,6 +68,18 @@ export const CLIPBOARD_READ_TIMEOUT_MS = 500;
  * before the transcript write has settled (⌘V would paste the OLD clipboard),
  * so the wait is bounded: a timeout on the transcript write means "do not
  * paste"; a timeout on the restore is only logged.
+ *
+ * Caveat: giving up on the wait does NOT cancel the write. A timed-out write
+ * is still in flight and can land later:
+ * - a timed-out TRANSCRIPT write can still replace the user's clipboard after
+ *   we reported failure and returned, and nothing restores the prior value
+ *   (we never paste in that case, but the clipboard ends up holding the
+ *   transcript anyway);
+ * - a timed-out RESTORE write can still land later, possibly on top of
+ *   something the user copied in the meantime, overwriting that newer copy
+ *   with the old value.
+ * Both are accepted: the alternative is blocking the pipeline on a wedged
+ * pasteboard indefinitely.
  */
 export const CLIPBOARD_WRITE_TIMEOUT_MS = 1000;
 
@@ -187,7 +199,9 @@ export class TextInjector {
       await writeBounded(Promise.resolve(this.deps.writeClipboard(text)));
     } catch (err) {
       // The transcript never reached the clipboard: pressing ⌘V would paste the
-      // user's OLD clipboard into the target app. Do not paste; nothing to restore.
+      // user's OLD clipboard into the target app. Do not paste. We
+      // skip the restore too, but a timed-out write may still land later (see
+      // CLIPBOARD_WRITE_TIMEOUT_MS), so the clipboard is not guaranteed untouched.
       const message = err instanceof Error ? err.message : String(err);
       return {
         pasted: false,
