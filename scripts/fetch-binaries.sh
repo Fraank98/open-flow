@@ -93,6 +93,7 @@ rpath_ok() {
 # On failure sets MINOS_MISMATCH to a description of the first offending file.
 minos_ok() {
   local f got
+  MINOS_MISMATCH=""
   for f in "$@"; do
     got="$(otool -l "$f" 2>/dev/null | awk '
       /LC_BUILD_VERSION/ { b = 1; next }
@@ -107,6 +108,7 @@ minos_ok() {
 }
 
 build_whisper() {
+  MINOS_MISMATCH=""
   if [[ -x "$BIN_DIR/whisper-cli" && -x "$BIN_DIR/whisper-server" ]] \
     && rpath_ok "$BIN_DIR/whisper-server" "@executable_path/../lib" \
     && minos_ok "$BIN_DIR/whisper-cli" "$BIN_DIR/whisper-server" "$BIN_DIR"/lib/*.dylib; then
@@ -148,6 +150,7 @@ build_whisper() {
 }
 
 build_llama() {
+  MINOS_MISMATCH=""
   if [[ -x "$BIN_DIR/llama-server" && -x "$BIN_DIR/llama-cli" ]] \
     && rpath_ok "$BIN_DIR/llama-server" "@executable_path/../lib-llama" \
     && minos_ok "$BIN_DIR/llama-server" "$BIN_DIR/llama-cli" "$BIN_DIR"/lib-llama/*.dylib; then
@@ -300,6 +303,7 @@ fetch_vad_model() {
 }
 
 build_flag_monitor() {
+  MINOS_MISMATCH=""
   if [[ -x "$BIN_DIR/flag-monitor" ]] && minos_ok "$BIN_DIR/flag-monitor"; then
     echo "[skip] flag-monitor already present at $BIN_DIR/flag-monitor"
     return
