@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 0 # keep security-only behaviour; raise to enable version updates
+    groups:
+      vitest:
+        applies-to: security-updates
+        patterns: ["vitest", "@vitest/*", "vite"]
+      vitest-versions:
+        applies-to: version-updates
+        patterns: ["vitest", "@vitest/*", "vite"]

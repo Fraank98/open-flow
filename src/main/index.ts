@@ -19,6 +19,8 @@ import { LLMServer } from "./llm-server.js";
 import { buildCleanupPrompt } from "./utils/prompt-template.js";
 import { buildInitialPrompt } from "./utils/initial-prompt.js";
 import { readyStateForArmer } from "./utils/ready-state.js";
+import { resolveBootModels } from "./utils/boot-models.js";
+import { trayStateForArmer } from "./utils/tray-status.js";
 import { waitForEventOrTimeout } from "./utils/wait-for-event.js";
 import { toWizardPipelineState } from "./utils/wizard-pipeline-state.js";
 import { restartRequiredFields } from "./utils/restart-required.js";
@@ -186,40 +188,34 @@ async function main(): Promise<void> {
     });
   }
 
-  // Resolve model paths from prefs + catalog
-  const whisperDesc = getModelById("whisper", prefs.whisperModelId);
-  const llmDesc = getModelById("llm", prefs.llmModelId);
-  if (!whisperDesc || !llmDesc) {
-    await logger.error("preferences reference unknown model; resetting setup", {
-      whisperId: prefs.whisperModelId,
-      llmId: prefs.llmModelId,
-    });
+  // Resolve model paths from prefs + catalog, and confirm the files actually
+  // exist (catch the "model deleted manually" case).
+  const boot = await resolveBootModels(prefs, {
+    getModelById,
+    tierForModels,
+    isInstalled: (desc) => modelManager.isInstalled(desc),
+  });
+  if (!boot.ok) {
+    if (boot.reason === "unknown-model") {
+      await logger.error("preferences reference unknown model; resetting setup", {
+        whisperId: prefs.whisperModelId,
+        llmId: prefs.llmModelId,
+      });
+    } else {
+      await logger.error("selected model missing on disk; re-running setup", {
+        modelsDir: getModelsDir(),
+      });
+    }
     // Resume at the download step with a reason, not at "welcome" with no context.
-    await preferencesStore.update({ setupComplete: false, setupStep: "download", setupReason: "missing-model" });
+    await preferencesStore.update(boot.patch);
     app.relaunch();
     app.quit();
     return;
   }
+  const whisperDesc = boot.whisper;
+  const llmDesc = boot.llm;
   const whisperModelPath = modelFilePath(whisperDesc);
   const llmModelPath = modelFilePath(llmDesc);
-
-  // Confirm files actually exist (catch the "model deleted manually" case)
-  if (!(await modelManager.isInstalled(whisperDesc)) || !(await modelManager.isInstalled(llmDesc))) {
-    await logger.error("selected model missing on disk; re-running setup", {
-      modelsDir: getModelsDir(),
-    });
-    // The download step needs a tier: use the one these models belong to (the
-    // wizard falls back to the tier chooser when there is none).
-    await preferencesStore.update({
-      setupComplete: false,
-      setupStep: "download",
-      setupReason: "missing-model",
-      setupTierId: tierForModels(prefs.whisperModelId, prefs.llmModelId)?.id ?? prefs.setupTierId,
-    });
-    app.relaunch();
-    app.quit();
-    return;
-  }
 
   // Snapshot of the prefs the models/servers below are started with. The
   // Settings window compares against it to flag restart-required changes.
@@ -962,27 +958,15 @@ async function main(): Promise<void> {
       // Whatever the state, the wizard's last step must show it (it would
       // otherwise sit on "Starting up…" while blocked on Accessibility).
       if (wizard?.isOpen()) wizard.setReadyState(readyStateForArmer(state));
-      switch (state) {
-        case "armed":
-          menubar.setPermissionHint(null);
-          readyStatus = "Ready — hold ⌥ to dictate";
-          menubar.setStatus(readyStatus);
-          break;
-        case "waiting":
-          menubar.setStatus("Needs Accessibility permission");
-          menubar.setPermissionHint(
-            "Open System Settings › Privacy & Security › Accessibility and turn on open-flow",
-          );
-          break;
-        case "armed-after-grant":
-          menubar.setPermissionHint(null);
-          readyStatus = "Ready — if Option doesn't respond, choose Relaunch open-flow";
-          menubar.setStatus(readyStatus);
-          break;
-        case "relaunch-needed":
-          menubar.setPermissionHint(null);
-          menubar.setStatus("Permission granted — relaunch to activate");
-          break;
+      const tray = trayStateForArmer(state);
+      if (state === "waiting") {
+        // Same call order as before the extraction: status first, then the hint.
+        menubar.setStatus(tray.status);
+        menubar.setPermissionHint(tray.hint);
+      } else {
+        menubar.setPermissionHint(tray.hint);
+        if (tray.readyStatus !== undefined) readyStatus = tray.readyStatus;
+        menubar.setStatus(tray.status);
       }
     },
   });

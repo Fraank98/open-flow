@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
-import { ModelManager, DownloadStreamFn } from "../../src/main/model-manager.js";
+import { ModelManager, DownloadStreamFn, defaultFetcher } from "../../src/main/model-manager.js";
 import type { ModelDescriptor } from "../../src/main/utils/model-paths.js";
 
 function streamOfBytes(bytes: Uint8Array): Readable {
@@ -177,6 +177,58 @@ describe("ModelManager", () => {
       expect(fetched).toBe(false);
     });
 
+    it("discards a .partial larger than the model and downloads from byte 0", async () => {
+      await writeFile(join(dir, "r.bin.partial"), new Uint8Array(15).fill(9));
+      const starts: number[] = [];
+      const fetcher: DownloadStreamFn = async (req) => {
+        starts.push(req.rangeStart);
+        return { stream: streamOfBytes(full), contentLength: 10, status: 200 };
+      };
+      const mgr = new ModelManager({ fetcher, statfs: roomy });
+      await mgr.download(desc);
+      expect(starts).toEqual([0]);
+      expect(new Uint8Array(await readFile(join(dir, "r.bin")))).toEqual(full);
+    });
+
+    it("only verifies a .partial that already has every byte (no fetch)", async () => {
+      await writeFile(join(dir, "r.bin.partial"), full);
+      const fetcher = vi.fn<DownloadStreamFn>();
+      const mgr = new ModelManager({ fetcher, statfs: roomy });
+      await mgr.download(desc);
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(new Uint8Array(await readFile(join(dir, "r.bin")))).toEqual(full);
+      await expect(access(join(dir, "r.bin.partial"))).rejects.toThrow();
+    });
+
+    it("a complete .partial with the wrong sha256 is deleted and rejected without fetching", async () => {
+      await writeFile(join(dir, "r.bin.partial"), new Uint8Array(10).fill(7));
+      const fetcher = vi.fn<DownloadStreamFn>();
+      const mgr = new ModelManager({ fetcher, statfs: roomy });
+      await expect(mgr.download(desc)).rejects.toThrow(/sha256 mismatch/);
+      expect(fetcher).not.toHaveBeenCalled();
+      await expect(access(join(dir, "r.bin.partial"))).rejects.toThrow();
+    });
+
+    it("a pre-aborted signal rejects before the fetcher is called", async () => {
+      const ctrl = new AbortController();
+      ctrl.abort();
+      const fetcher = vi.fn<DownloadStreamFn>();
+      const mgr = new ModelManager({ fetcher, statfs: roomy });
+      await expect(mgr.download(desc, undefined, { signal: ctrl.signal })).rejects.toMatchObject({ name: "AbortError" });
+      expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the descriptor size as total when contentLength is 0", async () => {
+      const mgr = new ModelManager({
+        fetcher: async () => ({ stream: streamOfBytes(full), contentLength: 0, status: 200 }),
+        statfs: roomy,
+      });
+      const progress: Array<{ bytes: number; total: number }> = [];
+      await mgr.download(desc, (p) => progress.push(p));
+      expect(progress.length).toBeGreaterThan(0);
+      expect(progress.every((p) => p.total === 10)).toBe(true);
+    });
+
     it("still accepts a bare fetcher function as the constructor argument", async () => {
       const mgr = new ModelManager(async () => ({ stream: streamOfBytes(full), contentLength: 10, status: 200 }));
       await mgr.download(desc);
@@ -203,5 +255,46 @@ describe("ModelManager", () => {
     const path = mgr.getInstalledPath(desc);
     expect(path).toContain("p.bin");
     expect(path.startsWith("/")).toBe(true);
+  });
+
+  describe("defaultFetcher", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    function stubFetch(res: Partial<Response> & { status: number; ok: boolean }) {
+      const f = vi.fn<typeof fetch>(async () => res as Response);
+      vi.stubGlobal("fetch", f);
+      return f;
+    }
+    const okBody = () => new Response("abc").body;
+
+    it("sends no Range header for a fresh download", async () => {
+      const f = stubFetch({ ok: true, status: 200, body: okBody(), headers: new Headers({ "content-length": "3" }) });
+      const res = await defaultFetcher({ url: "https://x/m.bin", rangeStart: 0 });
+      expect(f).toHaveBeenCalledTimes(1);
+      expect(f.mock.calls[0]![0]).toBe("https://x/m.bin");
+      expect(f.mock.calls[0]![1]?.headers).toEqual({});
+      expect(res.contentLength).toBe(3);
+      expect(res.status).toBe(200);
+    });
+
+    it("sends Range: bytes=N- when resuming and forwards the signal", async () => {
+      const ctrl = new AbortController();
+      const f = stubFetch({ ok: true, status: 206, body: okBody(), headers: new Headers() });
+      const res = await defaultFetcher({ url: "https://x/m.bin", rangeStart: 1024, signal: ctrl.signal });
+      expect(f.mock.calls[0]![1]?.headers).toEqual({ Range: "bytes=1024-" });
+      expect(f.mock.calls[0]![1]?.signal).toBe(ctrl.signal);
+      expect(res.status).toBe(206);
+      expect(res.contentLength).toBe(0);
+    });
+
+    it("rejects a non-ok response with the HTTP status", async () => {
+      stubFetch({ ok: false, status: 404, body: okBody(), headers: new Headers() });
+      await expect(defaultFetcher({ url: "https://x/m.bin", rangeStart: 0 })).rejects.toThrow("HTTP 404 fetching https://x/m.bin");
+    });
+
+    it("rejects an ok response without a body", async () => {
+      stubFetch({ ok: true, status: 200, body: null, headers: new Headers() });
+      await expect(defaultFetcher({ url: "https://x/m.bin", rangeStart: 0 })).rejects.toThrow(/HTTP 200/);
+    });
   });
 });

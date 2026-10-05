@@ -473,7 +473,23 @@ describe("TextInjector", () => {
 });
 
 describe("createDefaultTextInjector", () => {
+  // inject() restores the prior clipboard after a real 500 ms settle sleep; run
+  // it on fake timers and advance past that instead of burning wall-clock time.
+  async function injectAndSettle(
+    injector: ReturnType<typeof createDefaultTextInjector>,
+    text: string,
+    signal?: AbortSignal,
+  ) {
+    const [result] = await Promise.all([injector.inject(text, signal), vi.advanceTimersByTimeAsync(500)]);
+    return result;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(async () => {
+    vi.useFakeTimers();
     vi.mocked(execFile).mockClear();
     const { clipboard } = await import("electron");
     vi.mocked(clipboard.writeText).mockClear();
@@ -491,7 +507,7 @@ describe("createDefaultTextInjector", () => {
     const injector = createDefaultTextInjector(logger);
     const controller = new AbortController();
 
-    await injector.inject("hello", controller.signal);
+    await injectAndSettle(injector, "hello", controller.signal);
 
     expect(execFile).toHaveBeenCalledWith(
       "/usr/bin/osascript",
@@ -509,7 +525,7 @@ describe("createDefaultTextInjector", () => {
     const logger = { info: vi.fn(async () => undefined), warn: vi.fn(async () => undefined) };
     const injector = createDefaultTextInjector(logger);
 
-    await injector.inject("hello");
+    await injectAndSettle(injector, "hello");
 
     expect(clipboard.readText).not.toHaveBeenCalled();
     expect(execFile).toHaveBeenCalledWith(
@@ -534,7 +550,7 @@ describe("createDefaultTextInjector", () => {
     const logger = { info: vi.fn(async () => undefined), warn: vi.fn(async () => undefined) };
     const injector = createDefaultTextInjector(logger);
 
-    await injector.inject("hello");
+    await injectAndSettle(injector, "hello");
 
     expect(execFile).toHaveBeenCalledWith(
       "/usr/bin/pbpaste",
@@ -561,7 +577,7 @@ describe("createDefaultTextInjector", () => {
     const logger = { info: vi.fn(async () => undefined), warn: vi.fn(async () => undefined) };
     const injector = createDefaultTextInjector(logger);
 
-    await injector.inject("hello");
+    await injectAndSettle(injector, "hello");
 
     // Only the transcript payload should have been written — the RTF source
     // must never be written back as if it were plain text.

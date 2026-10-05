@@ -2,14 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ReplyServerManager, type ReplyServerLike } from "../../src/main/reply-server-manager.js";
 import { DownloadTracker } from "../../src/main/utils/download-tracker.js";
 import type { ModelDescriptor } from "../../src/main/utils/model-paths.js";
-
-/** A promise the test releases on its own schedule, to put a job mid-`await`. */
-function deferred<T = void>() {
-  let resolve!: (v: T) => void;
-  let reject!: (e: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
+import { deferred } from "../helpers/deferred.js";
 
 function fakeServer(opts: { failStart?: boolean; startGate?: Promise<void> } = {}) {
   let running = false;
