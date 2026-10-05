@@ -37,6 +37,7 @@ export const FLASH_TEXT = {
   modelFailed: "Model unavailable",
   noUserName: "Set your name in Settings",
   copyOnly: "Copied — paste with ⌘V",
+  copyFailed: "Couldn't copy — try again",
 } as const;
 
 export type ReplyCoordinatorState = "idle" | "reading" | "thinking" | "suggesting" | "injecting";
@@ -86,7 +87,7 @@ export interface ReplyCoordinatorDeps {
   /** TextInjector.inject: clipboard → ⌘V → restore (existing, untouched). */
   inject: (text: string) => Promise<{ pasted: boolean; reason?: string }>;
   /** Degradation L3: the text stays in the clipboard on purpose. */
-  copyToClipboard: (text: string) => void;
+  copyToClipboard: (text: string) => Promise<void>;
   loadPrefs: () => Promise<ReplyPrefsSnapshot>;
   /** True while the dictation pipeline is not idle (mutual exclusion). */
   dictationBusy: () => boolean;
@@ -518,7 +519,20 @@ export class ReplyCoordinator {
   }
 
   private async degradeToClipboard(text: string, reason: string, epoch: number): Promise<void> {
-    this.deps.copyToClipboard(text);
+    try {
+      // Electron 44: writeText is async. The "Copied" flash must only appear
+      // after the write has resolved.
+      await this.deps.copyToClipboard(text);
+    } catch (err) {
+      void this.deps.logger.warn("reply accepted", {
+        result: "clipboard-failed",
+        reason,
+        chars: text.length,
+        errorName: err instanceof Error ? err.name : undefined,
+      });
+      await this.flashThenIdle(FLASH_TEXT.copyFailed, FLASH_INFO_MS, epoch);
+      return;
+    }
     void this.deps.logger.info("reply accepted", { result: "clipboard-only", reason, chars: text.length });
     await this.flashThenIdle(FLASH_TEXT.copyOnly, FLASH_INFO_MS, epoch);
   }
