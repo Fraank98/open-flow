@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { StreamingWhisperRunner, computeNewSuffix, PassInfo } from "../../src/main/streaming-whisper-runner.js";
+import { StreamingWhisperRunner, computeNewSuffix, PassInfo, PartialTranscript, StallInfo } from "../../src/main/streaming-whisper-runner.js";
 
 // Safety net: a test that throws mid-way (before its own useRealTimers) must not
 // leak fake timers into the next test and hang it on a pending timer.
@@ -414,5 +414,214 @@ describe("StreamingWhisperRunner VAD wiring", () => {
     };
     new StreamingWhisperRunner({ modelPath: "m", native: native as never });
     expect(seen).toEqual([undefined]);
+  });
+});
+
+/**
+ * Fake native whose passes stay pending until the test answers them, so each
+ * test decides what a chunk / final / keepalive callback returns and when.
+ */
+function makeManualNative(init = true) {
+  const chunkCbs: ChunkCb[] = [];
+  const finalCbs: ChunkCb[] = [];
+  const native = {
+    init: vi.fn(() => init),
+    start: vi.fn(),
+    feedSamples: vi.fn(),
+    processChunk: vi.fn((_lang: string, cb: ChunkCb) => void chunkCbs.push(cb)),
+    requestAbort: vi.fn(),
+    finalize: vi.fn((_lang: string, cb: ChunkCb) => void finalCbs.push(cb)),
+    keepalive: vi.fn(),
+    release: vi.fn(),
+  };
+  return { native, chunkCbs, finalCbs };
+}
+
+const INFO: PassInfo = { queueMs: 0, execMs: 1, aborted: false };
+
+describe("StreamingWhisperRunner partial transcripts", () => {
+  async function tick(ms = 1500) {
+    await vi.advanceTimersByTimeAsync(ms);
+  }
+
+  it("emits 'partial' once per new text, with the new suffix, and not again for identical text", async () => {
+    vi.useFakeTimers();
+    const { native, chunkCbs } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    const partials: PartialTranscript[] = [];
+    runner.on("partial", (p: PartialTranscript) => partials.push(p));
+
+    runner.start("en");
+    await tick();
+    chunkCbs.shift()!(null, "hello world", INFO);
+    await tick(0);
+    expect(partials).toEqual([{ full: "hello world", newSuffix: "hello world" }]);
+
+    await tick();
+    chunkCbs.shift()!(null, "hello world today", INFO);
+    await tick(0);
+    expect(partials).toHaveLength(2);
+    expect(partials[1]).toEqual({ full: "hello world today", newSuffix: "today" });
+
+    await tick();
+    chunkCbs.shift()!(null, "hello world today", INFO);
+    await tick(0);
+    expect(partials).toHaveLength(2);
+    runner.release();
+  });
+
+  it("emits nothing for an empty chunk", async () => {
+    vi.useFakeTimers();
+    const { native, chunkCbs } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    const onPartial = vi.fn();
+    runner.on("partial", onPartial);
+
+    runner.start("en");
+    await tick();
+    chunkCbs.shift()!(null, "", INFO);
+    await tick(0);
+    expect(onPartial).not.toHaveBeenCalled();
+    runner.release();
+  });
+
+  it("emits no partial for a chunk that finishes after cancel()", async () => {
+    vi.useFakeTimers();
+    const { native, chunkCbs } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    const onPartial = vi.fn();
+    runner.on("partial", onPartial);
+
+    runner.start("en");
+    await tick();
+    runner.cancel();
+    chunkCbs.shift()!(null, "late words", INFO);
+    await tick(0);
+    expect(onPartial).not.toHaveBeenCalled();
+    runner.release();
+  });
+
+  it("a failing chunk pass is swallowed and the loop keeps going", async () => {
+    vi.useFakeTimers();
+    const { native, chunkCbs } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    const partials: PartialTranscript[] = [];
+    const onStall = vi.fn();
+    runner.on("partial", (p: PartialTranscript) => partials.push(p));
+    runner.on("stall", onStall);
+
+    runner.start("en");
+    await tick();
+    chunkCbs.shift()!(new Error("whisper_full failed"), "", undefined);
+    await tick();
+    expect(native.processChunk).toHaveBeenCalledTimes(2);
+    chunkCbs.shift()!(null, "recovered", INFO);
+    await tick(0);
+    expect(partials).toEqual([{ full: "recovered", newSuffix: "recovered" }]);
+    expect(onStall).not.toHaveBeenCalled();
+    runner.release();
+  });
+});
+
+describe("StreamingWhisperRunner lifecycle guards", () => {
+  it("throws when the native init fails, naming the model", () => {
+    const { native } = makeManualNative(false);
+    expect(() => new StreamingWhisperRunner({ modelPath: "/models/ggml-x.bin", native })).toThrow(
+      "whisper_stream init failed for /models/ggml-x.bin",
+    );
+  });
+
+  it("start() after release() throws and does not touch the native side", () => {
+    const { native } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    runner.release();
+    expect(() => runner.start("en")).toThrow("after release()");
+    expect(native.start).not.toHaveBeenCalled();
+  });
+
+  it("release() releases the native context and stops the chunk loop", async () => {
+    vi.useFakeTimers();
+    const { native } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    runner.start("en");
+    runner.release();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(native.release).toHaveBeenCalledOnce();
+    expect(native.processChunk).not.toHaveBeenCalled();
+  });
+
+  it("finalize() after release() returns '' without a native pass", async () => {
+    const { native } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    runner.release();
+    await expect(runner.finalize("en")).resolves.toBe("");
+    expect(native.finalize).not.toHaveBeenCalled();
+  });
+
+  it("finalize() after cancel() returns '' without a final pass", async () => {
+    const { native } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    runner.start("en");
+    runner.cancel();
+    await expect(runner.finalize("en")).resolves.toBe("");
+    expect(native.finalize).not.toHaveBeenCalled();
+    runner.release();
+  });
+
+  it("feedSamples() only reaches the native side while an utterance is active", () => {
+    const { native } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    const samples = new Float32Array(4);
+    runner.feedSamples(samples);
+    expect(native.feedSamples).not.toHaveBeenCalled();
+    runner.start("en");
+    runner.feedSamples(samples);
+    expect(native.feedSamples).toHaveBeenCalledOnce();
+    runner.cancel();
+    runner.feedSamples(samples);
+    expect(native.feedSamples).toHaveBeenCalledOnce();
+    runner.release();
+  });
+
+  it("a failing final pass rejects finalize() with the native error", async () => {
+    const { native, finalCbs } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native });
+    runner.start("en");
+    const p = runner.finalize("en");
+    const assertion = expect(p).rejects.toThrow("whisper_full failed");
+    finalCbs.shift()!(new Error("whisper_full failed"), "", undefined);
+    await assertion;
+    runner.release();
+  });
+});
+
+describe("StreamingWhisperRunner chunk-phase stall", () => {
+  it("emits stall {phase:'chunk'}, stops scheduling, refuses start/finalize, and ignores a late callback", async () => {
+    vi.useFakeTimers();
+    const { native, chunkCbs } = makeManualNative();
+    const runner = new StreamingWhisperRunner({ modelPath: "m", native, passTimeoutMs: 5000 });
+    const stalls: StallInfo[] = [];
+    const onPartial = vi.fn();
+    runner.on("stall", (s: StallInfo) => stalls.push(s));
+    runner.on("partial", onPartial);
+
+    runner.start("en");
+    await vi.advanceTimersByTimeAsync(1500); // chunk pass starts, never answers
+    expect(chunkCbs).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(stalls).toEqual([{ phase: "chunk", timeoutMs: 5000 }]);
+
+    // The wedged worker finally answers: it must be ignored.
+    chunkCbs.shift()!(null, "too late", INFO);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onPartial).not.toHaveBeenCalled();
+    expect(native.processChunk).toHaveBeenCalledOnce();
+
+    expect(() => runner.start("en")).toThrow("after a stall");
+    await expect(runner.finalize("en")).resolves.toBe("");
+    expect(native.finalize).not.toHaveBeenCalled();
+    runner.feedSamples(new Float32Array(2));
+    expect(native.feedSamples).not.toHaveBeenCalled();
+    runner.shutdown();
   });
 });
