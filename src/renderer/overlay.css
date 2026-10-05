@@ -77,6 +77,8 @@ button#cancel:hover { background: rgba(255, 255, 255, 0.22); }
 /* Distinct from .state-error's red: the text is safe in the clipboard, this
    is a warning, not a crash. */
 .state-paste-failed .dot { background: #ff9500; }
+/* Nothing reached the clipboard either: same severity as a hard error. */
+.state-copy-failed .dot { background: #ff3b30; }
 
 @keyframes pulse {
   0%, 100% { transform: scale(1); opacity: 1; }

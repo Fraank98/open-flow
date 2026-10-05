@@ -51,7 +51,7 @@ Result: `release/open-flow-<version>-arm64.dmg`.
 
 ## Installer UX (unsigned)
 
-The `.dmg` is unsigned (no Apple Developer ID). Users will see "Apple could not verify "open-flow" is free of malware" (older macOS: "cannot be opened because Apple cannot check it for malicious software") on first launch. Workarounds:
+The `.dmg` is unsigned (no Apple Developer ID). Users will see "Apple could not verify "open-flow" is free of malware" (older macOS: "cannot be opened because Apple cannot check it for malicious software") on first launch. Requires macOS 13 (Ventura) or later. Workarounds:
 
 1. **macOS 15 and later:** double-click the app once (it is blocked), open System Settings → Privacy & Security, scroll to *Security* and click **Open Anyway** next to the open-flow message, then confirm. This is the only GUI route on these versions.
 2. **macOS 14 and earlier:** right-click the app in Applications → Open, then click "Open" in the dialog.

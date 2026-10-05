@@ -54,8 +54,54 @@ export const PASTE_TIMEOUT_MS = 3000;
  * ourselves at this deadline and treat the read as failed — the child is
  * left orphaned, parked in Mach IPC; that's acceptable, it is idle and macOS
  * reaps it eventually.
+ *
+ * Electron 44 made `clipboard.readText()` async too, but we keep `pbpaste`:
+ * the async call still runs on the main process and offers no timeout of its
+ * own.
  */
 export const CLIPBOARD_READ_TIMEOUT_MS = 500;
+
+/**
+ * How long to wait for `clipboard.writeText()` to resolve. Since Electron 44
+ * it returns a Promise ("resolves once the text has been written"), and like
+ * the read it could in principle be stuck on the pasteboard. We never paste
+ * before the transcript write has settled (⌘V would paste the OLD clipboard),
+ * so the wait is bounded: a timeout on the transcript write means "do not
+ * paste"; a timeout on the restore is only logged.
+ *
+ * Caveat: giving up on the wait does NOT cancel the write. A timed-out write
+ * is still in flight and can land later:
+ * - a timed-out TRANSCRIPT write can still replace the user's clipboard after
+ *   we reported failure and returned, and nothing restores the prior value
+ *   (we never paste in that case, but the clipboard ends up holding the
+ *   transcript anyway);
+ * - a timed-out RESTORE write can still land later, possibly on top of
+ *   something the user copied in the meantime, overwriting that newer copy
+ *   with the old value.
+ * Both are accepted: the alternative is blocking the pipeline on a wedged
+ * pasteboard indefinitely.
+ */
+export const CLIPBOARD_WRITE_TIMEOUT_MS = 1000;
+
+class ClipboardWriteTimeoutError extends Error {
+  constructor() {
+    super("clipboard write timed out");
+    this.name = "ClipboardWriteTimeoutError";
+  }
+}
+
+/** Races a clipboard write against CLIPBOARD_WRITE_TIMEOUT_MS; the timer is always cleared. */
+async function writeBounded(write: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new ClipboardWriteTimeoutError()), CLIPBOARD_WRITE_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([write, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface InjectorLogger {
   info(msg: string, meta?: Record<string, unknown>): unknown;
@@ -68,7 +114,7 @@ export interface InjectorDeps {
   // it has to settle the returned promise right away even if the read is
   // otherwise stuck (see CLIPBOARD_READ_TIMEOUT_MS above).
   readClipboard: (signal: AbortSignal) => Promise<string>;
-  writeClipboard: (text: string) => void;
+  writeClipboard: (text: string) => Promise<void>;
   runPaste: (signal?: AbortSignal) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   logger: InjectorLogger;
@@ -76,6 +122,11 @@ export interface InjectorDeps {
 
 export interface InjectResult {
   pasted: boolean;
+  // True when the transcript reached the clipboard (so the user can still
+  // paste it by hand after a failed ⌘V); false when the transcript write
+  // itself failed or timed out and the clipboard still holds the user's OLD
+  // content. Set on every return path.
+  clipboardWritten: boolean;
   reason?: string;
   // Diagnostic properties lifted off the underlying error, when there is
   // one, so a log reader can tell apart a timeout kill (killed: true,
@@ -86,6 +137,10 @@ export interface InjectResult {
   signal?: string | null;
   code?: string | number | null;
   errorName?: string;
+}
+
+function abortedBeforePaste(clipboardWritten: boolean): InjectResult {
+  return { pasted: false, clipboardWritten, reason: "aborted before paste", errorName: "AbortError" };
 }
 
 export class TextInjector {
@@ -137,7 +192,29 @@ export class TextInjector {
       stdoutLength: prior?.length,
     });
 
-    this.deps.writeClipboard(text);
+    // A cancel can land during the prior-clipboard read above; do not touch the
+    // clipboard on behalf of a run the user already abandoned.
+    if (signal?.aborted) return abortedBeforePaste(false);
+    try {
+      await writeBounded(Promise.resolve(this.deps.writeClipboard(text)));
+    } catch (err) {
+      // The transcript never reached the clipboard: pressing ⌘V would paste the
+      // user's OLD clipboard into the target app. Do not paste. We
+      // skip the restore too, but a timed-out write may still land later (see
+      // CLIPBOARD_WRITE_TIMEOUT_MS), so the clipboard is not guaranteed untouched.
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        pasted: false,
+        clipboardWritten: false,
+        reason: err instanceof ClipboardWriteTimeoutError ? message : `clipboard write failed: ${message}`,
+        errorName: err instanceof Error ? err.name : undefined,
+      };
+    }
+    // A cancel can also land during the awaited transcript write (up to
+    // CLIPBOARD_WRITE_TIMEOUT_MS). runPaste only honours the signal once it
+    // starts, so check here: leave the transcript in the clipboard, no ⌘V,
+    // no restore.
+    if (signal?.aborted) return abortedBeforePaste(true);
     try {
       await this.deps.runPaste(signal);
     } catch (err) {
@@ -151,6 +228,7 @@ export class TextInjector {
       };
       return {
         pasted: false,
+        clipboardWritten: true,
         reason: err instanceof Error ? err.message : String(err),
         killed: diag?.killed,
         signal: diag?.signal,
@@ -172,9 +250,17 @@ export class TextInjector {
       // anyway. Skipped entirely when `prior` is null — there is nothing to
       // restore, so there's no race to protect against.
       await this.deps.sleep(500);
-      this.deps.writeClipboard(prior);
+      try {
+        await writeBounded(Promise.resolve(this.deps.writeClipboard(prior)));
+      } catch (err) {
+        // A failed restore must not turn a successful paste into pasted:false.
+        await this.deps.logger.warn("text-injector: failed to restore prior clipboard", {
+          errorName: err instanceof Error ? err.name : undefined,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
-    return { pasted: true };
+    return { pasted: true, clipboardWritten: true };
   }
 }
 

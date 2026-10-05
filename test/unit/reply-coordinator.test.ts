@@ -63,7 +63,9 @@ interface Over {
   kept?: FilterVariant[];
   dropped?: FilterOutput["dropped"];
   dictationBusy?: boolean;
-  injectResult?: { pasted: boolean; reason?: string };
+  injectResult?: { pasted: boolean; clipboardWritten: boolean; reason?: string; errorName?: string };
+  /** Makes the clipboard write reject (Electron 44: writeText is async). */
+  copyRejects?: boolean;
   preGate?: (lastMessage: string) => boolean;
   activateApp?: boolean;
   /** Deadline control: the promise returned for sleep(TOTAL_TIMEOUT_MS). */
@@ -113,8 +115,11 @@ function makeEnv(over: Over = {}) {
     getState: () => over.serverState ?? "ready",
     recover: vi.fn(async () => true),
   };
-  const inject = vi.fn(async () => { order.push("inject"); return over.injectResult ?? { pasted: true }; });
-  const copyToClipboard = vi.fn((_t: string) => { order.push("copy"); });
+  const inject = vi.fn(async () => { order.push("inject"); return over.injectResult ?? { pasted: true, clipboardWritten: true }; });
+  const copyToClipboard = vi.fn(async (_t: string) => {
+    if (over.copyRejects) throw new Error("pasteboard unavailable");
+    order.push("copy");
+  });
   const classify = vi.fn(async () => over.classify ?? CLASSIFIED);
   // Typed parameter (unused by the implementation) so `.mock.calls[0][0]`
   // below type-checks as a `GenerateInput`, matching what the coordinator
@@ -203,6 +208,7 @@ describe("ReplyCoordinator.onHotkey — guards (degradation L0/L2/L5)", () => {
       modelFailed: "Model unavailable",
       noUserName: "Set your name in Settings",
       copyOnly: "Copied — paste with ⌘V",
+      copyFailed: "Couldn't copy — try again",
     });
     const overlay = readFileSync(new URL("../../src/renderer/overlay.html", import.meta.url), "utf8");
     expect(overlay).toContain('reading: "Reading the conversation…"');
@@ -634,6 +640,31 @@ describe("ReplyCoordinator.accept", () => {
     expect(e.seen.join(" ")).toContain('"reason":"activate-failed"');
   });
 
+  it("does not show the copy flash when the clipboard write rejects, and logs clipboard-failed", async () => {
+    let n = 0;
+    const e = makeEnv({ frontmostPid: () => (n++ === 0 ? 4242 : 777), activateApp: false, copyRejects: true });
+    await e.c.onHotkey();
+    await e.c.accept(1);
+    expect(e.copyToClipboard).toHaveBeenCalledWith(THREE[0]!.text);
+    expect(e.flashes).not.toContain(FLASH_TEXT.copyOnly);
+    expect(e.flashes).toEqual([FLASH_TEXT.copyFailed]);
+    expect(e.seen.join(" ")).toContain('"result":"clipboard-failed"');
+  });
+
+  it("flashes the copy text only after the clipboard write has resolved", async () => {
+    let n = 0;
+    const e = makeEnv({ frontmostPid: () => (n++ === 0 ? 4242 : 777), activateApp: false });
+    let release!: () => void;
+    e.copyToClipboard.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    await e.c.onHotkey();
+    const accepting = e.c.accept(1);
+    await vi.waitFor(() => expect(e.copyToClipboard).toHaveBeenCalled());
+    expect(e.flashes).toEqual([]);
+    release();
+    await accepting;
+    expect(e.flashes).toEqual([FLASH_TEXT.copyOnly]);
+  });
+
   it("clipboard-only when editableIsFocused was false: the ⌘V would land in an unverified field", async () => {
     const e = makeEnv({ read: { ok: true, context: { ...CONTEXT, editableIsFocused: false } } });
     await e.c.onHotkey();
@@ -646,12 +677,25 @@ describe("ReplyCoordinator.accept", () => {
   });
 
   it("shows the copy flash when the injector reports pasted:false (Accessibility lost mid-session)", async () => {
-    const e = makeEnv({ injectResult: { pasted: false, reason: "osascript exited 1" } });
+    const e = makeEnv({ injectResult: { pasted: false, clipboardWritten: true, reason: "osascript exited 1" } });
     await e.c.onHotkey();
     await e.c.accept(1);
     expect(e.flashes).toEqual([FLASH_TEXT.copyOnly]);   // TextInjector already left the text in the clipboard
     expect(e.copyToClipboard).not.toHaveBeenCalled();
     expect(e.seen.join(" ")).toContain('"reason":"paste-failed"');
+  });
+
+  it("shows the copy-FAILED flash when the transcript never reached the clipboard (write timed out)", async () => {
+    const e = makeEnv({
+      injectResult: { pasted: false, clipboardWritten: false, reason: "clipboard write timed out", errorName: "ClipboardWriteTimeoutError" },
+    });
+    await e.c.onHotkey();
+    await e.c.accept(1);
+    expect(e.flashes).toEqual([FLASH_TEXT.copyFailed]);
+    expect(e.flashes).not.toContain(FLASH_TEXT.copyOnly);
+    const logs = e.seen.join(" ");
+    expect(logs).toContain('"reason":"clipboard-write-failed"');
+    expect(logs).toContain('"errorName":"ClipboardWriteTimeoutError"');
   });
 
   it("ignores an unknown id and a choose that arrives when nothing is suggesting", async () => {

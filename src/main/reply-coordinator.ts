@@ -37,6 +37,7 @@ export const FLASH_TEXT = {
   modelFailed: "Model unavailable",
   noUserName: "Set your name in Settings",
   copyOnly: "Copied — paste with ⌘V",
+  copyFailed: "Couldn't copy — try again",
 } as const;
 
 export type ReplyCoordinatorState = "idle" | "reading" | "thinking" | "suggesting" | "injecting";
@@ -84,9 +85,9 @@ export interface ReplyCoordinatorDeps {
   shortcuts: ReplyShortcutsLike;
   server: ReplyServerStatusLike;
   /** TextInjector.inject: clipboard → ⌘V → restore (existing, untouched). */
-  inject: (text: string) => Promise<{ pasted: boolean; reason?: string }>;
+  inject: (text: string) => Promise<{ pasted: boolean; clipboardWritten: boolean; reason?: string; errorName?: string }>;
   /** Degradation L3: the text stays in the clipboard on purpose. */
-  copyToClipboard: (text: string) => void;
+  copyToClipboard: (text: string) => Promise<void>;
   loadPrefs: () => Promise<ReplyPrefsSnapshot>;
   /** True while the dictation pipeline is not idle (mutual exclusion). */
   dictationBusy: () => boolean;
@@ -456,6 +457,16 @@ export class ReplyCoordinator {
       }
       const result = await this.deps.inject(text);
       if (!result.pasted) {
+        if (!result.clipboardWritten) {
+          // The transcript write itself failed/timed out: the clipboard still
+          // holds the user's OLD content, so "Copied" would be a lie.
+          void this.deps.logger.warn("reply inject failed", {
+            reason: "clipboard-write-failed",
+            chars: text.length,
+            errorName: result.errorName,
+          });
+          return this.flashThenIdle(FLASH_TEXT.copyFailed, FLASH_INFO_MS, epoch);
+        }
         // TextInjector already left the text in the clipboard on failure.
         void this.deps.logger.warn("reply inject failed", { reason: "paste-failed", chars: text.length });
         return this.flashThenIdle(FLASH_TEXT.copyOnly, FLASH_INFO_MS, epoch);
@@ -518,7 +529,20 @@ export class ReplyCoordinator {
   }
 
   private async degradeToClipboard(text: string, reason: string, epoch: number): Promise<void> {
-    this.deps.copyToClipboard(text);
+    try {
+      // Electron 44: writeText is async. The "Copied" flash must only appear
+      // after the write has resolved.
+      await this.deps.copyToClipboard(text);
+    } catch (err) {
+      void this.deps.logger.warn("reply accepted", {
+        result: "clipboard-failed",
+        reason,
+        chars: text.length,
+        errorName: err instanceof Error ? err.name : undefined,
+      });
+      await this.flashThenIdle(FLASH_TEXT.copyFailed, FLASH_INFO_MS, epoch);
+      return;
+    }
     void this.deps.logger.info("reply accepted", { result: "clipboard-only", reason, chars: text.length });
     await this.flashThenIdle(FLASH_TEXT.copyOnly, FLASH_INFO_MS, epoch);
   }

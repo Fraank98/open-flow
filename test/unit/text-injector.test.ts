@@ -6,6 +6,7 @@ import {
   createDefaultTextInjector,
   PASTE_TIMEOUT_MS,
   CLIPBOARD_READ_TIMEOUT_MS,
+  CLIPBOARD_WRITE_TIMEOUT_MS,
 } from "../../src/main/text-injector.js";
 
 // No test in this repo mocks electron yet. createDefaultTextInjector imports
@@ -21,8 +22,9 @@ import {
 // the node:child_process mock below.
 vi.mock("electron", () => ({
   clipboard: {
-    readText: vi.fn(() => "prior-clipboard"),
-    writeText: vi.fn(),
+    // Electron 44: both are async (W3C Clipboard API alignment).
+    readText: vi.fn(async () => "prior-clipboard"),
+    writeText: vi.fn(async () => undefined),
   },
 }));
 
@@ -49,7 +51,7 @@ function makeDeps(overrides: Partial<InjectorDeps> = {}): InjectorDeps {
   const clip = { value: "prior-clipboard" };
   return {
     readClipboard: vi.fn(async () => clip.value),
-    writeClipboard: vi.fn((v: string) => { clip.value = v; }),
+    writeClipboard: vi.fn(async (v: string) => { clip.value = v; }),
     runPaste: vi.fn(async () => undefined),
     sleep: vi.fn(async () => undefined),
     logger: {
@@ -91,6 +93,7 @@ describe("TextInjector", () => {
     const injector = new TextInjector(deps);
     const result = await injector.inject("text");
     expect(result.pasted).toBe(true);
+    expect(result.clipboardWritten).toBe(true);
   });
 
   it("returns success=false and skips restore when paste fails", async () => {
@@ -101,6 +104,8 @@ describe("TextInjector", () => {
     const result = await injector.inject("text");
     expect(result.pasted).toBe(false);
     expect(result.reason).toContain("osascript boom");
+    // the transcript DID reach the clipboard, so the user can paste by hand
+    expect(result.clipboardWritten).toBe(true);
     // payload still written
     expect(deps.writeClipboard).toHaveBeenCalledWith("text");
     // restore did NOT run on failure (so user can ⌘V manually later)
@@ -116,6 +121,110 @@ describe("TextInjector", () => {
     // the clipboard before we restore the prior contents. Bumped from 150ms
     // after intermittent reports of prior-clipboard content being pasted.
     expect(deps.sleep).toHaveBeenCalledWith(500);
+  });
+
+  it("awaits the transcript write before invoking paste (Electron 44 async clipboard)", async () => {
+    let resolveWrite!: () => void;
+    const gate = new Promise<void>((r) => { resolveWrite = r; });
+    const writeClipboard = vi.fn((_v: string) => gate);
+    const deps = makeDeps({ writeClipboard });
+    const resultPromise = new TextInjector(deps).inject("transcript");
+    await vi.waitFor(() => expect(writeClipboard).toHaveBeenCalledWith("transcript"));
+    // The write has not resolved yet: pasting now would paste the OLD clipboard.
+    await Promise.resolve();
+    expect(deps.runPaste).not.toHaveBeenCalled();
+    resolveWrite();
+    const result = await resultPromise;
+    expect(deps.runPaste).toHaveBeenCalledOnce();
+    expect(result.pasted).toBe(true);
+  });
+
+  it("returns pasted=false and does not paste when the transcript write rejects", async () => {
+    const deps = makeDeps({
+      writeClipboard: vi.fn(async () => { throw new Error("pasteboard unavailable"); }),
+    });
+    const result = await new TextInjector(deps).inject("text");
+    expect(result.pasted).toBe(false);
+    expect(result.reason).toContain("clipboard write failed");
+    expect(result.reason).toContain("pasteboard unavailable");
+    expect(result.clipboardWritten).toBe(false);
+    expect(deps.runPaste).not.toHaveBeenCalled();
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
+  });
+
+  it("still returns pasted=true and warns when restoring the prior clipboard rejects", async () => {
+    const writeClipboard = vi
+      .fn<[string], Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("restore boom"));
+    const deps = makeDeps({ writeClipboard });
+    const result = await new TextInjector(deps).inject("text");
+    expect(result.pasted).toBe(true);
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      "text-injector: failed to restore prior clipboard",
+      expect.objectContaining({ message: "restore boom" }),
+    );
+  });
+
+  it("gives up on a transcript write that never settles after CLIPBOARD_WRITE_TIMEOUT_MS and does not paste", async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({ writeClipboard: vi.fn(() => new Promise<void>(() => undefined)) });
+    const resultPromise = new TextInjector(deps).inject("text");
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_WRITE_TIMEOUT_MS + 10);
+    const result = await resultPromise;
+    expect(result.pasted).toBe(false);
+    expect(result.reason).toContain("clipboard write timed out");
+    expect(result.clipboardWritten).toBe(false);
+    expect(deps.runPaste).not.toHaveBeenCalled();
+  });
+
+  it("does not hang and still reports pasted=true when the restore write never settles", async () => {
+    vi.useFakeTimers();
+    const writeClipboard = vi
+      .fn<[string], Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => new Promise<void>(() => undefined));
+    const deps = makeDeps({ writeClipboard });
+    const resultPromise = new TextInjector(deps).inject("text");
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_WRITE_TIMEOUT_MS + 10);
+    const result = await resultPromise;
+    expect(result.pasted).toBe(true);
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      "text-injector: failed to restore prior clipboard",
+      expect.anything(),
+    );
+  });
+
+  it("does not write or paste when the signal is already aborted before the transcript write", async () => {
+    const deps = makeDeps();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await new TextInjector(deps).inject("text", controller.signal);
+    expect(result).toMatchObject({
+      pasted: false,
+      clipboardWritten: false,
+      reason: "aborted before paste",
+      errorName: "AbortError",
+    });
+    expect(deps.writeClipboard).not.toHaveBeenCalled();
+    expect(deps.runPaste).not.toHaveBeenCalled();
+  });
+
+  it("does not paste (and skips restore) when the signal aborts during the awaited transcript write", async () => {
+    const controller = new AbortController();
+    const deps = makeDeps({
+      writeClipboard: vi.fn(async () => { controller.abort(); }),
+    });
+    const result = await new TextInjector(deps).inject("text", controller.signal);
+    expect(result).toMatchObject({
+      pasted: false,
+      clipboardWritten: true,
+      reason: "aborted before paste",
+      errorName: "AbortError",
+    });
+    expect(deps.runPaste).not.toHaveBeenCalled();
+    // transcript stays in the clipboard, no restore
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
   });
 
   it("passes the abort signal through to runPaste", async () => {
@@ -203,6 +312,7 @@ describe("TextInjector", () => {
     expect(result.pasted).toBe(false);
     expect(result.errorName).toBe("AbortError");
     expect(result.code).toBe("ABORT_ERR");
+    expect(result.clipboardWritten).toBe(true);
     expect(result.killed).toBeUndefined();
   });
 

@@ -26,6 +26,8 @@ extraResources:
   # from the macOS bundle (app-builder-lib electronMac.js), so we copy them
   # back from the electron package: Electron's and Chromium's licenses require
   # that the notices ship with the binary.
+  # Electron >= 42 downloads dist/ on first run, not on install: `npm run package`
+  # runs `install-electron` first.
   - from: node_modules/electron/dist/LICENSE
     to: licenses/LICENSE.electron.txt
   - from: node_modules/electron/dist/LICENSES.chromium.html
@@ -76,6 +78,10 @@ extraResources:
 asar: true
 
 mac:
+  # Written to LSMinimumSystemVersion. Electron 44 dropped macOS 12 (Chromium
+  # requires 13), and Electron's own plist already says 13.0; keeping it here
+  # makes the requirement explicit.
+  minimumSystemVersion: "13.0"
   target:
     - target: dmg
       arch:

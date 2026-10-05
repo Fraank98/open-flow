@@ -10,7 +10,7 @@ function makeDeps(overrides: Partial<CoordinatorDeps> = {}): CoordinatorDeps {
   return {
     transcribe: vi.fn(async () => ({ text: "raw transcript", language: "en", durationMs: 100 })),
     clean: vi.fn(async () => ({ text: "Cleaned transcript.", usedFallback: false, durationMs: 50 })),
-    inject: vi.fn(async () => ({ pasted: true })),
+    inject: vi.fn(async () => ({ pasted: true, clipboardWritten: true })),
     logger: {
       info: vi.fn(async () => undefined),
       error: vi.fn(async () => undefined),
@@ -132,8 +132,8 @@ describe("PipelineCoordinator", () => {
 
   it("aborts the injector's signal and does not log pipeline success when cancelled during injecting", async () => {
     let capturedSignal: AbortSignal | undefined;
-    let resolveInject!: (v: { pasted: boolean; reason?: string }) => void;
-    const pending = new Promise<{ pasted: boolean; reason?: string }>((resolve) => {
+    let resolveInject!: (v: { pasted: boolean; clipboardWritten: boolean; reason?: string }) => void;
+    const pending = new Promise<{ pasted: boolean; clipboardWritten: boolean; reason?: string }>((resolve) => {
       resolveInject = resolve;
     });
     const deps = makeDeps({
@@ -163,7 +163,7 @@ describe("PipelineCoordinator", () => {
 
     // Simulate the real TextInjector's behavior once osascript is killed by
     // the abort: it resolves to pasted=false, it never rejects.
-    resolveInject({ pasted: false, reason: "aborted" });
+    resolveInject({ pasted: false, clipboardWritten: true, reason: "aborted" });
     await finishPromise;
 
     expect(coord.getState()).toBe<PipelineState>("idle");
@@ -176,7 +176,7 @@ describe("PipelineCoordinator", () => {
     const deps = makeDeps({
       inject: vi.fn((_text: string, signal?: AbortSignal) => {
         signals.push(signal);
-        return Promise.resolve({ pasted: true });
+        return Promise.resolve({ pasted: true, clipboardWritten: true });
       }),
     });
     const coord = new PipelineCoordinator(deps);
@@ -215,7 +215,7 @@ describe("PipelineCoordinator", () => {
     it("enters 'paste-failed' on a genuine paste failure and auto-returns to idle after PASTE_FAILED_NOTICE_MS", async () => {
       vi.useFakeTimers();
       const deps = makeDeps({
-        inject: vi.fn(async () => ({ pasted: false, reason: "boom" })),
+        inject: vi.fn(async () => ({ pasted: false, clipboardWritten: true, reason: "boom" })),
       });
       const coord = new PipelineCoordinator(deps);
       coord.startRecording();
@@ -227,10 +227,28 @@ describe("PipelineCoordinator", () => {
       expect(coord.getState()).toBe<PipelineState>("idle");
     });
 
+    it("enters 'copy-failed' (not 'paste-failed') when the transcript never reached the clipboard, then auto-returns to idle", async () => {
+      vi.useFakeTimers();
+      const deps = makeDeps({
+        inject: vi.fn(async () => ({ pasted: false, clipboardWritten: false, reason: "clipboard write timed out" })),
+      });
+      const states: PipelineState[] = [];
+      const coord = new PipelineCoordinator(deps);
+      coord.onStateChange((s) => states.push(s));
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
+
+      expect(coord.getState()).toBe<PipelineState>("copy-failed");
+      expect(states).not.toContain<PipelineState>("paste-failed");
+
+      await vi.advanceTimersByTimeAsync(PASTE_FAILED_NOTICE_MS);
+      expect(coord.getState()).toBe<PipelineState>("idle");
+    });
+
     it("does NOT enter 'paste-failed' when pasted:false was caused by a cancel — goes straight to idle", async () => {
       vi.useFakeTimers();
-      let resolveInject!: (v: { pasted: boolean; reason?: string }) => void;
-      const pending = new Promise<{ pasted: boolean; reason?: string }>((resolve) => {
+      let resolveInject!: (v: { pasted: boolean; clipboardWritten: boolean; reason?: string }) => void;
+      const pending = new Promise<{ pasted: boolean; clipboardWritten: boolean; reason?: string }>((resolve) => {
         resolveInject = resolve;
       });
       const deps = makeDeps({
@@ -246,7 +264,7 @@ describe("PipelineCoordinator", () => {
       expect(coord.getState()).toBe<PipelineState>("injecting");
 
       coord.cancel();
-      resolveInject({ pasted: false, reason: "aborted" });
+      resolveInject({ pasted: false, clipboardWritten: true, reason: "aborted" });
       await finishPromise;
 
       expect(coord.getState()).toBe<PipelineState>("idle");
@@ -257,7 +275,7 @@ describe("PipelineCoordinator", () => {
     });
 
     it("a successful paste still goes straight to idle (no paste-failed detour)", async () => {
-      const deps = makeDeps(); // default inject resolves { pasted: true }
+      const deps = makeDeps(); // default inject resolves { pasted: true, clipboardWritten: true }
       const coord = new PipelineCoordinator(deps);
       const states: PipelineState[] = [];
       coord.onStateChange((s) => states.push(s));
@@ -272,7 +290,7 @@ describe("PipelineCoordinator", () => {
     it("startRecording works from 'paste-failed', and the pending auto-return timer does not knock the new run out of 'recording'", async () => {
       vi.useFakeTimers();
       const deps = makeDeps({
-        inject: vi.fn(async () => ({ pasted: false })),
+        inject: vi.fn(async () => ({ pasted: false, clipboardWritten: true })),
       });
       const coord = new PipelineCoordinator(deps);
       coord.startRecording();
@@ -310,7 +328,7 @@ describe("PipelineCoordinator", () => {
     it("still refuses startRecording during transcribing, cleaning, and injecting", async () => {
       let resolveTranscribe!: (v: { text: string; language: string | null; durationMs: number }) => void;
       let resolveClean!: (v: { text: string; usedFallback: boolean; durationMs: number }) => void;
-      let resolveInject!: (v: { pasted: boolean }) => void;
+      let resolveInject!: (v: { pasted: boolean; clipboardWritten: boolean }) => void;
       const deps = makeDeps({
         transcribe: vi.fn(
           () =>
@@ -360,7 +378,7 @@ describe("PipelineCoordinator", () => {
       expect(coord.getState()).toBe<PipelineState>("injecting");
       coord.startRecording();
       expect(coord.getState()).toBe<PipelineState>("injecting");
-      resolveInject({ pasted: true });
+      resolveInject({ pasted: true, clipboardWritten: true });
 
       await finishPromise;
       expect(coord.getState()).toBe<PipelineState>("idle");

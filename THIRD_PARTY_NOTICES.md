@@ -106,7 +106,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Electron (32.x)
+### Electron (44.x)
 
 https://www.electronjs.org/
 

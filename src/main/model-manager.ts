@@ -39,7 +39,7 @@ export interface ModelManagerOptions {
   statfs?: StatfsFn;
 }
 
-// Default fetcher uses Node's global fetch (Node 20+).
+// Default fetcher uses Node's global fetch (stable global in the Node bundled with Electron 44 and in the Node 22 used by CI/tests).
 export const defaultFetcher: DownloadStreamFn = async ({ url, rangeStart, signal }) => {
   const res = await fetch(url, {
     headers: rangeStart > 0 ? { Range: `bytes=${rangeStart}-` } : {},

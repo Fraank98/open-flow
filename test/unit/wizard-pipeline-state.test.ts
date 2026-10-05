@@ -13,5 +13,6 @@ describe("toWizardPipelineState", () => {
     expect(toWizardPipelineState("idle")).toBe("idle");
     expect(toWizardPipelineState("error")).toBe("idle");
     expect(toWizardPipelineState("paste-failed")).toBe("idle");
+    expect(toWizardPipelineState("copy-failed")).toBe("idle");
   });
 });
