@@ -28,6 +28,31 @@ DEPLOYMENT_TARGET="13.0"
 
 mkdir -p "$BIN_DIR" "$BUILD_DIR"
 
+# Print a UTC-timestamped marker before each major phase so a CI log shows where
+# time goes (and where a stuck build stopped) instead of staying silent.
+phase() {
+  echo "[fetch-binaries $(date -u +%H:%M:%S)] $*"
+}
+
+# Shallow-clone $1 (repo) at tag $2 into $3, bounded and retried. A stalled
+# connection aborts after GIT_HTTP_LOW_SPEED_TIME seconds below
+# GIT_HTTP_LOW_SPEED_LIMIT bytes/s instead of hanging forever; the partial
+# directory is removed between attempts.
+clone_bounded() {
+  local repo="$1" tag="$2" dst="$3" attempt
+  for attempt in 1 2 3; do
+    if GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60 \
+        git clone --depth 1 --branch "$tag" "$repo" "$dst"; then
+      return 0
+    fi
+    echo "[clone] attempt $attempt/3 failed for $repo"
+    rm -rf "$dst"
+    sleep 5
+  done
+  echo "[error] could not clone $repo after 3 attempts"
+  return 1
+}
+
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1 (try: brew install $2)"; exit 1; }
 }
@@ -61,7 +86,8 @@ build_whisper() {
   echo "[build] whisper.cpp @ $WHISPER_TAG (whisper-cli + whisper-server)"
   local src="$BUILD_DIR/whisper.cpp"
   if [[ ! -d "$src" ]]; then
-    git clone --depth 1 --branch "$WHISPER_TAG" "$WHISPER_REPO" "$src"
+    phase "clone whisper.cpp @ $WHISPER_TAG"
+    clone_bounded "$WHISPER_REPO" "$WHISPER_TAG" "$src"
   fi
   # GGML_NATIVE=OFF disables -mcpu=native+nodotprod+noi8mm+nosve which Apple
   # clang 17 doesn't accept. Metal GPU acceleration is unaffected.
@@ -78,9 +104,11 @@ build_whisper() {
   #   @executable_path/../lib    packaged: Contents/Resources/{bin/whisper-server,lib/}
   # Unlike llama, whisper's dylibs stay in the existing resources/bin/lib/ —
   # no new directory, no filter change, they already live there.
+  phase "cmake configure $(basename "$src")"
   cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib;@executable_path/../lib" >/dev/null
   # Targets are named whisper-cli / whisper-server from v1.7.2 onward (they
   # were "main" / "server" in v1.7.1).
+  phase "cmake build whisper.cpp"
   cmake --build "$src/build" -j --target whisper-cli whisper-server
   cp "$src/build/bin/whisper-cli" "$BIN_DIR/whisper-cli"
   cp "$src/build/bin/whisper-server" "$BIN_DIR/whisper-server"
@@ -97,7 +125,8 @@ build_llama() {
   echo "[build] llama.cpp @ $LLAMA_TAG (server + cli)"
   local src="$BUILD_DIR/llama.cpp"
   if [[ ! -d "$src" ]]; then
-    git clone --depth 1 --branch "$LLAMA_TAG" "$LLAMA_REPO" "$src"
+    phase "clone llama.cpp @ $LLAMA_TAG"
+    clone_bounded "$LLAMA_REPO" "$LLAMA_TAG" "$src"
   fi
   # CMAKE_BUILD_WITH_INSTALL_RPATH + CMAKE_INSTALL_RPATH: without these, cmake
   # bakes this machine's build-tree absolute path into llama-cli/llama-server's
@@ -123,7 +152,9 @@ build_llama() {
   # llama-server over plain HTTP on 127.0.0.1, and a dylib dependency on an
   # absolute /opt/homebrew path would break the packaged app on every machine
   # without that formula. Keep the binary free of it, as the pre-bump build was.
+  phase "cmake configure $(basename "$src")"
   cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib-llama;@executable_path/../lib-llama" >/dev/null
+  phase "cmake build llama.cpp"
   cmake --build "$src/build" -j --target llama-cli llama-server
   cp "$src/build/bin/llama-cli" "$BIN_DIR/llama-cli"
   cp "$src/build/bin/llama-server" "$BIN_DIR/llama-server"
@@ -226,7 +257,11 @@ fetch_vad_model() {
     return
   fi
   echo "[fetch] $VAD_MODEL"
-  curl -fL --retry 3 -o "$BIN_DIR/$VAD_MODEL.part" "$VAD_URL"
+  phase "download $VAD_MODEL"
+  # Bounded: connect/total timeouts, retries on any error, and an abort when
+  # throughput stays under 1 KiB/s for 60 s (a stalled transfer otherwise hangs).
+  curl -fL --connect-timeout 30 --max-time 600 --retry 5 --retry-delay 5 --retry-all-errors \
+    --speed-limit 1024 --speed-time 60 -o "$BIN_DIR/$VAD_MODEL.part" "$VAD_URL"
   mv "$BIN_DIR/$VAD_MODEL.part" "$BIN_DIR/$VAD_MODEL"
   echo "[ok] $VAD_MODEL → $BIN_DIR/"
 }
@@ -241,6 +276,7 @@ build_flag_monitor() {
     echo "[error] missing $src"
     exit 1
   fi
+  phase "build flag-monitor"
   echo "[build] flag-monitor (Swift NSEvent helper)"
   swiftc -O -target "arm64-apple-macosx$DEPLOYMENT_TARGET" -o "$BIN_DIR/flag-monitor" "$src"
   chmod +x "$BIN_DIR/flag-monitor"
@@ -249,6 +285,7 @@ build_flag_monitor() {
 
 build_whisper
 build_llama
+phase "copy engine libraries"
 copy_whisper_libs
 copy_llama_libs
 fetch_vad_model

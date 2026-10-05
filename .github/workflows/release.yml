@@ -99,12 +99,20 @@ jobs:
       # the whisper_stream native addon #includes. `npm ci` compiles that addon
       # on install via node-gyp, so the headers MUST exist before it runs —
       # otherwise the build fails with "'whisper.h' file not found".
+      # Both steps are time-bounded so a stuck brew/network step fails with
+      # logs instead of hanging for hours with no output.
+      - name: Install cmake
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: brew install cmake
+
       - name: Build native engines
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         timeout-minutes: 30
-        run: |
-          brew install cmake
-          npm run fetch-binaries
+        run: npm run fetch-binaries
 
       - name: Install deps
         run: npm ci
