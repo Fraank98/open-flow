@@ -11,7 +11,7 @@
       "conditions": [
         ["OS=='mac'", {
           "xcode_settings": {
-            "MACOSX_DEPLOYMENT_TARGET": "11.0",
+            "MACOSX_DEPLOYMENT_TARGET": "13.0",
             "OTHER_CFLAGS": ["-fobjc-arc"],
             "GCC_ENABLE_CPP_EXCEPTIONS": "NO",
             "CLANG_ENABLE_OBJC_ARC": "YES"
@@ -38,7 +38,7 @@
       "conditions": [
         ["OS=='mac'", {
           "xcode_settings": {
-            "MACOSX_DEPLOYMENT_TARGET": "11.0",
+            "MACOSX_DEPLOYMENT_TARGET": "13.0",
             "OTHER_CFLAGS": ["-fobjc-arc"],
             "GCC_ENABLE_CPP_EXCEPTIONS": "NO",
             "CLANG_ENABLE_OBJC_ARC": "YES"
@@ -68,10 +68,10 @@
       "conditions": [
         ["OS=='mac'", {
           "xcode_settings": {
-            "MACOSX_DEPLOYMENT_TARGET": "11.0",
+            "MACOSX_DEPLOYMENT_TARGET": "13.0",
             "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
             "CLANG_CXX_LIBRARY": "libc++",
-            "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+            "CLANG_CXX_LANGUAGE_STANDARD": "gnu++20",
             "OTHER_LDFLAGS": [
               "-Wl,-rpath,@loader_path",
               "-Wl,-rpath,@loader_path/../../resources/bin/lib",
