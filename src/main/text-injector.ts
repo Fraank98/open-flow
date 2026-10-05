@@ -140,7 +140,7 @@ export interface InjectResult {
 }
 
 function abortedBeforePaste(clipboardWritten: boolean): InjectResult {
-  return { pasted: false, clipboardWritten, reason: "aborted before paste", errorName: "AbortError" };
+  return { pasted: false, clipboardWritten, reason: "aborted before paste", errorName: "AbortError", code: "ABORT_ERR" };
 }
 
 export class TextInjector {
