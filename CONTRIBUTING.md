@@ -16,7 +16,7 @@ request you agree that your contribution is licensed under the MIT License.
 
 ## Development setup
 
-You need an Apple Silicon Mac with macOS 11 or later, Node 20+, the Xcode
+You need an Apple Silicon Mac with macOS 13 or later, Node 22+, the Xcode
 Command Line Tools, and:
 
 ```bash
@@ -41,6 +41,10 @@ the `whisper_stream` addon, which includes `whisper.h` from
 `resources/bin/build-tmp/whisper.cpp/include`, and that directory is produced
 by `fetch-binaries`. Done the other way round the install fails with
 `'whisper.h' file not found`. CI uses the same order.
+
+Electron 42 and later no longer download their binary on `npm install`: the
+first `npm run dev` fetches it (about 110 MB), and `npm run package` runs
+`npx install-electron --no` for you.
 
 ### Native addons and arm64
 

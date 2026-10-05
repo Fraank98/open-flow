@@ -78,6 +78,10 @@ extraResources:
 asar: true
 
 mac:
+  # Written to LSMinimumSystemVersion. Electron 44 dropped macOS 12 (Chromium
+  # requires 13), and Electron's own plist already says 13.0; keeping it here
+  # makes the requirement explicit.
+  minimumSystemVersion: "13.0"
   target:
     - target: dmg
       arch:

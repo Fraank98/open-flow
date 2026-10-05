@@ -13,7 +13,7 @@
   <a href="https://github.com/Fraank98/open-flow/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Fraank98/open-flow?label=download"></a>
   <a href="https://github.com/Fraank98/open-flow/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Fraank98/open-flow/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Platform: macOS 11+ on Apple Silicon" src="https://img.shields.io/badge/macOS-11%2B%20%C2%B7%20Apple%20Silicon-lightgrey">
+  <img alt="Platform: macOS 13+ on Apple Silicon" src="https://img.shields.io/badge/macOS-13%2B%20%C2%B7%20Apple%20Silicon-lightgrey">
   <img alt="100% local" src="https://img.shields.io/badge/privacy-100%25%20local-success">
 </p>
 
@@ -170,7 +170,7 @@ Logs (`~/Library/Logs/open-flow/`) can contain transcript text; they never leave
 ## Requirements
 
 - A Mac with **Apple Silicon** (M1 or later). Intel Macs are not supported: the DMG and the engines are arm64-only.
-- **macOS 11 or later.** Developed and tested on macOS 26 Tahoe.
+- **macOS 13 or later** (Electron 44 dropped Monterey). Developed and tested on macOS 26 Tahoe.
 - Disk: ~1 GB (Fast) to ~3.7 GB (Max) for models, plus the ~250 MB app.
 - Memory: both models stay resident while the app runs, so budget roughly their combined size on top of the app.
 
@@ -296,12 +296,13 @@ Small cleanup models can mangle very short or non-English input. Use the Balance
 
 ## Build from source
 
-Apple Silicon, macOS 11+, Node 20+, Xcode Command Line Tools, `brew install cmake git`.
+Apple Silicon, macOS 13+, Node 22+, Xcode Command Line Tools, `brew install cmake git`.
 
 ```bash
 git clone https://github.com/Fraank98/open-flow.git && cd open-flow
 npm run fetch-binaries      # build whisper.cpp + llama.cpp (5–15 min) — must run BEFORE npm install
 npm install                 # also compiles the native addons
+npx install-electron --no   # Electron >= 42 downloads its binary on first run, not on install
 npm run fetch-test-models   # optional: tiny models for `npm test`
 npm run lint && npm run typecheck && npm test
 npm run dev                 # launch the menubar app
