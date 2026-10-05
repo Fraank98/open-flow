@@ -34,6 +34,14 @@ phase() {
   echo "[fetch-binaries $(date -u +%H:%M:%S)] $*"
 }
 
+# Cap build parallelism at the CPU count. A bare `cmake --build -j` becomes an
+# unbounded `make -j` with the Unix Makefiles generator: one compiler per translation
+# unit at once. On GitHub's macos-14 runner (3 vCPU, 7 GB RAM) llama.cpp's many sources
+# exhausted memory and the VM stopped responding (no logs, and not even the step
+# timeout-minutes could end the job). Override with FETCH_BINARIES_JOBS.
+JOBS="${FETCH_BINARIES_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+phase "build parallelism: -j $JOBS"
+
 # Shallow-clone $1 (repo) at tag $2 into $3, bounded and retried. A stalled
 # connection aborts after GIT_HTTP_LOW_SPEED_TIME seconds below
 # GIT_HTTP_LOW_SPEED_LIMIT bytes/s instead of hanging forever; the partial
@@ -109,7 +117,7 @@ build_whisper() {
   # Targets are named whisper-cli / whisper-server from v1.7.2 onward (they
   # were "main" / "server" in v1.7.1).
   phase "cmake build whisper.cpp"
-  cmake --build "$src/build" -j --target whisper-cli whisper-server
+  cmake --build "$src/build" -j "$JOBS" --target whisper-cli whisper-server
   cp "$src/build/bin/whisper-cli" "$BIN_DIR/whisper-cli"
   cp "$src/build/bin/whisper-server" "$BIN_DIR/whisper-server"
   chmod +x "$BIN_DIR/whisper-cli" "$BIN_DIR/whisper-server"
@@ -155,7 +163,7 @@ build_llama() {
   phase "cmake configure $(basename "$src")"
   cmake -S "$src" -B "$src/build" -DGGML_METAL=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "-DCMAKE_INSTALL_RPATH=@executable_path/lib-llama;@executable_path/../lib-llama" >/dev/null
   phase "cmake build llama.cpp"
-  cmake --build "$src/build" -j --target llama-cli llama-server
+  cmake --build "$src/build" -j "$JOBS" --target llama-cli llama-server
   cp "$src/build/bin/llama-cli" "$BIN_DIR/llama-cli"
   cp "$src/build/bin/llama-server" "$BIN_DIR/llama-server"
   chmod +x "$BIN_DIR/llama-cli" "$BIN_DIR/llama-server"
