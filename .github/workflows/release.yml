@@ -80,7 +80,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
 
       # Same cache (path and key) as ci.yml, so a release reuses the binaries
@@ -109,6 +109,8 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      # Electron >= 42 has no postinstall download; `npm run package` fetches the
+      # Electron binary via `install-electron` before electron-builder.
       # `npm run package` runs electron-builder, which re-runs @electron/rebuild
       # so the bundled .node matches the Electron ABI (npm ci built it against
       # the Node ABI). The whisper.cpp headers from the step above are required
@@ -152,6 +154,8 @@ jobs:
           append_body: true
           body: |
             ## Opening the app the first time
+
+            Requires macOS 13 (Ventura) or later.
 
             open-flow is not signed with an Apple Developer ID, so macOS will say it "cannot be opened".
 
