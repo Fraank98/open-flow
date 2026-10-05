@@ -17,8 +17,8 @@ export default defineConfig({
       ],
       reporter: ["text", "json-summary", "html"],
       reportsDirectory: "coverage",
-      // Pre-PR measured numbers minus 3; raised in the last step of the coverage PR.
-      thresholds: { lines: 75, branches: 70, functions: 70, statements: 74 },
+      // Measured totals (lines 95.58, branches 88.7, functions 92.14, statements 94) minus 3, rounded down.
+      thresholds: { lines: 92, branches: 85, functions: 89, statements: 91 },
     },
   },
 });
