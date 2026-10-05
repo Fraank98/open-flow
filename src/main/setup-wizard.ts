@@ -233,7 +233,8 @@ export class SetupWizard {
     }));
 
     ipcMain.on("setup:open-system-settings", (_e, pane: string) => {
-      const suffix = SETTINGS_PANES[pane];
+      // hasOwn: a plain-object lookup would also match "__proto__", "constructor", ...
+      const suffix = Object.hasOwn(SETTINGS_PANES, pane) ? SETTINGS_PANES[pane] : undefined;
       if (suffix) shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${suffix}`);
     });
 

@@ -393,6 +393,17 @@ describe("permissions and system actions", () => {
     ]);
   });
 
+  it("open-system-settings ignores names inherited from Object.prototype", async () => {
+    const { wizard } = setup();
+    void wizard.run();
+
+    for (const pane of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      ipcMain.emit("setup:open-system-settings", pane);
+    }
+
+    expect(shell.openExternal).not.toHaveBeenCalled();
+  });
+
   it("relaunch schedules app.relaunch + quit on the next tick, not synchronously", async () => {
     vi.useFakeTimers({ toFake: ["setImmediate"] });
     const { wizard } = setup();

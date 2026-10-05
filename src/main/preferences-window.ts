@@ -340,7 +340,8 @@ export class PreferencesWindow {
     );
 
     ipcMain.on("prefs:open-system-settings", (_e, pane: unknown) => {
-      const suffix = typeof pane === "string" ? SETTINGS_PANES[pane] : undefined;
+      // hasOwn: a plain-object lookup would also match "__proto__", "constructor", ...
+      const suffix = typeof pane === "string" && Object.hasOwn(SETTINGS_PANES, pane) ? SETTINGS_PANES[pane] : undefined;
       if (suffix) void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${suffix}`);
     });
 

@@ -519,6 +519,17 @@ describe("opening things outside the app", () => {
     ]);
   });
 
+  it("open-system-settings ignores names inherited from Object.prototype", async () => {
+    const { prefsWindow } = setup();
+    await prefsWindow.open();
+
+    for (const pane of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      ipcMain.emit("prefs:open-system-settings", pane);
+    }
+
+    expect(shell.openExternal).not.toHaveBeenCalled();
+  });
+
   it("open-logs and reveal-models open the log and models folders", async () => {
     const { prefsWindow } = setup();
     await prefsWindow.open();
