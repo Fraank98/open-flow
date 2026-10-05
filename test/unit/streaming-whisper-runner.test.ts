@@ -1,10 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { StreamingWhisperRunner, computeNewSuffix, PassInfo } from "../../src/main/streaming-whisper-runner.js";
 
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 // Safety net: a test that throws mid-way (before its own useRealTimers) must not
-// leak fake timers into the next test and hang it on a real-time delay().
+// leak fake timers into the next test and hang it on a pending timer.
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -168,12 +166,13 @@ describe("StreamingWhisperRunner.shutdown", () => {
 
 describe("StreamingWhisperRunner.finalize", () => {
   it("aborts the in-flight chunk before running the final pass", async () => {
+    vi.useFakeTimers();
     // Slow chunk: if finalize naively awaited it, this test would take ~5s.
     // The abort must cut it short and keep the two passes strictly serialized.
     const fake = makeFakeNative({ chunkResolveMs: 5000 });
     const runner = new StreamingWhisperRunner({ modelPath: "m", chunkIntervalMs: 5, native: fake.native });
     runner.start("it");
-    await delay(25); // let exactly one chunk go in flight
+    await vi.advanceTimersByTimeAsync(25); // let exactly one chunk go in flight
     expect(fake.hasPending()).toBe(true);
 
     const text = await runner.finalize("it");
@@ -202,16 +201,17 @@ describe("StreamingWhisperRunner.cancel", () => {
   });
 
   it("aborts an in-flight chunk and emits no partial for it", async () => {
+    vi.useFakeTimers();
     const fake = makeFakeNative({ chunkResolveMs: 5000 });
     const runner = new StreamingWhisperRunner({ modelPath: "m", chunkIntervalMs: 5, native: fake.native });
     const partials: unknown[] = [];
     runner.on("partial", (e) => partials.push(e));
     runner.start("it");
-    await delay(25); // let exactly one chunk go in flight
+    await vi.advanceTimersByTimeAsync(25); // let exactly one chunk go in flight
     expect(fake.hasPending()).toBe(true);
 
     runner.cancel();
-    await delay(10);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(fake.calls).toEqual(["start", "processChunk", "requestAbort"]);
     expect(fake.hasPending()).toBe(false);
@@ -229,13 +229,14 @@ describe("StreamingWhisperRunner.cancel", () => {
 
 describe("StreamingWhisperRunner timing instrumentation", () => {
   it("emits a 'timing' event with native exec timing for each pass", async () => {
+    vi.useFakeTimers();
     const fake = makeFakeNative({ chunkResolveMs: 200 });
     const runner = new StreamingWhisperRunner({ modelPath: "m", chunkIntervalMs: 5, native: fake.native });
     const events: Array<{ phase: string; execMs: number; aborted: boolean }> = [];
     runner.on("timing", (e) => events.push(e));
 
     runner.start("it");
-    await delay(25); // one chunk in flight
+    await vi.advanceTimersByTimeAsync(25); // one chunk in flight
     await runner.finalize("it");
 
     const phases = events.map((e) => e.phase);

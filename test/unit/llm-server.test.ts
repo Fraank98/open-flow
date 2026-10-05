@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Regression coverage for the llama.cpp bump (b4404 -> v0.4.0): since v0.4.0,
@@ -7,24 +7,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // llama-server refuses to start. Assert the exact spawn args so this can't
 // regress.
 
-const spawnMock = vi.fn<(...args: unknown[]) => unknown>();
+const spawnMock = vi.hoisted(() => vi.fn<typeof spawn>());
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
-
-/** Minimal fake ChildProcess: stderr stream + exit emitter, no-op kill. */
-function makeFakeChild() {
-  const child = new EventEmitter() as EventEmitter & {
-    stderr: EventEmitter;
-    kill: (signal?: string) => boolean;
-  };
-  child.stderr = new EventEmitter();
-  child.kill = vi.fn(() => true);
-  return child;
-}
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 import { LLMServer as LLMServerClass } from "../../src/main/llm-server.js";
+import { fakeChild, type FakeChild } from "../helpers/fake-child.js";
 
 async function fakeFetch(url: string): Promise<Response> {
   if (String(url).endsWith("/health")) {
@@ -35,62 +23,57 @@ async function fakeFetch(url: string): Promise<Response> {
 }
 
 describe("LLMServer.start spawn args", () => {
+  let server: LLMServerClass | undefined;
+
   beforeEach(() => {
     spawnMock.mockReset();
-    vi.stubGlobal("fetch", vi.fn(fakeFetch) as unknown as typeof fetch);
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => fakeFetch(String(input))));
   });
 
   afterEach(() => {
+    server?.stop();
     vi.unstubAllGlobals();
   });
 
   it("passes an explicit value to -fa, not a bare flag", async () => {
-    spawnMock.mockImplementation(() => makeFakeChild());
+    spawnMock.mockReturnValue(fakeChild());
 
-    const { LLMServer } = await import("../../src/main/llm-server.js");
-    const server = new LLMServer({
+    server = new LLMServerClass({
       binaryPath: "/fake/llama-server",
       modelPath: "/fake/model.gguf",
       port: 19999,
+      healthySettleMs: 0,
     });
 
     await server.start();
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const spawnCall = spawnMock.mock.calls[0];
-    if (!spawnCall) throw new Error("spawn was not called");
-    const args = spawnCall[1] as string[];
+    const [, args] = spawnMock.mock.calls[0]!;
+    expect(args).toBeDefined();
 
-    const faIndex = args.indexOf("-fa");
+    const faIndex = args!.indexOf("-fa");
     expect(faIndex).toBeGreaterThanOrEqual(0);
     // The token right after -fa must be its explicit value, never another flag.
-    expect(args[faIndex + 1]).toBe("on");
+    expect(args![faIndex + 1]).toBe("on");
 
     // -ctk must remain a separate flag+value pair, not swallowed by -fa.
-    const ctkIndex = args.indexOf("-ctk");
+    const ctkIndex = args!.indexOf("-ctk");
     expect(ctkIndex).toBeGreaterThan(faIndex + 1);
-    expect(args[ctkIndex + 1]).toBe("q8_0");
-
-    server.stop();
+    expect(args![ctkIndex + 1]).toBe("q8_0");
   });
 });
 
-// A fake child process: the server only needs stderr, kill() and the "exit" event.
-class FakeChild extends EventEmitter {
-  stderr = new EventEmitter();
-  kill = vi.fn(() => true);
-}
 let child: FakeChild;
 
 describe("LLMServer.start liveness", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    child = new FakeChild();
+    child = fakeChild();
     spawnMock.mockReset();
-    spawnMock.mockImplementation(() => child);
+    spawnMock.mockReturnValue(child);
     // Something else already answers /health 200 on the port (an orphaned
     // llama-server from a previous run).
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true })));
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })));
   });
   afterEach(() => {
     vi.useRealTimers();

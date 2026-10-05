@@ -11,9 +11,9 @@ import {
 
 function makeDeps(overrides: Partial<CoordinatorDeps> = {}): CoordinatorDeps {
   return {
-    transcribe: vi.fn(async () => ({ text: "raw transcript", language: "en", durationMs: 100 })),
-    clean: vi.fn(async () => ({ text: "Cleaned transcript.", usedFallback: false, durationMs: 50 })),
-    inject: vi.fn(async () => ({ pasted: true, clipboardWritten: true })),
+    transcribe: vi.fn<TranscribeFn>(async () => ({ text: "raw transcript", language: "en", durationMs: 100 })),
+    clean: vi.fn<CleanFn>(async () => ({ text: "Cleaned transcript.", usedFallback: false, durationMs: 50 })),
+    inject: vi.fn<InjectFn>(async () => ({ pasted: true, clipboardWritten: true })),
     logger: {
       info: vi.fn(async () => undefined),
       error: vi.fn(async () => undefined),
@@ -54,13 +54,14 @@ describe("PipelineCoordinator", () => {
       "idle",
     ]);
     expect(deps.transcribe).toHaveBeenCalledOnce();
-    expect(deps.clean).toHaveBeenCalledWith("raw transcript", expect.anything());
+    // language is "auto" here, so the hint falls back to the detected language.
+    expect(deps.clean).toHaveBeenCalledWith("raw transcript", "en");
     expect(deps.inject).toHaveBeenCalledWith("Cleaned transcript.", expect.anything());
   });
 
   it("transitions to error when transcribe throws", async () => {
     const deps = makeDeps({
-      transcribe: vi.fn(async () => { throw new Error("whisper crash"); }),
+      transcribe: vi.fn<TranscribeFn>(async () => { throw new Error("whisper crash"); }),
     });
     const coord = new PipelineCoordinator(deps);
     const states: PipelineState[] = [];
@@ -77,7 +78,7 @@ describe("PipelineCoordinator", () => {
 
   it("skips inject and stays meaningful when transcript is empty", async () => {
     const deps = makeDeps({
-      transcribe: vi.fn(async () => ({ text: "", language: null, durationMs: 50 })),
+      transcribe: vi.fn<TranscribeFn>(async () => ({ text: "", language: null, durationMs: 50 })),
     });
     const coord = new PipelineCoordinator(deps);
     const states: PipelineState[] = [];
@@ -108,7 +109,7 @@ describe("PipelineCoordinator", () => {
 
   it("applies dictionary correction before the LLM cleanup", async () => {
     const deps = makeDeps({
-      transcribe: vi.fn(async () => ({ text: "ho usato slack", language: "it", durationMs: 1 })),
+      transcribe: vi.fn<TranscribeFn>(async () => ({ text: "ho usato slack", language: "it", durationMs: 1 })),
     });
     const coord = new PipelineCoordinator(deps);
     coord.startRecording();
@@ -122,7 +123,7 @@ describe("PipelineCoordinator", () => {
 
   it("applies dictionary correction even when LLM cleanup is off", async () => {
     const deps = makeDeps({
-      transcribe: vi.fn(async () => ({ text: "ho usato slack", language: "it", durationMs: 1 })),
+      transcribe: vi.fn<TranscribeFn>(async () => ({ text: "ho usato slack", language: "it", durationMs: 1 })),
     });
     const coord = new PipelineCoordinator(deps);
     coord.startRecording();
@@ -154,9 +155,7 @@ describe("PipelineCoordinator", () => {
 
     // Drain microtasks (no real timers) until the pipeline has reached
     // "injecting" and is awaiting our controlled `pending` promise.
-    for (let i = 0; i < 30 && !states.includes("injecting"); i++) {
-      await Promise.resolve();
-    }
+    await vi.waitFor(() => expect(states).toContain<PipelineState>("injecting"));
     expect(states).toContain<PipelineState>("injecting");
     expect(deps.inject).toHaveBeenCalledOnce();
 
@@ -196,7 +195,7 @@ describe("PipelineCoordinator", () => {
 
   it("applies dictionary correction on the short-word lightTouchUp path", async () => {
     const deps = makeDeps({
-      transcribe: vi.fn(async () => ({ text: "slack", language: "en", durationMs: 1 })),
+      transcribe: vi.fn<TranscribeFn>(async () => ({ text: "slack", language: "en", durationMs: 1 })),
     });
     const coord = new PipelineCoordinator(deps);
     coord.startRecording();
@@ -261,9 +260,7 @@ describe("PipelineCoordinator", () => {
       coord.startRecording();
       const finishPromise = coord.finishWithAudio(new Float32Array(16000), 16000, "auto");
 
-      for (let i = 0; i < 30 && coord.getState() !== "injecting"; i++) {
-        await Promise.resolve();
-      }
+      await vi.waitFor(() => expect(coord.getState()).toBe<PipelineState>("injecting"));
       expect(coord.getState()).toBe<PipelineState>("injecting");
 
       coord.cancel();
@@ -312,7 +309,7 @@ describe("PipelineCoordinator", () => {
     it("startRecording works from 'error', and the pending auto-return timer does not knock the new run out of 'recording'", async () => {
       vi.useFakeTimers();
       const deps = makeDeps({
-        transcribe: vi.fn(async () => {
+        transcribe: vi.fn<TranscribeFn>(async () => {
           throw new Error("whisper crash");
         }),
       });
@@ -332,13 +329,14 @@ describe("PipelineCoordinator", () => {
       let resolveTranscribe!: (v: { text: string; language: string | null; durationMs: number }) => void;
       let resolveClean!: (v: { text: string; usedFallback: boolean; durationMs: number }) => void;
       let resolveInject!: (v: { pasted: boolean; clipboardWritten: boolean }) => void;
+      const transcribe = vi.fn<TranscribeFn>(
+        () =>
+          new Promise<Awaited<ReturnType<TranscribeFn>>>((resolve) => {
+            resolveTranscribe = resolve;
+          }),
+      );
       const deps = makeDeps({
-        transcribe: vi.fn<TranscribeFn>(
-          () =>
-            new Promise<Awaited<ReturnType<TranscribeFn>>>((resolve) => {
-              resolveTranscribe = resolve;
-            }),
-        ),
+        transcribe,
         clean: vi.fn<CleanFn>(
           () =>
             new Promise<Awaited<ReturnType<CleanFn>>>((resolve) => {
@@ -359,25 +357,19 @@ describe("PipelineCoordinator", () => {
       // The state flips to "transcribing" a tick before deps.transcribe is
       // actually invoked (an intervening logger.info await), so wait for the
       // mock itself to be called rather than just the state.
-      for (let i = 0; i < 30 && (deps.transcribe as ReturnType<typeof vi.fn>).mock.calls.length === 0; i++) {
-        await Promise.resolve();
-      }
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalled());
       expect(coord.getState()).toBe<PipelineState>("transcribing");
       coord.startRecording();
       expect(coord.getState()).toBe<PipelineState>("transcribing");
       resolveTranscribe({ text: "raw transcript", language: "en", durationMs: 1 });
 
-      for (let i = 0; i < 30 && coord.getState() !== "cleaning"; i++) {
-        await Promise.resolve();
-      }
+      await vi.waitFor(() => expect(coord.getState()).toBe<PipelineState>("cleaning"));
       expect(coord.getState()).toBe<PipelineState>("cleaning");
       coord.startRecording();
       expect(coord.getState()).toBe<PipelineState>("cleaning");
       resolveClean({ text: "Cleaned transcript.", usedFallback: false, durationMs: 1 });
 
-      for (let i = 0; i < 30 && coord.getState() !== "injecting"; i++) {
-        await Promise.resolve();
-      }
+      await vi.waitFor(() => expect(coord.getState()).toBe<PipelineState>("injecting"));
       expect(coord.getState()).toBe<PipelineState>("injecting");
       coord.startRecording();
       expect(coord.getState()).toBe<PipelineState>("injecting");

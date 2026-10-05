@@ -3,7 +3,7 @@ import { LLMCleaner } from "../../src/main/llm-cleaner.js";
 
 /** Build a fake `fetch` returning a configurable JSON response with `content`. */
 function fakeFetchReturning(content: string) {
-  return vi.fn(async (_url: unknown, _init?: RequestInit) => {
+  return vi.fn<typeof fetch>(async (_input, _init) => {
     return new Response(JSON.stringify({ content }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -17,7 +17,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     const result = await cleaner.clean("No, lo scroll automatico non funziona ancora.", "it");
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -31,7 +31,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     const result = await cleaner.clean("Allora, pensavo di andare al mare.", "it");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -43,7 +43,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("io— io penso che è giusto.", "it");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -54,7 +54,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("uh, hello world.", "en");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -65,7 +65,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("Cioè, vediamo se funziona.", "it");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -76,7 +76,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("Well, I was thinking we should leave.", "en");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -93,7 +93,7 @@ describe("LLMCleaner fast-path skip", () => {
       const cleaner = new LLMCleaner({
         endpoint: "http://test",
         timeoutMs: 5000,
-        fetchImpl: fetchImpl as unknown as typeof fetch,
+        fetchImpl,
       });
       await cleaner.clean(input, "auto");
       expect(fetchImpl, `expected LLM call for input: ${input}`).toHaveBeenCalledTimes(1);
@@ -105,7 +105,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("Also, ich denke wir sollten gehen.", "de");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -116,7 +116,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("Alors, je pense qu'on devrait partir.", "fr");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -127,7 +127,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("Pues, vamos a empezar.", "es");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -141,7 +141,7 @@ describe("LLMCleaner fast-path skip", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean("Cioèssimo uhmistico, niente da fare.", "it");
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -161,8 +161,8 @@ describe("LLMCleaner n_predict cap", () => {
     // ~210 chars → ~70 tokens → ceil(70*1.2)=84 → cap = 84 (dominates floor 48).
 
     let capturedBody: { n_predict?: number } | null = null;
-    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
-      capturedBody = init?.body ? JSON.parse(init.body as string) : null;
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      capturedBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
       return new Response(JSON.stringify({ content: "x" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -171,7 +171,7 @@ describe("LLMCleaner n_predict cap", () => {
     const cleaner = new LLMCleaner({
       endpoint: "http://test",
       timeoutMs: 5000,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
     await cleaner.clean(inputText, "en");
     const approxTokens = Math.ceil(inputText.length / 3);

@@ -4,6 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../../src/main/logger.js";
 
+/** File contents, or "" when the file does not exist. Never swallows assertions. */
+async function readOrEmpty(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw err;
+  }
+}
+
 describe("Logger", () => {
   let dir: string;
   beforeEach(async () => {
@@ -27,14 +37,8 @@ describe("Logger", () => {
     const logger = createLogger({ dir, debug: false, maxBytes: 1024 * 1024 });
     await logger.debug("hidden");
     await logger.flush();
-    // debug.log may not exist — that's fine
-    try {
-      await stat(join(dir, "debug.log"));
-      const c = await readFile(join(dir, "debug.log"), "utf8");
-      expect(c).not.toContain("hidden");
-    } catch {
-      // OK — file doesn't exist
-    }
+    // debug.log may not exist at all; either way "hidden" must not be in it.
+    expect(await readOrEmpty(join(dir, "debug.log"))).not.toContain("hidden");
   });
 
   it("writes debug lines when debug=true", async () => {
