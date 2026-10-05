@@ -293,7 +293,7 @@ fetch_vad_model() {
   phase "download $VAD_MODEL"
   # Bounded: connect/total timeouts, retries on any error, and an abort when
   # throughput stays under 1 KiB/s for 60 s (a stalled transfer otherwise hangs).
-  curl -fL --connect-timeout 30 --max-time 600 --retry 5 --retry-delay 5 --retry-all-errors \
+  curl -fL --connect-timeout 30 --max-time 600 --retry 5 --retry-delay 5 --retry-max-time 900 --retry-all-errors \
     --speed-limit 1024 --speed-time 60 -o "$BIN_DIR/$VAD_MODEL.part" "$VAD_URL"
   mv "$BIN_DIR/$VAD_MODEL.part" "$BIN_DIR/$VAD_MODEL"
   echo "[ok] $VAD_MODEL → $BIN_DIR/"
