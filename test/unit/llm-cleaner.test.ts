@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { LLMCleaner } from "../../src/main/llm-cleaner.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { LLMCleaner, LLMError } from "../../src/main/llm-cleaner.js";
 
 /** Build a fake `fetch` returning a configurable JSON response with `content`. */
 function fakeFetchReturning(content: string) {
@@ -178,5 +178,120 @@ describe("LLMCleaner n_predict cap", () => {
     const expectedCap = Math.max(48, Math.ceil(approxTokens * 1.2));
     expect(expectedCap).toBeGreaterThan(48); // sanity: floor is NOT dominating
     expect(capturedBody!.n_predict).toBe(expectedCap);
+  });
+});
+
+describe("LLMCleaner HTTP failures and request body", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const make = (fetchImpl: typeof fetch, extra: Partial<ConstructorParameters<typeof LLMCleaner>[0]> = {}) =>
+    new LLMCleaner({ endpoint: "http://test", timeoutMs: 5000, fetchImpl, ...extra });
+
+  function captureBody() {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ content: "x" }), { status: 200 });
+    });
+    return { fetchImpl, calls, body: () => JSON.parse(String(calls[0]!.init?.body)) as Record<string, unknown> };
+  }
+
+  it("wraps a failing fetch in LLMError('LLM HTTP request failed') with the cause as detail", async () => {
+    const cleaner = make(vi.fn<typeof fetch>(async () => { throw new Error("ECONNREFUSED"); }));
+    const err = await cleaner.clean("uh, hello", "en").catch((e) => e);
+    expect(err).toBeInstanceOf(LLMError);
+    expect(err.name).toBe("LLMError");
+    expect(err.message).toBe("LLM HTTP request failed");
+    expect(err.detail).toBe("ECONNREFUSED");
+  });
+
+  it("stringifies a non-Error rejection into the detail", async () => {
+    const cleaner = make(vi.fn<typeof fetch>(async () => { throw "weird"; }));
+    await expect(cleaner.clean("uh, hello", "en")).rejects.toMatchObject({ message: "LLM HTTP request failed", detail: "weird" });
+  });
+
+  it("turns a non-ok status into LLMError('LLM HTTP 503') with the body truncated to 500 chars", async () => {
+    const cleaner = make(vi.fn<typeof fetch>(async () => new Response("e".repeat(900), { status: 503 })));
+    const err = await cleaner.clean("uh, hello", "en").catch((e) => e);
+    expect(err).toBeInstanceOf(LLMError);
+    expect(err.message).toBe("LLM HTTP 503");
+    expect(err.detail).toBe("e".repeat(500));
+  });
+
+  it("uses an empty detail when the error body cannot be read", async () => {
+    const res = new Response("x", { status: 500 });
+    vi.spyOn(res, "text").mockRejectedValue(new Error("stream broke"));
+    const cleaner = make(vi.fn<typeof fetch>(async () => res));
+    await expect(cleaner.clean("uh, hello", "en")).rejects.toMatchObject({ message: "LLM HTTP 500", detail: "" });
+  });
+
+  it("returns an empty cleaned text when the response has no content field", async () => {
+    const cleaner = make(vi.fn<typeof fetch>(async () => new Response("{}", { status: 200 })));
+    const result = await cleaner.clean("uh, hello there", "en");
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result.skipped).toBeUndefined();
+    // An empty completion is never accepted as the cleaned text: the raw transcript comes back.
+    expect(result.text).toBe("uh, hello there");
+    expect(result.usedFallback).toBe(true);
+  });
+
+  it("posts the completion request with the documented body fields", async () => {
+    const { fetchImpl, calls, body } = captureBody();
+    await make(fetchImpl).clean("uh, hello", "en");
+    expect(calls[0]!.url).toBe("http://test/completion");
+    expect(calls[0]!.init?.method).toBe("POST");
+    expect(calls[0]!.init?.headers).toEqual({ "Content-Type": "application/json" });
+    const b = body();
+    expect(b.stop).toEqual(["<<<", "<|im_end|>", "<|endoftext|>", "[end of text]", "\n\n"]);
+    expect(b.cache_prompt).toBe(true);
+    expect(b.repeat_penalty).toBe(1.1);
+    expect(b.repeat_last_n).toBe(128);
+    expect(b.temperature).toBe(0.2);
+    expect(typeof b.prompt).toBe("string");
+    expect(String(b.prompt)).toContain("uh, hello");
+  });
+
+  it("honours a custom temperature", async () => {
+    const { fetchImpl, body } = captureBody();
+    await make(fetchImpl, { temperature: 0 }).clean("uh, hello", "en");
+    expect(body().temperature).toBe(0);
+  });
+
+  it("floors n_predict at 48 for very short inputs", async () => {
+    const { fetchImpl, body } = captureBody();
+    await make(fetchImpl).clean("uh hi", "en");
+    expect(body().n_predict).toBe(48);
+  });
+
+  it("clamps n_predict to maxTokens when that is lower than the dynamic cap", async () => {
+    const { fetchImpl, body } = captureBody();
+    await make(fetchImpl, { maxTokens: 10 }).clean("uh hi", "en");
+    expect(body().n_predict).toBe(10);
+  });
+
+  it("caps n_predict at the default 512 for a very long input", async () => {
+    const { fetchImpl, body } = captureBody();
+    await make(fetchImpl).clean("uh, " + "word ".repeat(1000), "en");
+    expect(body().n_predict).toBe(512);
+  });
+
+  it("passes AbortSignal.timeout(timeoutMs) to fetch", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const { fetchImpl, calls } = captureBody();
+    await make(fetchImpl, { timeoutMs: 1234 }).clean("uh, hello", "en");
+    expect(timeout).toHaveBeenCalledWith(1234);
+    expect(calls[0]!.init?.signal).toBe(timeout.mock.results[0]!.value);
+  });
+
+  it("falls back to the global fetch when no fetchImpl is given", async () => {
+    const g = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ content: "x" }), { status: 200 }));
+    vi.stubGlobal("fetch", g);
+    try {
+      await new LLMCleaner({ endpoint: "http://g", timeoutMs: 1000 }).clean("uh, hello", "en");
+      expect(g).toHaveBeenCalledTimes(1);
+      expect(String(g.mock.calls[0]![0])).toBe("http://g/completion");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

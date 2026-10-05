@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { resetElectronMock, systemPreferences } from "../helpers/electron-mock.js";
+
+vi.mock("electron", async () => (await import("../helpers/electron-mock.js")).electron);
+
 import {
+  checkMicrophone,
   checkAutomationViaProbe,
   checkAccessibility,
   requestAccessibility,
@@ -100,5 +105,47 @@ describe("permissionsReady", () => {
     expect(permissionsReady({ mic: "granted", accessibility: "granted", automation: "unknown" })).toBe(false);
     expect(permissionsReady({ mic: "denied", accessibility: "granted", automation: "granted" })).toBe(false);
     expect(permissionsReady({ mic: "granted", accessibility: "denied", automation: "granted" })).toBe(false);
+  });
+});
+
+describe("checkMicrophone", () => {
+  beforeEach(() => resetElectronMock());
+
+  it("asks the OS about the microphone and maps 'granted'", async () => {
+    systemPreferences.getMediaAccessStatus.mockReturnValue("granted");
+    expect(await checkMicrophone()).toBe("granted");
+    expect(systemPreferences.getMediaAccessStatus).toHaveBeenCalledWith("microphone");
+  });
+
+  it.each(["denied", "restricted"])("maps '%s' to denied", async (status) => {
+    systemPreferences.getMediaAccessStatus.mockReturnValue(status);
+    expect(await checkMicrophone()).toBe("denied");
+  });
+
+  it.each(["not-determined", "unknown", ""])("maps '%s' to unknown", async (status) => {
+    systemPreferences.getMediaAccessStatus.mockReturnValue(status);
+    expect(await checkMicrophone()).toBe("unknown");
+  });
+});
+
+describe("checkAutomationViaProbe denied-message variants", () => {
+  it.each([
+    ["accessibility", "osascript needs Accessibility access"],
+    ["not allowed", "Operation NOT ALLOWED"],
+    ["not authorized", "Not Authorized to send Apple events"],
+  ])("returns 'denied' for a '%s' message", async (_label, message) => {
+    expect(await checkAutomationViaProbe(async () => { throw new Error(message); })).toBe("denied");
+  });
+
+  it("handles a non-Error rejection: matches on its string form", async () => {
+    expect(await checkAutomationViaProbe(async () => { throw "not authorized (string)"; })).toBe("denied");
+    expect(await checkAutomationViaProbe(async () => { throw "kaboom"; })).toBe("unknown");
+  });
+
+  it("sends the System Events probe command through osascript", async () => {
+    const exec = vi.fn(async (_cmd: string) => ({ stdout: "", stderr: "" }));
+    await checkAutomationViaProbe(exec);
+    expect(exec.mock.calls[0]![0]).toContain("osascript");
+    expect(exec.mock.calls[0]![0]).toContain("System Events");
   });
 });
