@@ -480,8 +480,7 @@ describe("createDefaultTextInjector", () => {
     text: string,
     signal?: AbortSignal,
   ) {
-    const result = injector.inject(text, signal);
-    await vi.advanceTimersByTimeAsync(500);
+    const [result] = await Promise.all([injector.inject(text, signal), vi.advanceTimersByTimeAsync(500)]);
     return result;
   }
 

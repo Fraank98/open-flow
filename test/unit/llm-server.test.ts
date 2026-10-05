@@ -316,6 +316,6 @@ describe("LLMServer lifecycle", () => {
     c.stderr.emit("data", Buffer.from("x".repeat(5_000)));
     await vi.advanceTimersByTimeAsync(1_000);
     await done;
-    expect((server as unknown as { stderrBuffer: string }).stderrBuffer.length).toBe(4096);
+    expect(server).toHaveProperty("stderrBuffer", "x".repeat(4096));
   });
 });

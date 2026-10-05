@@ -165,7 +165,7 @@ export function resetElectronMock(): void {
   listeners.clear();
   FakeBrowserWindow.instances.length = 0;
   Tray.instances.length = 0;
-  for (const group of [ipcMain, app, dialog, shell, systemPreferences, globalShortcut, clipboard, Menu, nativeImage]) {
+  for (const group of [ipcMain, app, app.dock, dialog, shell, systemPreferences, globalShortcut, clipboard, Menu, nativeImage]) {
     for (const value of Object.values(group)) {
       if (vi.isMockFunction(value)) value.mockReset();
     }

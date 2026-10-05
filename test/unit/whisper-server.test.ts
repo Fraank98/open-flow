@@ -110,7 +110,7 @@ describe("WhisperServer", () => {
     const tail = message.split("Last stderr: ")[1]!;
     expect(tail.length).toBe(500);
     expect(tail.endsWith("TAILMARK")).toBe(true);
-    expect((server as unknown as { stderrBuffer: string }).stderrBuffer.length).toBe(4096);
+    expect(server).toHaveProperty("stderrBuffer", "z".repeat(4088) + "TAILMARK");
     expect(c.kill).toHaveBeenCalledWith("SIGTERM");
   });
 

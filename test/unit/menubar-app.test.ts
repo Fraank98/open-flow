@@ -12,7 +12,6 @@ describe("MenubarApp", () => {
 
   beforeEach(() => {
     resetElectronMock();
-    app.dock.hide.mockClear();
     Menu.buildFromTemplate.mockImplementation((template: unknown[]) => ({ template }));
     nativeImage.createFromPath.mockImplementation((_p: string) => ({ setTemplateImage: vi.fn() }));
     cb = {
