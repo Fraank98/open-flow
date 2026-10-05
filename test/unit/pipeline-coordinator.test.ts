@@ -380,3 +380,172 @@ describe("PipelineCoordinator", () => {
     });
   });
 });
+
+describe("PipelineCoordinator: gaps", () => {
+  const text = (t: string, language: string | null = "en") =>
+    vi.fn<TranscribeFn>(async () => ({ text: t, language, durationMs: 1 }));
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("spoken punctuation", () => {
+    it("applies spoken punctuation before the LLM sees the text, and logs it", async () => {
+      const deps = makeDeps({ transcribe: text("hello comma world") });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(16000), 16000, "en", { spokenPunctuation: true });
+
+      const cleaned = vi.mocked(deps.clean).mock.calls[0]?.[0];
+      expect(cleaned).toBeDefined();
+      expect(cleaned).not.toContain("comma");
+      expect(cleaned).toContain(",");
+      expect(deps.logger.info).toHaveBeenCalledWith("spoken punctuation applied", { text: cleaned });
+    });
+
+    it("leaves the words alone when spokenPunctuation is off (the default)", async () => {
+      const deps = makeDeps({ transcribe: text("hello comma world") });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(16000), 16000, "en");
+
+      expect(deps.clean).toHaveBeenCalledWith("hello comma world", "en");
+      expect(deps.logger.info).not.toHaveBeenCalledWith("spoken punctuation applied", expect.anything());
+    });
+  });
+
+  describe("cancel landing mid-pipeline", () => {
+    it("cancel arriving while transcribe is in flight: idle, no clean, no inject", async () => {
+      let resolveTranscribe!: (v: Awaited<ReturnType<TranscribeFn>>) => void;
+      const transcribe = vi.fn<TranscribeFn>(
+        () => new Promise((resolve) => { resolveTranscribe = resolve; }),
+      );
+      const deps = makeDeps({ transcribe });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      const done = coord.finishWithAudio(new Float32Array(16000), 16000, "en");
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalled());
+
+      coord.cancel();
+      resolveTranscribe({ text: "something to say here", language: "en", durationMs: 1 });
+      await done;
+
+      expect(coord.getState()).toBe<PipelineState>("idle");
+      expect(deps.clean).not.toHaveBeenCalled();
+      expect(deps.inject).not.toHaveBeenCalled();
+    });
+
+    it("cancel arriving while clean is in flight: idle, no inject", async () => {
+      let resolveClean!: (v: Awaited<ReturnType<CleanFn>>) => void;
+      const clean = vi.fn<CleanFn>(() => new Promise((resolve) => { resolveClean = resolve; }));
+      const deps = makeDeps({ clean });
+      const coord = new PipelineCoordinator(deps);
+      const states: PipelineState[] = [];
+      coord.onStateChange((s) => states.push(s));
+      coord.startRecording();
+      const done = coord.finishWithAudio(new Float32Array(16000), 16000, "en");
+      await vi.waitFor(() => expect(clean).toHaveBeenCalled());
+
+      coord.cancel();
+      resolveClean({ text: "Cleaned transcript.", usedFallback: false, durationMs: 1 });
+      await done;
+
+      expect(coord.getState()).toBe<PipelineState>("idle");
+      expect(states).not.toContain<PipelineState>("injecting");
+      expect(deps.inject).not.toHaveBeenCalled();
+    });
+  });
+
+  it("finishWithAudio while not recording is a no-op", async () => {
+    const deps = makeDeps();
+    const coord = new PipelineCoordinator(deps);
+    await coord.finishWithAudio(new Float32Array(16000), 16000, "en");
+
+    expect(coord.getState()).toBe<PipelineState>("idle");
+    expect(deps.transcribe).not.toHaveBeenCalled();
+    expect(deps.logger.info).not.toHaveBeenCalled();
+  });
+
+  describe("paste log branches", () => {
+    async function run(
+      inject: Awaited<ReturnType<InjectFn>>,
+      cancelDuringInject: boolean,
+    ): Promise<CoordinatorDeps["logger"]> {
+      vi.useFakeTimers();
+      let resolveInject!: (v: Awaited<ReturnType<InjectFn>>) => void;
+      const injectFn = vi.fn<InjectFn>(() => new Promise((resolve) => { resolveInject = resolve; }));
+      const deps = makeDeps({ inject: injectFn });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      const done = coord.finishWithAudio(new Float32Array(16000), 16000, "en");
+      await vi.waitFor(() => expect(injectFn).toHaveBeenCalled());
+      if (cancelDuringInject) coord.cancel();
+      resolveInject(inject);
+      await done;
+      return deps.logger;
+    }
+
+    it("genuine failure, clipboard written: warns 'text left in clipboard'", async () => {
+      const logger = await run({ pasted: false, clipboardWritten: true, reason: "timeout" }, false);
+      expect(logger.warn).toHaveBeenCalledWith("paste failed, text left in clipboard", expect.objectContaining({ reason: "timeout" }));
+    });
+
+    it("genuine failure, clipboard write failed: warns 'clipboard write failed'", async () => {
+      const logger = await run({ pasted: false, clipboardWritten: false, reason: "clipboard" }, false);
+      expect(logger.warn).toHaveBeenCalledWith("paste failed, clipboard write failed", expect.objectContaining({ reason: "clipboard" }));
+    });
+
+    it("cancel + clipboard written: info (not warn) 'text left in clipboard'", async () => {
+      const logger = await run({ pasted: false, clipboardWritten: true, errorName: "AbortError" }, true);
+      expect(logger.info).toHaveBeenCalledWith("paste aborted by cancel, text left in clipboard", expect.objectContaining({ errorName: "AbortError" }));
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("cancel + clipboard not written: info 'text not copied to clipboard'", async () => {
+      const logger = await run({ pasted: false, clipboardWritten: false, errorName: "AbortError" }, true);
+      expect(logger.info).toHaveBeenCalledWith("paste aborted by cancel, text not copied to clipboard", expect.anything());
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("cancel landing after a successful paste: logs 'cancelled after paste completed'", async () => {
+      const logger = await run({ pasted: true, clipboardWritten: true }, true);
+      expect(logger.info).toHaveBeenCalledWith("cancelled after paste completed", { pasted: true });
+      expect(logger.info).not.toHaveBeenCalledWith("pipeline done", expect.anything());
+    });
+  });
+
+  describe("short single-word shortcut (LLM cleanup on)", () => {
+    async function inputFor(word: string) {
+      const deps = makeDeps({ transcribe: text(word) });
+      const coord = new PipelineCoordinator(deps);
+      coord.startRecording();
+      await coord.finishWithAudio(new Float32Array(16000), 16000, "en", { useLlmCleanup: true });
+      return deps;
+    }
+
+    it("an 11-char single word skips the LLM and gets a light touch-up", async () => {
+      const deps = await inputFor("abcdefghijk");
+      expect(deps.clean).not.toHaveBeenCalled();
+      expect(deps.inject).toHaveBeenCalledWith("Abcdefghijk.", expect.anything());
+    });
+
+    it("a 12-char single word goes through the LLM", async () => {
+      const deps = await inputFor("abcdefghijkl");
+      expect(deps.clean).toHaveBeenCalledWith("abcdefghijkl", "en");
+    });
+
+    it("a short multi-word input goes through the LLM", async () => {
+      const deps = await inputFor("hi you");
+      expect(deps.clean).toHaveBeenCalledWith("hi you", "en");
+    });
+  });
+
+  it("with LLM cleanup off, injects the raw transcript untouched", async () => {
+    const deps = makeDeps({ transcribe: text("abcdefghijk") });
+    const coord = new PipelineCoordinator(deps);
+    coord.startRecording();
+    await coord.finishWithAudio(new Float32Array(16000), 16000, "en", { useLlmCleanup: false });
+    expect(deps.clean).not.toHaveBeenCalled();
+    expect(deps.inject).toHaveBeenCalledWith("abcdefghijk", expect.anything());
+  });
+});
