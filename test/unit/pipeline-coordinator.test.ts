@@ -3,6 +3,9 @@ import {
   PipelineCoordinator,
   PipelineState,
   CoordinatorDeps,
+  TranscribeFn,
+  CleanFn,
+  InjectFn,
   PASTE_FAILED_NOTICE_MS,
 } from "../../src/main/pipeline-coordinator.js";
 
@@ -330,21 +333,21 @@ describe("PipelineCoordinator", () => {
       let resolveClean!: (v: { text: string; usedFallback: boolean; durationMs: number }) => void;
       let resolveInject!: (v: { pasted: boolean; clipboardWritten: boolean }) => void;
       const deps = makeDeps({
-        transcribe: vi.fn(
+        transcribe: vi.fn<TranscribeFn>(
           () =>
-            new Promise((resolve) => {
+            new Promise<Awaited<ReturnType<TranscribeFn>>>((resolve) => {
               resolveTranscribe = resolve;
             }),
         ),
-        clean: vi.fn(
+        clean: vi.fn<CleanFn>(
           () =>
-            new Promise((resolve) => {
+            new Promise<Awaited<ReturnType<CleanFn>>>((resolve) => {
               resolveClean = resolve;
             }),
         ),
-        inject: vi.fn(
+        inject: vi.fn<InjectFn>(
           () =>
-            new Promise((resolve) => {
+            new Promise<Awaited<ReturnType<InjectFn>>>((resolve) => {
               resolveInject = resolve;
             }),
         ),

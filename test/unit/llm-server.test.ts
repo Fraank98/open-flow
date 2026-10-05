@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // llama-server refuses to start. Assert the exact spawn args so this can't
 // regress.
 
-const spawnMock = vi.fn();
+const spawnMock = vi.fn<(...args: unknown[]) => unknown>();
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -57,7 +57,9 @@ describe("LLMServer.start spawn args", () => {
     await server.start();
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const args = spawnMock.mock.calls[0][1] as string[];
+    const spawnCall = spawnMock.mock.calls[0];
+    if (!spawnCall) throw new Error("spawn was not called");
+    const args = spawnCall[1] as string[];
 
     const faIndex = args.indexOf("-fa");
     expect(faIndex).toBeGreaterThanOrEqual(0);
