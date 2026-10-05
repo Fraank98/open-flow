@@ -154,7 +154,7 @@ describe("TextInjector", () => {
 
   it("still returns pasted=true and warns when restoring the prior clipboard rejects", async () => {
     const writeClipboard = vi
-      .fn<[string], Promise<void>>()
+      .fn<(text: string) => Promise<void>>()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("restore boom"));
     const deps = makeDeps({ writeClipboard });
@@ -181,7 +181,7 @@ describe("TextInjector", () => {
   it("does not hang and still reports pasted=true when the restore write never settles", async () => {
     vi.useFakeTimers();
     const writeClipboard = vi
-      .fn<[string], Promise<void>>()
+      .fn<(text: string) => Promise<void>>()
       .mockResolvedValueOnce(undefined)
       .mockImplementationOnce(() => new Promise<void>(() => undefined));
     const deps = makeDeps({ writeClipboard });
