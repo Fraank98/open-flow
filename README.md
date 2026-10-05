@@ -271,6 +271,12 @@ The ⌘V keystroke was refused or timed out. Your text is on the clipboard: past
 </details>
 
 <details>
+<summary><b>"Couldn't paste or copy — try again"</b></summary>
+
+The ⌘V keystroke failed and the text could not be placed on the clipboard either, so your previous clipboard is untouched and there is nothing to paste. Dictate again.
+</details>
+
+<details>
 <summary><b>My previous clipboard was not restored</b></summary>
 
 If an iOS Simulator is running, reading the clipboard can time out, so open-flow cannot save the old contents to put them back.

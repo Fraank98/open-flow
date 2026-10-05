@@ -10,9 +10,12 @@ export type PipelineState =
   | "cleaning"
   | "injecting"
   | "error"
-  | "paste-failed";
+  | "paste-failed"
+  // The paste failed AND the transcript never reached the clipboard (the
+  // clipboard write failed or timed out), so the user has nothing to paste by hand.
+  | "copy-failed";
 
-// How long the "paste-failed" notice stays on screen before auto-returning to
+// How long the "paste-failed" / "copy-failed" notice stays on screen before auto-returning to
 // idle. Longer than the 2000ms used for the generic "error" state: that one
 // is a short label ("Error"), this one is a full sentence
 // ("Paste failed — text in clipboard") and needs more time to actually read.
@@ -33,6 +36,7 @@ export interface CleanFn {
 export interface InjectFn {
   (text: string, signal?: AbortSignal): Promise<{
     pasted: boolean;
+    clipboardWritten: boolean;
     reason?: string;
     killed?: boolean;
     signal?: string | null;
@@ -84,13 +88,13 @@ export class PipelineCoordinator {
   }
 
   startRecording(): void {
-    // "error" and "paste-failed" are transient notices being displayed, not
+    // "error", "paste-failed" and "copy-failed" are transient notices being displayed, not
     // work in progress — refusing to start from them would silently eat a
     // push-to-talk press for up to PASTE_FAILED_NOTICE_MS while the pill is
     // still showing a stale message. The guarded auto-return timers for both
     // states already no-op once the state has moved on (see below), so
     // starting a new run out from under a pending notice is safe.
-    if (this.state !== "idle" && this.state !== "error" && this.state !== "paste-failed") return;
+    if (this.state !== "idle" && this.state !== "error" && this.state !== "paste-failed" && this.state !== "copy-failed") return;
     this.cancelled = false;
     this.abortController = new AbortController();
     this.setState("recording");
@@ -224,12 +228,21 @@ export class PipelineCoordinator {
         // apart instead of guessing from the message string.
         const meta = {
           reason: r.reason,
+          clipboardWritten: r.clipboardWritten,
           killed: r.killed,
           signal: r.signal,
           code: r.code,
           errorName: r.errorName,
         };
-        if (this.cancelled) {
+        if (!r.clipboardWritten) {
+          // The transcript never reached the clipboard: "text left in
+          // clipboard" would be a lie in the log as well as on the overlay.
+          if (this.cancelled) {
+            await this.deps.logger.info("paste aborted by cancel, text not copied to clipboard", meta);
+          } else {
+            await this.deps.logger.warn("paste failed, clipboard write failed", meta);
+          }
+        } else if (this.cancelled) {
           await this.deps.logger.info("paste aborted by cancel, text left in clipboard", meta);
         } else {
           await this.deps.logger.warn("paste failed, text left in clipboard", meta);
@@ -255,9 +268,12 @@ export class PipelineCoordinator {
         // returned above). Show a transient notice instead of silently
         // dropping back to idle — before this, the failure was invisible
         // and the transcript just sat in the clipboard with no cue at all.
-        this.setState("paste-failed");
+        // If the clipboard write failed too, say so: "text in clipboard"
+        // would send the user to paste their OLD clipboard content.
+        const failedState: PipelineState = r.clipboardWritten ? "paste-failed" : "copy-failed";
+        this.setState(failedState);
         setTimeout(() => {
-          if (this.state === "paste-failed") this.setState("idle");
+          if (this.state === failedState) this.setState("idle");
         }, PASTE_FAILED_NOTICE_MS);
       } else {
         this.setState("idle");

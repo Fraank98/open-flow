@@ -85,7 +85,7 @@ export interface ReplyCoordinatorDeps {
   shortcuts: ReplyShortcutsLike;
   server: ReplyServerStatusLike;
   /** TextInjector.inject: clipboard → ⌘V → restore (existing, untouched). */
-  inject: (text: string) => Promise<{ pasted: boolean; reason?: string }>;
+  inject: (text: string) => Promise<{ pasted: boolean; clipboardWritten: boolean; reason?: string; errorName?: string }>;
   /** Degradation L3: the text stays in the clipboard on purpose. */
   copyToClipboard: (text: string) => Promise<void>;
   loadPrefs: () => Promise<ReplyPrefsSnapshot>;
@@ -457,6 +457,16 @@ export class ReplyCoordinator {
       }
       const result = await this.deps.inject(text);
       if (!result.pasted) {
+        if (!result.clipboardWritten) {
+          // The transcript write itself failed/timed out: the clipboard still
+          // holds the user's OLD content, so "Copied" would be a lie.
+          void this.deps.logger.warn("reply inject failed", {
+            reason: "clipboard-write-failed",
+            chars: text.length,
+            errorName: result.errorName,
+          });
+          return this.flashThenIdle(FLASH_TEXT.copyFailed, FLASH_INFO_MS, epoch);
+        }
         // TextInjector already left the text in the clipboard on failure.
         void this.deps.logger.warn("reply inject failed", { reason: "paste-failed", chars: text.length });
         return this.flashThenIdle(FLASH_TEXT.copyOnly, FLASH_INFO_MS, epoch);

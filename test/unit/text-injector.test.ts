@@ -93,6 +93,7 @@ describe("TextInjector", () => {
     const injector = new TextInjector(deps);
     const result = await injector.inject("text");
     expect(result.pasted).toBe(true);
+    expect(result.clipboardWritten).toBe(true);
   });
 
   it("returns success=false and skips restore when paste fails", async () => {
@@ -103,6 +104,8 @@ describe("TextInjector", () => {
     const result = await injector.inject("text");
     expect(result.pasted).toBe(false);
     expect(result.reason).toContain("osascript boom");
+    // the transcript DID reach the clipboard, so the user can paste by hand
+    expect(result.clipboardWritten).toBe(true);
     // payload still written
     expect(deps.writeClipboard).toHaveBeenCalledWith("text");
     // restore did NOT run on failure (so user can ⌘V manually later)
@@ -144,6 +147,7 @@ describe("TextInjector", () => {
     expect(result.pasted).toBe(false);
     expect(result.reason).toContain("clipboard write failed");
     expect(result.reason).toContain("pasteboard unavailable");
+    expect(result.clipboardWritten).toBe(false);
     expect(deps.runPaste).not.toHaveBeenCalled();
     expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
   });
@@ -170,6 +174,7 @@ describe("TextInjector", () => {
     const result = await resultPromise;
     expect(result.pasted).toBe(false);
     expect(result.reason).toContain("clipboard write timed out");
+    expect(result.clipboardWritten).toBe(false);
     expect(deps.runPaste).not.toHaveBeenCalled();
   });
 
@@ -275,6 +280,7 @@ describe("TextInjector", () => {
     expect(result.pasted).toBe(false);
     expect(result.errorName).toBe("AbortError");
     expect(result.code).toBe("ABORT_ERR");
+    expect(result.clipboardWritten).toBe(true);
     expect(result.killed).toBeUndefined();
   });
 

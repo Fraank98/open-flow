@@ -63,7 +63,7 @@ interface Over {
   kept?: FilterVariant[];
   dropped?: FilterOutput["dropped"];
   dictationBusy?: boolean;
-  injectResult?: { pasted: boolean; reason?: string };
+  injectResult?: { pasted: boolean; clipboardWritten: boolean; reason?: string; errorName?: string };
   /** Makes the clipboard write reject (Electron 44: writeText is async). */
   copyRejects?: boolean;
   preGate?: (lastMessage: string) => boolean;
@@ -115,7 +115,7 @@ function makeEnv(over: Over = {}) {
     getState: () => over.serverState ?? "ready",
     recover: vi.fn(async () => true),
   };
-  const inject = vi.fn(async () => { order.push("inject"); return over.injectResult ?? { pasted: true }; });
+  const inject = vi.fn(async () => { order.push("inject"); return over.injectResult ?? { pasted: true, clipboardWritten: true }; });
   const copyToClipboard = vi.fn(async (_t: string) => {
     if (over.copyRejects) throw new Error("pasteboard unavailable");
     order.push("copy");
@@ -677,12 +677,25 @@ describe("ReplyCoordinator.accept", () => {
   });
 
   it("shows the copy flash when the injector reports pasted:false (Accessibility lost mid-session)", async () => {
-    const e = makeEnv({ injectResult: { pasted: false, reason: "osascript exited 1" } });
+    const e = makeEnv({ injectResult: { pasted: false, clipboardWritten: true, reason: "osascript exited 1" } });
     await e.c.onHotkey();
     await e.c.accept(1);
     expect(e.flashes).toEqual([FLASH_TEXT.copyOnly]);   // TextInjector already left the text in the clipboard
     expect(e.copyToClipboard).not.toHaveBeenCalled();
     expect(e.seen.join(" ")).toContain('"reason":"paste-failed"');
+  });
+
+  it("shows the copy-FAILED flash when the transcript never reached the clipboard (write timed out)", async () => {
+    const e = makeEnv({
+      injectResult: { pasted: false, clipboardWritten: false, reason: "clipboard write timed out", errorName: "ClipboardWriteTimeoutError" },
+    });
+    await e.c.onHotkey();
+    await e.c.accept(1);
+    expect(e.flashes).toEqual([FLASH_TEXT.copyFailed]);
+    expect(e.flashes).not.toContain(FLASH_TEXT.copyOnly);
+    const logs = e.seen.join(" ");
+    expect(logs).toContain('"reason":"clipboard-write-failed"');
+    expect(logs).toContain('"errorName":"ClipboardWriteTimeoutError"');
   });
 
   it("ignores an unknown id and a choose that arrives when nothing is suggesting", async () => {

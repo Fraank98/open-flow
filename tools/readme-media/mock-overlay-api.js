@@ -1,4 +1,4 @@
-// Fake window.openFlowOverlay for previews. Query: ?state=recording|transcribing|cleaning|injecting|paste-failed|idle&partial=text
+// Fake window.openFlowOverlay for previews. Query: ?state=recording|transcribing|cleaning|injecting|paste-failed|copy-failed|idle&partial=text
 (function () {
   const q = new URLSearchParams(location.search);
   document.write("<style>*{animation:none!important;transition:none!important}</style>");

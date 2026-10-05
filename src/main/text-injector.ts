@@ -110,6 +110,11 @@ export interface InjectorDeps {
 
 export interface InjectResult {
   pasted: boolean;
+  // True when the transcript reached the clipboard (so the user can still
+  // paste it by hand after a failed ⌘V); false when the transcript write
+  // itself failed or timed out and the clipboard still holds the user's OLD
+  // content. Set on every return path.
+  clipboardWritten: boolean;
   reason?: string;
   // Diagnostic properties lifted off the underlying error, when there is
   // one, so a log reader can tell apart a timeout kill (killed: true,
@@ -179,6 +184,7 @@ export class TextInjector {
       const message = err instanceof Error ? err.message : String(err);
       return {
         pasted: false,
+        clipboardWritten: false,
         reason: err instanceof ClipboardWriteTimeoutError ? message : `clipboard write failed: ${message}`,
         errorName: err instanceof Error ? err.name : undefined,
       };
@@ -196,6 +202,7 @@ export class TextInjector {
       };
       return {
         pasted: false,
+        clipboardWritten: true,
         reason: err instanceof Error ? err.message : String(err),
         killed: diag?.killed,
         signal: diag?.signal,
@@ -227,7 +234,7 @@ export class TextInjector {
         });
       }
     }
-    return { pasted: true };
+    return { pasted: true, clipboardWritten: true };
   }
 }
 

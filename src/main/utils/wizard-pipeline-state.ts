@@ -11,6 +11,6 @@ export function toWizardPipelineState(state: string): WizardPipelineState {
     case "injecting":
       return "pasting";
     default:
-      return "idle"; // idle, error, paste-failed
+      return "idle"; // idle, error, paste-failed, copy-failed
   }
 }
