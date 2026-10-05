@@ -91,6 +91,7 @@ export const app = {
   getVersion: vi.fn(() => "0.0.0-test"),
   getLoginItemSettings: vi.fn(() => ({ openAtLogin: false })),
   setLoginItemSettings: vi.fn(),
+  getFileIcon: vi.fn(async (_path: string, _opts?: unknown) => ({ toDataURL: () => "data:image/png;base64,ICON" })),
   relaunch: vi.fn(),
   quit: vi.fn(),
   dock: { hide: vi.fn(), show: vi.fn() },
