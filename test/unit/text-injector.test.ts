@@ -205,6 +205,7 @@ describe("TextInjector", () => {
       clipboardWritten: false,
       reason: "aborted before paste",
       errorName: "AbortError",
+      code: "ABORT_ERR",
     });
     expect(deps.writeClipboard).not.toHaveBeenCalled();
     expect(deps.runPaste).not.toHaveBeenCalled();
@@ -221,6 +222,7 @@ describe("TextInjector", () => {
       clipboardWritten: true,
       reason: "aborted before paste",
       errorName: "AbortError",
+      code: "ABORT_ERR",
     });
     expect(deps.runPaste).not.toHaveBeenCalled();
     // transcript stays in the clipboard, no restore

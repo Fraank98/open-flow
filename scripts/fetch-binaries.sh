@@ -85,12 +85,37 @@ rpath_ok() {
     | grep -qxF "$2"
 }
 
+# True when every Mach-O file given carries a deployment target (LC_BUILD_VERSION
+# `minos`, or `version` of the older LC_VERSION_MIN_MACOSX) equal to
+# $DEPLOYMENT_TARGET. Binaries built before the pin default to the host's macOS
+# (e.g. 26.0) and would make a local `npm run package` ship engines that refuse
+# to run on older systems, so the guards below rebuild when this fails.
+# On failure sets MINOS_MISMATCH to a description of the first offending file.
+minos_ok() {
+  local f got
+  MINOS_MISMATCH=""
+  for f in "$@"; do
+    got="$(otool -l "$f" 2>/dev/null | awk '
+      /LC_BUILD_VERSION/ { b = 1; next }
+      /LC_VERSION_MIN_MACOSX/ { m = 1; next }
+      b && $1 == "minos" { print $2; exit }
+      m && $1 == "version" { print $2; exit }')"
+    if [[ "$got" != "$DEPLOYMENT_TARGET" ]]; then
+      MINOS_MISMATCH="$f (minos ${got:-unknown}, want $DEPLOYMENT_TARGET)"
+      return 1
+    fi
+  done
+}
+
 build_whisper() {
+  MINOS_MISMATCH=""
   if [[ -x "$BIN_DIR/whisper-cli" && -x "$BIN_DIR/whisper-server" ]] \
-    && rpath_ok "$BIN_DIR/whisper-server" "@executable_path/../lib"; then
+    && rpath_ok "$BIN_DIR/whisper-server" "@executable_path/../lib" \
+    && minos_ok "$BIN_DIR/whisper-cli" "$BIN_DIR/whisper-server" "$BIN_DIR"/lib/*.dylib; then
     echo "[skip] whisper-cli + whisper-server already present"
     return
   fi
+  [[ -n "${MINOS_MISMATCH:-}" ]] && phase "[rebuild] whisper: deployment target mismatch: $MINOS_MISMATCH"
   echo "[build] whisper.cpp @ $WHISPER_TAG (whisper-cli + whisper-server)"
   local src="$BUILD_DIR/whisper.cpp"
   if [[ ! -d "$src" ]]; then
@@ -125,11 +150,14 @@ build_whisper() {
 }
 
 build_llama() {
+  MINOS_MISMATCH=""
   if [[ -x "$BIN_DIR/llama-server" && -x "$BIN_DIR/llama-cli" ]] \
-    && rpath_ok "$BIN_DIR/llama-server" "@executable_path/../lib-llama"; then
+    && rpath_ok "$BIN_DIR/llama-server" "@executable_path/../lib-llama" \
+    && minos_ok "$BIN_DIR/llama-server" "$BIN_DIR/llama-cli" "$BIN_DIR"/lib-llama/*.dylib; then
     echo "[skip] llama-server + llama-cli already present"
     return
   fi
+  [[ -n "${MINOS_MISMATCH:-}" ]] && phase "[rebuild] llama: deployment target mismatch: $MINOS_MISMATCH"
   echo "[build] llama.cpp @ $LLAMA_TAG (server + cli)"
   local src="$BUILD_DIR/llama.cpp"
   if [[ ! -d "$src" ]]; then
@@ -268,17 +296,19 @@ fetch_vad_model() {
   phase "download $VAD_MODEL"
   # Bounded: connect/total timeouts, retries on any error, and an abort when
   # throughput stays under 1 KiB/s for 60 s (a stalled transfer otherwise hangs).
-  curl -fL --connect-timeout 30 --max-time 600 --retry 5 --retry-delay 5 --retry-all-errors \
+  curl -fL --connect-timeout 30 --max-time 600 --retry 5 --retry-delay 5 --retry-max-time 900 --retry-all-errors \
     --speed-limit 1024 --speed-time 60 -o "$BIN_DIR/$VAD_MODEL.part" "$VAD_URL"
   mv "$BIN_DIR/$VAD_MODEL.part" "$BIN_DIR/$VAD_MODEL"
   echo "[ok] $VAD_MODEL → $BIN_DIR/"
 }
 
 build_flag_monitor() {
-  if [[ -x "$BIN_DIR/flag-monitor" ]]; then
+  MINOS_MISMATCH=""
+  if [[ -x "$BIN_DIR/flag-monitor" ]] && minos_ok "$BIN_DIR/flag-monitor"; then
     echo "[skip] flag-monitor already present at $BIN_DIR/flag-monitor"
     return
   fi
+  [[ -n "${MINOS_MISMATCH:-}" ]] && phase "[rebuild] flag-monitor: deployment target mismatch: $MINOS_MISMATCH"
   local src="$ROOT/resources/native-src/flag-monitor.swift"
   if [[ ! -f "$src" ]]; then
     echo "[error] missing $src"
