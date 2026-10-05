@@ -185,7 +185,7 @@ Logs (`~/Library/Logs/open-flow/`) can contain transcript text; they never leave
      xattr -dr com.apple.quarantine /Applications/open-flow.app
      ```
 
-   It is a one-time step per install. If you would rather not trust a downloaded binary, [build it yourself](#build-from-source).
+   It is a one-time step per install. The app is ad-hoc signed, so each update has a different signature and macOS may ask again for the Accessibility and Automation permissions after updating. If you would rather not trust a downloaded binary, [build it yourself](#build-from-source).
 
 <details>
 <summary><b>First launch: what the setup wizard does</b></summary>
@@ -235,6 +235,16 @@ open-flow itself is MIT, but that does not change the models' terms. If you use 
 To uninstall: quit, delete `/Applications/open-flow.app` and the folders above, and remove open-flow from the Accessibility and Microphone lists.
 
 ## Troubleshooting
+
+<details>
+<summary><b>"open-flow.app is damaged and can't be opened"</b></summary>
+
+Builds up to 0.3.1 were not signed correctly, so macOS reported the app as damaged when it was downloaded with a browser (and offered no *Open Anyway*). Update to the latest release, or remove the quarantine flag from the installed app:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/open-flow.app
+```
+</details>
 
 <details>
 <summary><b>Holding Option does nothing</b></summary>

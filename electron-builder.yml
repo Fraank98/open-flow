@@ -83,7 +83,14 @@ mac:
   category: public.app-category.productivity
   hardenedRuntime: false
   gatekeeperAssess: false
-  identity: null
+  # Ad-hoc signature ("-"), not "no signing". With `identity: null` the bundle
+  # was left unsigned and only Electron's linker-signed stub remained, whose
+  # seal does not match the bundle: `codesign --verify` failed and Gatekeeper
+  # reported downloaded copies as "damaged" (no "Open Anyway" offered). An
+  # ad-hoc signature gives a valid seal, so Gatekeeper shows the normal
+  # "cannot verify" prompt with Open Anyway. Real Developer ID signing and
+  # notarization are still out of scope.
+  identity: "-"
   icon: resources/icons/app-icon.icns
   extendInfo:
     NSMicrophoneUsageDescription: "open-flow records your voice only while you hold the Option key. Audio never leaves your Mac."

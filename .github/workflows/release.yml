@@ -116,6 +116,11 @@ jobs:
       - name: Package
         run: npm run package
 
+      # An invalid seal makes Gatekeeper report downloads as "damaged", so
+      # fail the release rather than ship a broken bundle.
+      - name: Verify code signature
+        run: codesign --verify --deep --strict --verbose=2 release/mac-arm64/open-flow.app
+
       - name: Upload DMG as build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -154,5 +159,7 @@ jobs:
             2. Open **System Settings › Privacy & Security**, scroll down and click **Open Anyway** next to open-flow, then open the app again. On macOS 14 or earlier, right-click the app › Open also works.
 
             Terminal alternative: `xattr -dr com.apple.quarantine /Applications/open-flow.app`
+
+            If macOS says "open-flow.app is damaged and can't be opened" (builds up to 0.3.1 downloaded in a browser), update to this release or run the Terminal command above.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
