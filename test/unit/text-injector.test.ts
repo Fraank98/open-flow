@@ -195,6 +195,38 @@ describe("TextInjector", () => {
     );
   });
 
+  it("does not write or paste when the signal is already aborted before the transcript write", async () => {
+    const deps = makeDeps();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await new TextInjector(deps).inject("text", controller.signal);
+    expect(result).toMatchObject({
+      pasted: false,
+      clipboardWritten: false,
+      reason: "aborted before paste",
+      errorName: "AbortError",
+    });
+    expect(deps.writeClipboard).not.toHaveBeenCalled();
+    expect(deps.runPaste).not.toHaveBeenCalled();
+  });
+
+  it("does not paste (and skips restore) when the signal aborts during the awaited transcript write", async () => {
+    const controller = new AbortController();
+    const deps = makeDeps({
+      writeClipboard: vi.fn(async () => { controller.abort(); }),
+    });
+    const result = await new TextInjector(deps).inject("text", controller.signal);
+    expect(result).toMatchObject({
+      pasted: false,
+      clipboardWritten: true,
+      reason: "aborted before paste",
+      errorName: "AbortError",
+    });
+    expect(deps.runPaste).not.toHaveBeenCalled();
+    // transcript stays in the clipboard, no restore
+    expect(deps.writeClipboard).toHaveBeenCalledTimes(1);
+  });
+
   it("passes the abort signal through to runPaste", async () => {
     const controller = new AbortController();
     const deps = makeDeps();

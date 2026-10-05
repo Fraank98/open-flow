@@ -127,6 +127,10 @@ export interface InjectResult {
   errorName?: string;
 }
 
+function abortedBeforePaste(clipboardWritten: boolean): InjectResult {
+  return { pasted: false, clipboardWritten, reason: "aborted before paste", errorName: "AbortError" };
+}
+
 export class TextInjector {
   constructor(private readonly deps: InjectorDeps) {}
 
@@ -176,6 +180,9 @@ export class TextInjector {
       stdoutLength: prior?.length,
     });
 
+    // A cancel can land during the prior-clipboard read above; do not touch the
+    // clipboard on behalf of a run the user already abandoned.
+    if (signal?.aborted) return abortedBeforePaste(false);
     try {
       await writeBounded(Promise.resolve(this.deps.writeClipboard(text)));
     } catch (err) {
@@ -189,6 +196,11 @@ export class TextInjector {
         errorName: err instanceof Error ? err.name : undefined,
       };
     }
+    // A cancel can also land during the awaited transcript write (up to
+    // CLIPBOARD_WRITE_TIMEOUT_MS). runPaste only honours the signal once it
+    // starts, so check here: leave the transcript in the clipboard, no ⌘V,
+    // no restore.
+    if (signal?.aborted) return abortedBeforePaste(true);
     try {
       await this.deps.runPaste(signal);
     } catch (err) {
