@@ -1,6 +1,6 @@
 {
   "name": "open-flow",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Local-first dictation app for macOS — Whisper + LLM cleanup",
   "author": "Danilo Franco",
   "private": true,
@@ -37,7 +37,7 @@
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "@vitest/coverage-v8": "5.0.3",
-    "concurrently": "^9.2.4",
+    "concurrently": "^9.2.5",
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
     "eslint": "^8.57.0",
