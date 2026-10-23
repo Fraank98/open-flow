@@ -59,7 +59,7 @@ export const LLM_MODELS: readonly CatalogModel[] = [
   {
     id: "qwen-1.5b",
     label: "Qwen 2.5 1.5B",
-    description: "Recommended balance of speed and quality.",
+    description: "Balanced speed and cleanup quality.",
     ramBytes: 1_400_000_000,
     licenseNote: null,
     filename: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
@@ -112,7 +112,7 @@ export const TIERS: readonly TierDescriptor[] = [
     label: "Balanced",
     description: "Whisper Small + Qwen 1.5B",
     summary: "Whisper Small + Qwen 1.5B",
-    transcriptionNote: "Recommended for most Macs.",
+    transcriptionNote: "Balanced transcription speed and cleanup quality.",
     recommended: true,
     licenseNote: null,
     whisperId: "whisper-small",

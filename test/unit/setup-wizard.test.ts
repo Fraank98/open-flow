@@ -6,6 +6,11 @@ import { SetupWizard } from "../../src/main/setup-wizard.js";
 import { app, dialog, ipcMain, resetElectronMock, shell, systemPreferences, FakeBrowserWindow } from "../helpers/electron-mock.js";
 import { deferred } from "../helpers/deferred.js";
 
+vi.mock("../../src/main/hardware-recommendations.js", async (original) => ({
+  ...(await original<typeof import("../../src/main/hardware-recommendations.js")>()),
+  readHardware: () => ({ totalMemoryBytes: 24 * 1024 ** 3, cpu: "Apple M2", appleSilicon: true }),
+}));
+
 vi.mock("electron", async () => (await import("../helpers/electron-mock.js")).electron);
 
 // No real disk: the free-space probe and the models directory are stubbed.
@@ -545,4 +550,14 @@ describe("setup:start-download", () => {
     void wizard.run();
     expect(() => ipcMain.emit("setup:cancel-download")).not.toThrow();
   });
+});
+
+it("recommends for this Mac without overwriting the saved setup choice", async () => {
+  const { wizard, setPrefs, update } = setup();
+  setPrefs({ setupTierId: "fast" });
+  void wizard.run();
+  const state = await ipcMain.invoke("setup:get-initial-state") as { setupTierId: string; tiers: Array<{ id: string; recommended: boolean }> };
+  expect(state.setupTierId).toBe("fast");
+  expect(state.tiers.filter(t => t.recommended).map(t => t.id)).toEqual(["max"]);
+  expect(update).not.toHaveBeenCalled();
 });

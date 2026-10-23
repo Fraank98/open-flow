@@ -156,6 +156,7 @@ function addBadge(parent, text, cls) {
 }
 
 function renderTiers() {
+  $("#hardware-summary").textContent = state.hardwareSummary || "";
   const list = $("#tier-list");
   list.innerHTML = "";
   state.tiers.forEach((t) => {
@@ -173,7 +174,7 @@ function renderTiers() {
     title.className = "tier-title";
     title.textContent = t.label;
     head.appendChild(title);
-    if (t.recommended) addBadge(head, "Recommended");
+    if (t.recommended) addBadge(head, "Recommended for this Mac");
     if (t.installed) addBadge(head, "Already on this Mac", "soft");
     el.appendChild(head);
 

@@ -93,6 +93,8 @@ $("#restart-now").addEventListener("click", () => {
 async function init() {
   const prefs = await api.load();
   const catalog = await api.listModels();
+  $("#hardware-summary").textContent = catalog.hardwareSummary || "";
+  $("#reply-hardware-summary").textContent = catalog.replyHardwareSummary || "";
 
   /** Saves a partial right away; reports in the given tab's status line. */
   async function save(patch, tabId, okText = "Saved") {
@@ -471,6 +473,12 @@ async function init() {
       badge.textContent = "Not downloaded";
     }
     head.append(name, badge);
+    if (m.recommended) {
+      const recommendation = document.createElement("span");
+      recommendation.className = "badge";
+      recommendation.textContent = "Recommended for this Mac";
+      head.appendChild(recommendation);
+    }
 
     const desc = document.createElement("div");
     desc.className = "model-desc";

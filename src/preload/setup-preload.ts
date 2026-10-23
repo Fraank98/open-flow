@@ -23,6 +23,7 @@ interface TierInfo {
 }
 
 interface InitialState {
+  hardwareSummary: string;
   micPermission: string;
   accessibilityPermission: string;
   automationPermission: string;
