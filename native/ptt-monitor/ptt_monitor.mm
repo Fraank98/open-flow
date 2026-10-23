@@ -1,23 +1,23 @@
-// ptt_monitor: in-process NSEvent global monitor for the Option modifier key.
+// ptt_monitor: in-process NSEvent global monitor for the configured modifier gesture (Option by default).
 //
 // Runs in the Electron main process so TCC sees a single Accessibility entry
 // (open-flow.app) — no separate child binary that would need its own grant.
 //
 // JS API:
 //   const ptt = require('./build/Release/ptt_monitor.node');
-//   ptt.start((state) => { /* state is "DOWN" / "UP" / "CHORD" */ });
+//   ptt.start((state) => { /* state is "DOWN" / "UP" / "CHORD" */ }, modifierMask);
 //   ptt.stop();
 //   ptt.isTrusted() // → boolean
 //   ptt.requestTrust() // → boolean (prompts macOS)
 //
-// "CHORD" fires when a non-modifier key is pressed while Option is held —
+// "CHORD" fires when a non-modifier key is pressed while the selected modifiers are held —
 // signal to the host that Option is being used as part of a keyboard shortcut
 // (e.g. Option+arrow, Option+Cmd+I) and PTT recording must NOT trigger.
 //
-// "DESYNC" is diagnostic only. g_lastOption is edge-derived from flagsChanged,
+// "DESYNC" is diagnostic only. The cached hold state is edge-derived from flagsChanged,
 // but an NSEvent global monitor never sees events routed to our own windows,
 // nor anything at all while another app has Secure Event Input engaged (password
-// fields). A dropped edge inverts the cached polarity, so the NEXT Option press
+// fields). A dropped edge inverts the cached polarity, so the NEXT shortcut press
 // emits nothing at all — the user holds the key and no dictation starts, with no
 // trace in the log. DESYNC compares the cache against the live modifier flags
 // and reports the disagreement so that failure becomes visible. The host must
@@ -27,11 +27,12 @@
 #import <ApplicationServices/ApplicationServices.h>
 #include <CoreAudio/CoreAudio.h>
 #include <napi.h>
+#include "ptt-gesture.h"
 
 static id g_flagsMonitor = nil;
 static id g_keyMonitor = nil;
 static NSTimer* g_desyncTimer = nil;
-static BOOL g_lastOption = NO;
+static PttGesture g_gesture;
 static BOOL g_desyncReported = NO;
 static Napi::ThreadSafeFunction g_tsfn;
 static bool g_tsfn_active = false;
@@ -44,19 +45,19 @@ static void emitState(const std::string& state, const std::string& detail) {
   g_tsfn.NonBlockingCall(callback);
 }
 
-/** Live Option state straight from the window server, independent of the event
- *  stream we may have missed. This is the ground truth g_lastOption is checked
+/** Live shortcut state straight from the window server, independent of the event
+ *  stream we may have missed. This is the ground truth g_gesture.held() is checked
  *  against. */
-static BOOL liveOptionDown() {
-  return ([NSEvent modifierFlags] & NSEventModifierFlagOption) != 0;
+static BOOL liveShortcutDown() {
+  return g_gesture.liveHeld((unsigned)[NSEvent modifierFlags]);
 }
 
-/** Emit DESYNC when the cached and live Option states disagree, but only on the
+/** Emit DESYNC when the cached and live shortcut states disagree, but only on the
  *  leading edge of the disagreement so a sustained mismatch logs once instead of
  *  every tick. `context` names what noticed it. Returns YES if desynced. */
 static BOOL reportDesyncIfAny(const char* context, const std::string& extra) {
-  BOOL live = liveOptionDown();
-  if (live == g_lastOption) {
+  BOOL live = liveShortcutDown();
+  if (live == g_gesture.held()) {
     g_desyncReported = NO;
     return NO;
   }
@@ -64,7 +65,7 @@ static BOOL reportDesyncIfAny(const char* context, const std::string& extra) {
     g_desyncReported = YES;
     char buf[256];
     snprintf(buf, sizeof(buf), "via=%s cached=%d live=%d%s%s",
-             context, (int)g_lastOption, (int)live,
+             context, (int)g_gesture.held(), (int)live,
              extra.empty() ? "" : " ", extra.c_str());
     emitState("DESYNC", buf);
   }
@@ -98,42 +99,52 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
     Napi::TypeError::New(env, "Expected a callback function").ThrowAsJavaScriptException();
     return env.Null();
   }
+  unsigned mask = NSEventModifierFlagOption;
+  if (info.Length() > 1) {
+    if (!info[1].IsNumber()) {
+      Napi::TypeError::New(env, "Expected a modifier mask").ThrowAsJavaScriptException();
+      return env.Null();
+    }
+    const double value = info[1].As<Napi::Number>().DoubleValue();
+    mask = info[1].As<Napi::Number>().Uint32Value();
+    if (value != mask || mask == 0 || (mask & ~PttGesture::Modifiers) != 0) {
+      Napi::TypeError::New(env, "Unsupported modifier mask").ThrowAsJavaScriptException();
+      return env.Null();
+    }
+  }
   Napi::Function cb = info[0].As<Napi::Function>();
   g_tsfn = Napi::ThreadSafeFunction::New(env, cb, "ptt_monitor_callback", 0, 1);
   g_tsfn_active = true;
-  g_lastOption = liveOptionDown();
+  g_gesture = PttGesture(mask, (unsigned)[NSEvent modifierFlags]);
   g_desyncReported = NO;
 
   g_flagsMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
                                                           handler:^(NSEvent* event) {
-    BOOL isOption = (event.modifierFlags & NSEventModifierFlagOption) != 0;
-    if (isOption == g_lastOption) {
-      return;
-    }
-    g_lastOption = isOption;
+    const auto edge = g_gesture.flags((unsigned)event.modifierFlags);
     g_desyncReported = NO;
     char buf[64];
     snprintf(buf, sizeof(buf), "flags=0x%lx", (unsigned long)event.modifierFlags);
-    emitState(isOption ? "DOWN" : "UP", buf);
+    if (edge == PttGesture::Event::Down) emitState("DOWN", buf);
+    else if (edge == PttGesture::Event::Up) emitState("UP", buf);
+    else if (edge == PttGesture::Event::Chord) emitState("CHORD", buf);
   }];
 
-  // Watch keyDown globally too: if a regular key fires while Option is held,
+  // Watch keyDown globally too: if a regular key fires while the selected modifiers are held,
   // emit CHORD so the host treats it as a keyboard shortcut and not as PTT.
   g_keyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                                          handler:^(NSEvent* event) {
     // Check for a dropped flagsChanged edge before the gate below, so a CHORD
     // suppressed by a stale cache is still visible in the log.
     reportDesyncIfAny("keyDown", describeKey(event));
-    if (!g_lastOption) return;
-    // Ignore key-repeat: only the first keyDown of a chord matters.
-    if (event.isARepeat) return;
-    emitState("CHORD", describeKey(event));
+    if (g_gesture.keyDown(event.isARepeat) == PttGesture::Event::Chord) {
+      emitState("CHORD", describeKey(event));
+    }
   }];
 
   // A dropped edge with no typing in between is invisible to the keyDown check
   // above — and that is exactly the failing dictation case, where the user holds
   // Option and presses nothing else. This poll makes it observable. It only ever
-  // emits DESYNC; it never repairs g_lastOption, so the monitor's behaviour is
+  // emits DESYNC; it never repairs g_gesture.held(), so the monitor's behaviour is
   // unchanged and the diagnosis stays honest.
   g_desyncTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
                                                   repeats:YES
@@ -163,7 +174,7 @@ Napi::Value Stop(const Napi::CallbackInfo& info) {
     g_tsfn_active = false;
     g_tsfn.Release();
   }
-  g_lastOption = NO;
+  g_gesture = PttGesture();
   g_desyncReported = NO;
   return env.Undefined();
 }

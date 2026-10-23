@@ -4,7 +4,7 @@ import { DEFAULT_PREFS } from "../../src/main/preferences-store.js";
 
 describe("restart-required", () => {
   it("lists exactly the fields that need a relaunch", () => {
-    expect([...RESTART_REQUIRED_FIELDS]).toEqual(["whisperModelId", "llmModelId", "useLlmCleanup"]);
+    expect([...RESTART_REQUIRED_FIELDS]).toEqual(["whisperModelId", "llmModelId", "useLlmCleanup", "hotkeyAccelerator"]);
   });
 
   it("returns [] when nothing changed", () => {

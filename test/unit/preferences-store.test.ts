@@ -13,6 +13,14 @@ describe("PreferencesStore", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("persists a chosen shortcut and falls back from unsupported legacy values", async () => {
+    const store = new PreferencesStore(join(dir, "prefs.json"));
+    await store.update({ hotkeyAccelerator: "Hold Control" });
+    expect((await store.load()).hotkeyAccelerator).toBe("Hold Control");
+    await store.save({ ...DEFAULT_PREFS, hotkeyAccelerator: "Command+Space" });
+    expect((await store.load()).hotkeyAccelerator).toBe("Hold Option");
+  });
+
   it("returns defaults when no file exists", async () => {
     const store = new PreferencesStore(join(dir, "prefs.json"));
     const prefs = await store.load();

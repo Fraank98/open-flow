@@ -18,7 +18,7 @@
     </header>
 
     <div id="restart-banner" class="banner" role="status" hidden>
-      <span>Restart open-flow to apply your model changes.</span>
+      <span>Restart open-flow to apply your changes.</span>
       <button type="button" id="restart-now" class="primary">Restart now</button>
     </div>
 
@@ -41,11 +41,11 @@
         </div>
 
         <div class="row">
-          <span class="row-text">
-            <span class="row-title">Dictation key</span>
-            <span class="row-desc">Custom shortcuts are coming later.</span>
-          </span>
-          <span class="static-value">Hold ⌥ Option (left or right)</span>
+          <label class="row-text" for="hotkeyAccelerator">
+            <span class="row-title">Dictation shortcut <span class="restart-badge" data-restart-for="hotkeyAccelerator" hidden></span></span>
+            <span class="row-desc">Hold to speak, release to finish. Either side of the keyboard works. Typing or adding another modifier cancels dictation.</span>
+          </label>
+          <select id="hotkeyAccelerator" aria-label="Dictation shortcut"></select>
         </div>
 
         <h2 class="group-title">Permissions</h2>

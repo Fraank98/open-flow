@@ -297,3 +297,11 @@ describe("PTTManager.requestTrust", () => {
     expect(requestTrust).toHaveBeenCalledTimes(1);
   });
 });
+
+it("passes the configured modifier mask to the native monitor", () => {
+  const fake = makeControllableNative();
+  const ptt = new PTTManager({ native: fake.native, shortcut: "Hold Control+Command" });
+  ptt.start();
+  expect(fake.native.start).toHaveBeenCalledWith(expect.any(Function), (1 << 18) | (1 << 20));
+  ptt.stop();
+});

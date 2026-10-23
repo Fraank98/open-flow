@@ -362,6 +362,7 @@ async function init() {
     return;
   }
   state = initial;
+  $$("[data-dictation-shortcut]").forEach(el => { el.textContent = initial.dictationShortcutLabel || "⌥ Option"; });
   idleButtons.forEach((b) => { b.disabled = false; });
   applyPermissions();
   renderTiers();

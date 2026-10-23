@@ -1,3 +1,4 @@
+import { dictationShortcut } from "./utils/dictation-shortcut.js";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import { join } from "node:path";
 export type NativePttState = "DOWN" | "UP" | "CHORD" | "DESYNC";
 
 interface NativePttModule {
-  start: (cb: (state: NativePttState, detail?: string) => void) => boolean;
+  start: (cb: (state: NativePttState, detail?: string) => void, modifierMask: number) => boolean;
   stop: () => void;
   isTrusted: () => boolean;
   requestTrust: () => boolean;
@@ -42,6 +43,8 @@ function loadNativeAddon(appRoot: string, isPackaged: boolean): NativePttModule 
 }
 
 export interface PTTManagerOptions {
+  /** Saved hold gesture; invalid values fall back to Option. */
+  shortcut?: string;
   /** Repo root (for dev) or asar root (for packaged). Used to resolve the native addon. */
   appRoot?: string;
   /** Whether the app is running from a packaged .app bundle. */
@@ -72,6 +75,7 @@ export interface PTTManagerOptions {
 export class PTTManager extends EventEmitter {
   private readonly native: NativePttModule;
   private readonly minHoldMs: number;
+  private readonly modifierMask: number;
   private running = false;
   private heldSince: number | null = null;
   private startEmitted = false;
@@ -81,6 +85,7 @@ export class PTTManager extends EventEmitter {
   constructor(opts: PTTManagerOptions) {
     super();
     this.minHoldMs = opts.minHoldMs ?? 150;
+    this.modifierMask = dictationShortcut(opts.shortcut).mask;
     this.native =
       opts.native ?? loadNativeAddon(opts.appRoot ?? "", opts.isPackaged ?? false);
   }
@@ -94,7 +99,7 @@ export class PTTManager extends EventEmitter {
       this.emit("trustRequired");
       return false;
     }
-    const installed = this.native.start((state, detail) => this.handleState(state, detail));
+    const installed = this.native.start((state, detail) => this.handleState(state, detail), this.modifierMask);
     if (!installed) {
       this.emit("trustRequired");
       return false;

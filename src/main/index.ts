@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 
 import { PipelineCoordinator } from "./pipeline-coordinator.js";
 import { AudioOrchestrator } from "./audio-orchestrator.js";
+import { dictationShortcut } from "./utils/dictation-shortcut.js";
 import { PTTManager } from "./ptt-manager.js";
 import { createPttArmer, PttArmer } from "./utils/ptt-arming.js";
 import { OverlayWindow } from "./overlay-window.js";
@@ -138,7 +139,7 @@ async function main(): Promise<void> {
   // ptt.start(), far below, so the wizard's behaviour is unchanged.
   let ptt: PTTManager;
   try {
-    ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged });
+    ptt = new PTTManager({ appRoot: APP_ROOT, isPackaged: app.isPackaged, shortcut: prefs.hotkeyAccelerator });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await logger.error("PTT native addon failed to load", { message });
@@ -958,7 +959,7 @@ async function main(): Promise<void> {
       // Whatever the state, the wizard's last step must show it (it would
       // otherwise sit on "Starting up…" while blocked on Accessibility).
       if (wizard?.isOpen()) wizard.setReadyState(readyStateForArmer(state));
-      const tray = trayStateForArmer(state);
+      const tray = trayStateForArmer(state, dictationShortcut(bootPrefs.hotkeyAccelerator).label);
       if (state === "waiting") {
         // Same call order as before the extraction: status first, then the hint.
         menubar.setStatus(tray.status);

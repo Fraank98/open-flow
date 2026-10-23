@@ -1,3 +1,4 @@
+import { DICTATION_SHORTCUTS } from "./utils/dictation-shortcut.js";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -378,6 +379,6 @@ export class PreferencesWindow {
       return true;
     });
 
-    ipcMain.handle("prefs:app-info", () => ({ version: this.deps.version }));
+    ipcMain.handle("prefs:app-info", () => ({ version: this.deps.version, dictationShortcuts: DICTATION_SHORTCUTS.map(({ id, label }) => ({ id, label })) }));
   }
 }

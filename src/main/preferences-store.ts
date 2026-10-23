@@ -1,5 +1,6 @@
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { dictationShortcut } from "./utils/dictation-shortcut.js";
 import { REPLY_HOTKEY_DEFAULT } from "./utils/reply-hotkey.js";
 
 /** Wizard steps in order; saved so an interrupted setup resumes where it stopped. */
@@ -79,7 +80,7 @@ export class PreferencesStore {
     try {
       const raw = await readFile(this.path, "utf8");
       const parsed = JSON.parse(raw) as Partial<Preferences>;
-      return { ...DEFAULT_PREFS, ...parsed };
+      return { ...DEFAULT_PREFS, ...parsed, hotkeyAccelerator: dictationShortcut(parsed.hotkeyAccelerator).id };
     } catch {
       return { ...DEFAULT_PREFS };
     }

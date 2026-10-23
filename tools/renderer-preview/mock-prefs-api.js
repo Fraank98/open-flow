@@ -19,7 +19,7 @@
 
   const boot = {
     whisperModelId: "whisper-small", llmModelId: base === "restart-pending" ? "qwen-0.5b" : "qwen-1.5b",
-    useLlmCleanup: true,
+    useLlmCleanup: true, hotkeyAccelerator: "Hold Option",
   };
   let prefs = {
     setupComplete: true, whisperModelId: "whisper-small", llmModelId: "qwen-1.5b",
@@ -85,7 +85,7 @@
     load: () => Promise.resolve({ ...prefs }),
     update: (patch) => { prefs = { ...prefs, ...patch }; console.log("[mock] update", patch); return Promise.resolve({ ...prefs }); },
     restartStatus: () => Promise.resolve({
-      fields: ["whisperModelId", "llmModelId", "useLlmCleanup"].filter((k) => prefs[k] !== boot[k]),
+      fields: ["whisperModelId", "llmModelId", "useLlmCleanup", "hotkeyAccelerator"].filter((k) => prefs[k] !== boot[k]),
     }),
     // Like the real API: `downloading` + last `progress` for a download that is in flight.
     listModels: () => Promise.resolve({
@@ -131,7 +131,13 @@
     revealModels: () => console.log("[mock] reveal models"),
     openProjectPage: () => console.log("[mock] open project page"),
     resetSetup: () => { console.log("[mock] reset setup"); return Promise.resolve(false); },
-    appInfo: () => Promise.resolve({ version: "0.3.0" }),
+    appInfo: () => Promise.resolve({ version: "0.4.0", dictationShortcuts: [
+      { id: "Hold Option", label: "⌥ Option" }, { id: "Hold Control", label: "⌃ Control" },
+      { id: "Hold Shift", label: "⇧ Shift" },
+      { id: "Hold Control+Option", label: "⌃⌥ Control + Option" },
+      { id: "Hold Control+Shift", label: "⌃⇧ Control + Shift" },
+      { id: "Hold Control+Command", label: "⌃⌘ Control + Command" }
+    ] }),
     onShowTab: () => () => undefined,
     replyStatus: () => Promise.resolve({
       serverState: scenario === "reply-on" || scenario === "reply-bad-shortcut" || scenario === "reply-shift-only" ? "ready" : scenario === "reply-failed" ? "failed" : "off",

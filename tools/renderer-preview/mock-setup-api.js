@@ -71,6 +71,7 @@
 
   window.openFlowSetup = {
     getInitialState: () => Promise.resolve({
+      dictationShortcutLabel: "⌥ Option",
       micPermission: perms.mic, accessibilityPermission: perms.acc,
       automationPermission: scenario === "granted" ? "granted" : "unknown", tiers,
       setupStep: savedStep, setupTierId: savedTier,
