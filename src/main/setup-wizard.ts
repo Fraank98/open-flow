@@ -4,6 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ModelManager } from "./model-manager.js";
+import { readHardware, recommendModels } from "./hardware-recommendations.js";
 import { LLM_MODELS, TIERS, WHISPER_MODELS, getModelById, getTier, tierTotals } from "./model-catalog.js";
 import {
   AccessibilityNative,
@@ -158,7 +159,9 @@ export class SetupWizard {
   private registerHandlers(): void {
     ipcMain.handle("setup:get-initial-state", async () => {
       const prefs = await this.deps.preferencesStore.load();
+      const recommendation = recommendModels(readHardware());
       return {
+        hardwareSummary: recommendation.summary,
         micPermission: await checkMicrophone(),
         accessibilityPermission: checkAccessibility(this.deps.accessibility),
         // Not probed here: the osascript probe raises the macOS Automation prompt
@@ -187,7 +190,7 @@ export class SetupWizard {
               description: t.description,
               summary: t.summary,
               transcriptionNote: t.transcriptionNote,
-              recommended: t.recommended,
+              recommended: t.id === recommendation.tierId,
               sizeBytes,
               ramBytes,
               installed,

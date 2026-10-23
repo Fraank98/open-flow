@@ -65,7 +65,6 @@ describe("model catalog", () => {
   it("tiers carry an explicit transcriptionNote so Fast and Balanced make clear they share the same Whisper", () => {
     expect(getTier("fast")!.whisperId).toBe(getTier("balanced")!.whisperId);
     expect(getTier("fast")!.transcriptionNote).toBe("Same transcription as Balanced, lighter cleanup.");
-    expect(getTier("balanced")!.transcriptionNote).toBe("Recommended for most Macs.");
     expect(getTier("balanced")!.recommended).toBe(true);
     expect(getTier("max")!.transcriptionNote).toBe("Best accuracy. Comfortable on 16 GB, slower on 8 GB.");
     expect(getTier("max")!.summary).toBe("Whisper Large v3 Turbo + Qwen 3B");

@@ -1,4 +1,5 @@
 import { DICTATION_SHORTCUTS } from "./utils/dictation-shortcut.js";
+import { readHardware, recommendModels } from "./hardware-recommendations.js";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -247,7 +248,15 @@ export class PreferencesWindow {
           };
         }),
       );
-      return { whisper, llm, reply, languages: LANGUAGES };
+      const recommendation = recommendModels(readHardware());
+      return {
+        whisper: whisper.map(m => ({ ...m, recommended: m.id === recommendation.whisperModelId })),
+        llm: llm.map(m => ({ ...m, recommended: m.id === recommendation.llmModelId })),
+        reply: reply.map(m => ({ ...m, recommended: m.id === recommendation.replyModelId })),
+        hardwareSummary: recommendation.summary,
+        replyHardwareSummary: recommendation.replySummary,
+        languages: LANGUAGES,
+      };
     });
 
     ipcMain.handle("prefs:download-model", async (_e, args: { kind: "whisper" | "llm" | "reply"; id: string }) => {
