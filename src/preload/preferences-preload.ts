@@ -5,6 +5,7 @@ type Permission = "granted" | "denied" | "unknown";
 type Pane = "accessibility" | "microphone" | "automation";
 
 interface ModelInfo {
+  recommended: boolean;
   id: string;
   label: string;
   description: string;
@@ -46,6 +47,8 @@ interface PrefsApi {
   update: (patch: Record<string, unknown>) => Promise<unknown>;
   restartStatus: () => Promise<{ fields: string[] }>;
   listModels: () => Promise<{
+    hardwareSummary: string;
+    replyHardwareSummary: string;
     whisper: ModelInfo[];
     llm: ModelInfo[];
     reply: ReplyModelInfo[];

@@ -7,6 +7,10 @@ import { REPLY_MODELS, replyCards } from "../../src/main/model-catalog.js";
 import { app, dialog, ipcMain, resetElectronMock, shell, FakeBrowserWindow, type FakeWebContents } from "../helpers/electron-mock.js";
 import { deferred } from "../helpers/deferred.js";
 
+vi.mock("../../src/main/hardware-recommendations.js", async (original) => ({
+  ...(await original<typeof import("../../src/main/hardware-recommendations.js")>()),
+  readHardware: () => ({ totalMemoryBytes: 24 * 1024 ** 3, cpu: "Apple M2", appleSilicon: true }),
+}));
 vi.mock("electron", async () => (await import("../helpers/electron-mock.js")).electron);
 
 // The bundle lookups shell out to mdls/mdfind/plutil.
@@ -647,4 +651,15 @@ describe("app picker", () => {
 
     await expect(ipcMain.invoke("prefs:resolve-apps", "com.apple.mail")).resolves.toEqual([]);
   });
+});
+
+it("labels hardware recommendations without saving or downloading models", async () => {
+  const { prefsWindow, update, download } = setup();
+  await prefsWindow.open();
+  const models = await ipcMain.invoke("prefs:list-models") as Record<"whisper" | "llm" | "reply", Array<{id: string; recommended: boolean}>>;
+  expect(models.whisper.filter(m => m.recommended).map(m => m.id)).toEqual(["whisper-large-v3-turbo"]);
+  expect(models.llm.filter(m => m.recommended).map(m => m.id)).toEqual(["qwen-3b"]);
+  expect(models.reply.filter(m => m.recommended).map(m => m.id)).toEqual(["gemma-4-e4b"]);
+  expect(update).not.toHaveBeenCalled();
+  expect(download).not.toHaveBeenCalled();
 });
