@@ -84,7 +84,7 @@ async function prepareOut(): Promise<void> {
   await cp(join(ROOT, "src", "renderer", "overlay.css"), join(OUT, "overlay.css"));
   const overlay = await readFile(join(ROOT, "src", "renderer", "overlay.html"), "utf8");
   await writeFile(join(OUT, "overlay.html"), injectMock(overlay, "mock-overlay-api.js"), "utf8");
-  for (const f of ["mock-overlay-api.js", "hero.html", "states.html", "frame.html", "icon.html"]) {
+  for (const f of ["mock-overlay-api.js", "hero.html", "styles.html", "states.html", "frame.html", "icon.html"]) {
     await cp(join(HERE, f), join(OUT, f));
   }
   await cp(join(ROOT, "resources", "icons", "app-icon.png"), join(OUT, "app-icon.png"));
@@ -223,6 +223,7 @@ async function main(): Promise<void> {
   const want = (t: Target): boolean => !only || only === t;
 
   await prepareOut();
+  if (args.includes("--prepare-only")) return;
   await mkdir(MEDIA, { recursive: true });
   const written: string[] = [];
 

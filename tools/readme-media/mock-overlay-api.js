@@ -1,16 +1,22 @@
-// Fake window.openFlowOverlay for previews. Query: ?state=recording|transcribing|cleaning|injecting|paste-failed|copy-failed|idle&partial=text
-(function () {
+// Documentation-only snapshot of the real overlay renderer.
+(() => {
   const q = new URLSearchParams(location.search);
-  document.write("<style>*{animation:none!important;transition:none!important}</style>");
-  const stateCbs = [], partialCbs = [];
+  document.documentElement.style.colorScheme = q.get("theme") || "light";
+  const callbacks = {};
+  // Freeze the documentation clock so captures stay reproducible.
+  window.setInterval = () => 0;
   window.openFlowOverlay = {
-    onState: (cb) => { stateCbs.push(cb); return () => {}; },
-    onPartial: (cb) => { partialCbs.push(cb); return () => {}; },
-    cancel: () => console.log("[mock] cancel"),
+    onAppearance: cb => { callbacks.appearance = cb; },
+    onLevel: cb => { callbacks.level = cb; },
+    onState: cb => { callbacks.state = cb; },
+    onPartial: cb => { callbacks.partial = cb; },
+    onSuggestions: () => {}, onFlash: () => {},
+    cancel: () => {}, choose: () => {}, dismiss: () => {}, hover: () => {},
   };
   document.addEventListener("DOMContentLoaded", () => {
-    const st = q.get("state") || "recording";
-    stateCbs.forEach((cb) => cb(st));
-    if (q.get("partial")) partialCbs.forEach((cb) => cb(q.get("partial")));
+    callbacks.appearance({ style: q.get("style") || "preview", shortcutLabel: "⌥ Option" });
+    callbacks.state(q.get("state") || "recording");
+    document.getElementById("elapsed").textContent = "00:12";
+    callbacks.partial(q.get("partial") || "Let’s meet tomorrow to discuss the details.");
   });
 })();

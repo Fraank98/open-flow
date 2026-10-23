@@ -19,8 +19,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/media/flow-dark.gif">
-    <img src="docs/media/flow-light.gif" width="880" alt="Dictating into a text editor: the overlay shows Recording with the live transcript, then Transcribing, Cleaning and Pasting, and the sentence appears in the document.">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/flow-dark.jpg">
+    <img src="docs/media/flow-light.jpg" width="880" alt="The Preview recording pill over a text editor, showing live transcription, recording time and the release shortcut.">
   </picture>
 </p>
 
@@ -48,7 +48,7 @@ Dictation tools that feel instant usually send your voice to a server. open-flow
     </td>
     <td width="50%" valign="top">
       <b>Streaming transcription</b><br>
-      Whisper runs in-process, via a native whisper.cpp addon, as you speak — most of the work is done by the time you let go. A small overlay shows the live transcript.
+      Whisper runs in-process, via a native whisper.cpp addon, as you speak — most of the work is done by the time you let go. Choose Compact, Preview or Minimal; Preview shows the live transcript.
     </td>
   </tr>
   <tr>
@@ -126,14 +126,28 @@ Dictation tools that feel instant usually send your voice to a server. open-flow
   </tr>
 </table>
 
-<p align="center">
-  <img src="docs/media/overlay-states.png" width="420" alt="The overlay pill in its four states: Recording with the live transcript, Transcribing, Cleaning, Pasting.">
-  <br><sub>The overlay during a dictation</sub>
-</p>
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/media/settings-general-dark.jpg">
+        <img src="docs/media/settings-general-light.jpg" alt="Settings, General: configurable dictation shortcut and recording pill selector, with Preview selected and a sample transcript.">
+      </picture><br>
+      <sub>Settings · Shortcut and recording pill</sub>
+    </td>
+    <td align="center" width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/media/pill-styles-dark.jpg">
+        <img src="docs/media/pill-styles-light.jpg" alt="Compact, Preview and Minimal recording pills. Preview shows the live transcript; all styles include elapsed time, microphone level and a centered cancel button.">
+      </picture><br>
+      <sub>Choose Compact, Preview or Minimal</sub>
+    </td>
+  </tr>
+</table>
 
 ## Using it
 
-- **Dictate:** hold either **Option** key (at least ~150 ms), speak, release. The overlay shows *Recording…* with the live transcript, then *Transcribing… → Cleaning… → Pasting…*, and the text is pasted into the focused field.
+- **Dictate:** hold either **Option** key (at least ~150 ms), speak, release. The overlay shows *Recording…* (with the live transcript in Preview style), then *Transcribing… → Cleaning… → Pasting…*, and the text is pasted into the focused field.
 - **Cancel:** click the **✕** on the overlay, or press any other key while holding Option. A tap shorter than ~150 ms is ignored.
 - **Length:** there is no fixed limit on how long you can dictate; the streaming transcript is built from the whole recording. (A separate 60-second audio window exists only for the fallback batch transcriber, used if the streaming engine fails to start.)
 - **Spoken punctuation:** off by default (Settings › Dictation). With it on, *comma*, *period*, *question mark*, *new line*, *new paragraph*, *open/close quote* (and the it/es/fr/de equivalents) always become symbols — so "my period" becomes "my ." too. Without it you get the punctuation Whisper infers from your phrasing; the LLM cleanup does not change punctuation.

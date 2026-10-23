@@ -14,7 +14,7 @@
   .doc{padding:34px 56px;font-size:17px;line-height:1.6;color:#1d1d1f;max-width:620px}
   .dark .doc{color:#e8e8ea}
   .doc .caret{display:inline-block;width:2px;height:20px;background:#0a6cff;vertical-align:-3px;margin-left:1px}
-  iframe{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);width:420px;height:124px;border:0;background:transparent}
+  iframe{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);width:420px;height:188px;border:0;background:transparent}
 </style></head>
 <body class="">
 <div class="desk"></div>
@@ -29,8 +29,9 @@
 <script>
  const q=new URLSearchParams(location.search);
  if(q.get("theme")==="dark")document.body.className="dark";
+ document.documentElement.style.colorScheme=q.get("theme")||"light";
  const ov=document.getElementById("ov");
- if(q.get("hide")==="1"){ov.remove();}else{ov.src="overlay.html?state="+(q.get("state")||"recording")+"&partial="+encodeURIComponent(q.get("partial")||"");}
+ if(q.get("hide")==="1"){ov.remove();}else{ov.src="overlay.html?state="+(q.get("state")||"recording")+"&theme="+(q.get("theme")||"light")+"&partial="+encodeURIComponent(q.get("partial")||"");}
  if(q.get("pasted")==="1")document.getElementById("dict").textContent=" Also check with Luca whether the API keys were rotated after the audit.";
  </script>
 </body></html>
