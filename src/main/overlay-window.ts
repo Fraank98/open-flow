@@ -4,13 +4,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { IpcChannels } from "../shared/ipc-channels.js";
 import type { SuggestionPayload } from "../shared/reply-types.js";
-import { computeOverlayBounds, type Size } from "./utils/overlay-bounds.js";
+import { computeOverlayBounds, type Size, type Rect } from "./utils/overlay-bounds.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const APP_ROOT = join(dirname(__filename), "..", "..");
 
 export class OverlayWindow {
   private win: BrowserWindow | null = null;
+  private bounds: Rect | null = null;
   /** Current window size; `show()` re-centers at this size. */
   private state = "idle";
   private style: PillStyle = "compact";
@@ -69,20 +70,30 @@ export class OverlayWindow {
     this.setAppearance(this.style, this.shortcutLabel);
   }
 
-  /** Fresh bounds for the CURRENT cursor position and window size. Called at
-   *  every show(): the user changes monitor between one dictation and the next. */
+  /** Re-evaluate the display when opening a new overlay session. */
   private currentBounds(): { x: number; y: number; width: number; height: number } {
     return computeOverlayBounds(screen.getAllDisplays(), screen.getCursorScreenPoint(), this.size);
   }
 
   private reposition(): void {
     if (!this.win || this.win.isDestroyed()) return;
-    const { x, y, width, height } = this.currentBounds();
-    this.win.setBounds({ x, y, width, height });
+    const previous = this.bounds;
+    // Keep one bottom-center anchor while visible. macOS can change the
+    // work area (Dock/fullscreen), and the cursor can move between displays
+    // while recording. Neither should move an in-progress dictation.
+    if (this.win.isVisible() && previous && previous.width === this.size.width && previous.height === this.size.height) return;
+    const next = this.win.isVisible() && previous
+      ? { x: Math.round(previous.x + (previous.width - this.size.width) / 2),
+          y: previous.y + previous.height - this.size.height, ...this.size }
+      : this.currentBounds();
+    const { x, y, width, height } = next;
+    this.bounds = { x, y, width, height };
+    this.win.setBounds(this.bounds);
   }
 
   show(): void {
     if (!this.win || this.win.isDestroyed()) return;
+    if (this.win.isVisible()) return;
     this.reposition();
     this.win.showInactive(); // never steal focus: the paste must land in the target app
   }
