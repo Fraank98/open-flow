@@ -1,3 +1,4 @@
+import { isPillStyle } from "./pill-style.js";
 import { isDictationShortcut } from "./dictation-shortcut.js";
 import { getModelById } from "../model-catalog.js";
 import { isSupportedLanguage } from "./languages.js";
@@ -9,6 +10,7 @@ import type { Preferences } from "../preferences-store.js";
 export type SettingsPatch = Partial<
   Pick<
     Preferences,
+    | "pillStyle"
     | "hotkeyAccelerator"
     | "language"
     | "debugLogging"
@@ -45,6 +47,7 @@ export function sanitizePrefsPatch(input: unknown): SettingsPatch {
   if (typeof input !== "object" || input === null) return {};
   const raw = input as Record<string, unknown>;
   const out: SettingsPatch = {};
+  if (isPillStyle(raw.pillStyle)) out.pillStyle = raw.pillStyle;
   if (isDictationShortcut(raw.hotkeyAccelerator)) out.hotkeyAccelerator = raw.hotkeyAccelerator;
 
   for (const key of BOOLEAN_FIELDS) {

@@ -11,6 +11,7 @@ const RENDERER = join(ROOT, "src", "renderer");
 const OUT = join(HERE, "out");
 
 const PAGES = [
+  { page: "overlay", mock: "mock-overlay-api.js" },
   { page: "setup", mock: "mock-setup-api.js" },
   { page: "preferences", mock: "mock-prefs-api.js" },
 ] as const;

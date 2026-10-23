@@ -1,4 +1,5 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
+html { color-scheme: light dark; }
 html, body {
   background: transparent !important;
   height: 100%;
@@ -18,58 +19,8 @@ html, body {
   transform: translateX(-50%);
   transition: opacity 200ms ease;
 }
-#pill {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 18px;
-  background: rgba(30, 30, 32, 0.92);
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  color: #fff;
-  font-size: 14px;
-  height: 56px;
-  width: 360px;
-}
-.dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #888;
-  flex-shrink: 0;
-}
-.content { flex: 1; min-width: 0; overflow: hidden; }
-.label {
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.partial {
-  font-size: 11px;
-  opacity: 0.65;
-  margin-top: 2px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  /* Show only when recording (live preview is meaningful then) */
-  display: none;
-}
-.state-recording .partial { display: block; }
-button#cancel {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border: none;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  font-size: 12px;
-  cursor: pointer;
-}
-button#cancel:hover { background: rgba(255, 255, 255, 0.22); }
-
 .state-idle { opacity: 0; pointer-events: none; }
-.state-recording .dot { background: #ff3b30; animation: pulse 1s infinite; }
+.state-recording .dot { background: #ff3b30; }
 .state-transcribing .dot { background: #ffcc00; }
 .state-cleaning .dot { background: #34c759; }
 .state-injecting .dot { background: #007aff; }

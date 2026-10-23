@@ -1,9 +1,10 @@
+import { normalizePillStyle, pillWindowSize, type PillStyle } from "./utils/pill-style.js";
 import { BrowserWindow, screen } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { IpcChannels } from "../shared/ipc-channels.js";
 import type { SuggestionPayload } from "../shared/reply-types.js";
-import { computeOverlayBounds, PILL_WINDOW_SIZE, SUGGEST_WINDOW_SIZE, type Size } from "./utils/overlay-bounds.js";
+import { computeOverlayBounds, type Size } from "./utils/overlay-bounds.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const APP_ROOT = join(dirname(__filename), "..", "..");
@@ -11,7 +12,25 @@ const APP_ROOT = join(dirname(__filename), "..", "..");
 export class OverlayWindow {
   private win: BrowserWindow | null = null;
   /** Current window size; `show()` re-centers at this size. */
-  private size: Size = { ...PILL_WINDOW_SIZE };
+  private state = "idle";
+  private style: PillStyle = "compact";
+  private shortcutLabel = "⌥ Option";
+  private size: Size = pillWindowSize(this.style, this.state);
+
+  setAppearance(style: PillStyle, shortcutLabel: string): void {
+    this.style = normalizePillStyle(style);
+    this.shortcutLabel = shortcutLabel;
+    this.size = pillWindowSize(this.style, this.state);
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.webContents.send("overlay:appearance", { style: this.style, shortcutLabel });
+    if (this.win.isVisible()) this.reposition();
+  }
+
+  sendLevel(level: number): void {
+    if (this.state === "recording" && this.win && !this.win.isDestroyed()) {
+      this.win.webContents.send("overlay:level", level);
+    }
+  }
 
   async create(): Promise<void> {
     // Window is larger than the visible pill so the box-shadow (which
@@ -47,6 +66,7 @@ export class OverlayWindow {
     // focus when shown via showInactive().
     this.win.setAlwaysOnTop(true, "floating");
     await this.win.loadFile(join(APP_ROOT, "src", "renderer", "overlay.html"));
+    this.setAppearance(this.style, this.shortcutLabel);
   }
 
   /** Fresh bounds for the CURRENT cursor position and window size. Called at
@@ -76,7 +96,7 @@ export class OverlayWindow {
   /** Enters the suggesting state: grows the window, sends the payload, shows. */
   showSuggestions(payload: SuggestionPayload): void {
     if (!this.win || this.win.isDestroyed()) return;
-    this.size = { ...SUGGEST_WINDOW_SIZE };
+    this.size = pillWindowSize(this.style, "suggesting");
     this.win.webContents.send(IpcChannels.ReplySuggestions, payload);
     this.sendState("suggesting");
     this.show();
@@ -84,7 +104,8 @@ export class OverlayWindow {
 
   /** Back to the pill geometry, repositioning if the window is still visible. */
   resetSize(): void {
-    this.size = { ...PILL_WINDOW_SIZE };
+    this.state = "idle";
+    this.size = pillWindowSize(this.style, this.state);
     if (this.win && !this.win.isDestroyed() && this.win.isVisible()) this.reposition();
   }
 
@@ -98,6 +119,9 @@ export class OverlayWindow {
   }
 
   sendState(state: string): void {
+    this.state = state;
+    this.size = pillWindowSize(this.style, state);
+    if (this.win && !this.win.isDestroyed() && this.win.isVisible()) this.reposition();
     if (this.win && !this.win.isDestroyed()) {
       this.win.webContents.send(IpcChannels.PipelineStateChange, state);
     }
