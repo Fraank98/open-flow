@@ -14,6 +14,16 @@ import type { SuggestionPayload } from "../shared/reply-types.js";
 // already followed this convention.
 
 contextBridge.exposeInMainWorld("openFlowOverlay", {
+  onAppearance: (cb: (value: { style: string; shortcutLabel: string }) => void): (() => void) => {
+    const handler = (_e: unknown, value: { style: string; shortcutLabel: string }) => cb(value);
+    ipcRenderer.on("overlay:appearance", handler);
+    return () => ipcRenderer.removeListener("overlay:appearance", handler);
+  },
+  onLevel: (cb: (level: number) => void): (() => void) => {
+    const handler = (_e: unknown, value: number) => cb(value);
+    ipcRenderer.on("overlay:level", handler);
+    return () => ipcRenderer.removeListener("overlay:level", handler);
+  },
   onState: (cb: (state: string) => void): (() => void) => {
     const handler = (_e: unknown, state: string) => cb(state);
     ipcRenderer.on("pipeline:state-change", handler);
@@ -51,6 +61,8 @@ contextBridge.exposeInMainWorld("openFlowOverlay", {
 declare global {
   interface Window {
     openFlowOverlay: {
+      onAppearance: (cb: (value: { style: string; shortcutLabel: string }) => void) => () => void;
+      onLevel: (cb: (level: number) => void) => () => void;
       onState: (cb: (state: string) => void) => () => void;
       onPartial: (cb: (text: string) => void) => () => void;
       cancel: () => void;
@@ -62,5 +74,4 @@ declare global {
     };
   }
 }
-
 export {};

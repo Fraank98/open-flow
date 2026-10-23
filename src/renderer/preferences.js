@@ -134,6 +134,26 @@ async function init() {
     shortcutSelect.value = prefs.hotkeyAccelerator;
   });
 
+  const pillSelect = $("#pillStyle");
+  const pillDescriptions = {
+    compact: "Balanced: status, microphone level and recording time.",
+    preview: "Live transcript, microphone level and recording time.",
+    minimal: "A smaller indicator with status, microphone level and time.",
+  };
+  function renderPillPreview() {
+    const style = pillDescriptions[prefs.pillStyle] ? prefs.pillStyle : "compact";
+    pillSelect.value = style;
+    $("#pill-preview").dataset.pillStyle = style;
+    $("#pill-description").textContent = pillDescriptions[style];
+  }
+  renderPillPreview();
+  pillSelect.addEventListener("change", async () => {
+    pillSelect.disabled = true;
+    await save({ pillStyle: pillSelect.value }, "general");
+    renderPillPreview();
+    pillSelect.disabled = false;
+  });
+
   // Language
   const langSel = $("#language");
   for (const lang of catalog.languages) {

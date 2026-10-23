@@ -1,3 +1,4 @@
+import { normalizePillStyle, type PillStyle } from "./utils/pill-style.js";
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { dictationShortcut } from "./utils/dictation-shortcut.js";
@@ -20,6 +21,7 @@ export interface Preferences {
   whisperModelId: string;
   llmModelId: string;
   hotkeyAccelerator: string;
+  pillStyle: PillStyle;
   language: string;
   debugLogging: boolean;
   useLlmCleanup: boolean;
@@ -56,6 +58,7 @@ export const DEFAULT_PREFS: Preferences = {
   whisperModelId: "whisper-small",
   llmModelId: "qwen-1.5b",
   hotkeyAccelerator: "Hold Option",
+  pillStyle: "compact",
   language: "auto",
   debugLogging: false,
   useLlmCleanup: true,
@@ -80,7 +83,7 @@ export class PreferencesStore {
     try {
       const raw = await readFile(this.path, "utf8");
       const parsed = JSON.parse(raw) as Partial<Preferences>;
-      return { ...DEFAULT_PREFS, ...parsed, hotkeyAccelerator: dictationShortcut(parsed.hotkeyAccelerator).id };
+      return { ...DEFAULT_PREFS, ...parsed, pillStyle: normalizePillStyle(parsed.pillStyle), hotkeyAccelerator: dictationShortcut(parsed.hotkeyAccelerator).id };
     } catch {
       return { ...DEFAULT_PREFS };
     }

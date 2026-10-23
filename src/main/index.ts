@@ -1,3 +1,4 @@
+import { audioLevel } from "./utils/pill-style.js";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, powerSaveBlocker, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -591,6 +592,8 @@ async function main(): Promise<void> {
   });
 
   const overlay = new OverlayWindow();
+  overlay.setAppearance(prefs.pillStyle, dictationShortcut(prefs.hotkeyAccelerator).label);
+  prefsWindow.onSaved((next) => overlay.setAppearance(next.pillStyle, dictationShortcut(bootPrefs.hotkeyAccelerator).label));
   bootOverlay = overlay;
   await overlay.create();
   coordinator.onStateChange((state) => {
@@ -626,6 +629,7 @@ async function main(): Promise<void> {
     const view = new Float32Array(arrayBuffer, byteOffset, length);
     const chunk = new Float32Array(view.length);
     chunk.set(view);
+    overlay.sendLevel(audioLevel(chunk));
     orchestrator.appendChunk(chunk);
     if (streamingWhisper) streamingWhisper.feedSamples(chunk);
   });

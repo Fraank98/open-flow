@@ -23,7 +23,8 @@
   };
   let prefs = {
     setupComplete: true, whisperModelId: "whisper-small", llmModelId: "qwen-1.5b",
-    hotkeyAccelerator: "Hold Option", language: base === "fresh" ? "auto" : "it", debugLogging: false,
+    hotkeyAccelerator: "Hold Option",
+    pillStyle: "compact", language: base === "fresh" ? "auto" : "it", debugLogging: false,
     useLlmCleanup: true, launchAtLogin: true, spokenPunctuation: false,
     dictionary: base === "fresh" ? [] : ["Kubernetes", "open-flow", "Qwen"],
     replySuggestionsEnabled: isReplyOn,

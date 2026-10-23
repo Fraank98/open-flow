@@ -1,0 +1,23 @@
+/* Shared by the live overlay and its Settings preview. */
+.recording-pill { color: light-dark(#262628, #fafafa); background: light-dark(rgba(250,250,250,.97), rgba(36,36,38,.97)); border: 1px solid light-dark(#dedee2, #48484b); box-shadow: 0 8px 24px #0003; width: 360px; padding: 12px 16px; border-radius: 18px; font: 13px -apple-system, system-ui, sans-serif; }
+.pill-row { display: flex; align-items: center; gap: 10px; min-height: 24px; }
+.recording-pill .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #ff453a; animation: none; }
+.recording-pill .content { flex: 1; min-width: 0; }
+.recording-pill .label { font-size: 13px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.recording-pill button { display: grid; place-items: center; padding: 0; line-height: 1; font: 12px -apple-system, system-ui, sans-serif; flex-shrink: 0; border: 0; border-radius: 50%; width: 24px; height: 24px; color: inherit; background: light-dark(#0000000d, #ffffff14); cursor: pointer; }
+.recording-pill button:hover { background: light-dark(#00000018, #ffffff26); }
+.recording-pill button:focus-visible { outline: 2px solid #007aff; outline-offset: 2px; }
+.recording-pill .waveform { display: flex; align-items: center; gap: 2px; height: 22px; }
+.recording-pill .waveform i { display: block; width: 2px; height: 3px; background: currentColor; border-radius: 2px; opacity: .7; transition: height 120ms linear; }
+.recording-pill .elapsed { font-size: 11px; opacity: .6; font-variant-numeric: tabular-nums; }
+.recording-pill .partial, .recording-pill .pill-hint { display: none; }
+[data-dictation-layout="true"] .recording-pill { width: 310px; height: 48px; border-radius: 28px; padding: 11px 14px; }
+[data-dictation-layout="true"][data-pill-style="minimal"] .recording-pill { width: 226px; }
+[data-pill-style="minimal"] .waveform i:nth-child(-n+4) { display: none; }
+[data-dictation-layout="true"][data-pill-style="preview"] .recording-pill { width: 360px; height: 120px; border-radius: 18px; padding: 12px 16px; }
+[data-dictation-layout="true"][data-pill-style="preview"] .partial { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; height: 36px; line-height: 18px; white-space: normal; margin-top: 8px; font-size: 12px; opacity: .8; overflow-wrap: anywhere; }
+[data-dictation-layout="true"][data-pill-style="preview"] .pill-hint { display: block; font-size: 10px; opacity: .5; margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[data-dictation-layout="false"] .waveform, [data-dictation-layout="false"] .elapsed { display: none; }
+.state-transcribing .waveform, .state-cleaning .waveform, .state-injecting .waveform { opacity: .35; }
+.state-transcribing .pill-hint, .state-cleaning .pill-hint, .state-injecting .pill-hint { visibility: hidden; }
+@media (prefers-reduced-motion: reduce) { .recording-pill .waveform i { transition: none; } }

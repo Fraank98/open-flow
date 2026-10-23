@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <link rel="stylesheet" href="./lib/theme.css" />
     <link rel="stylesheet" href="./preferences.css" />
+    <link rel="stylesheet" href="./lib/recording-pill.css" />
     <title>open-flow Settings</title>
   </head>
   <body>
@@ -47,6 +48,32 @@
           </label>
           <select id="hotkeyAccelerator" aria-label="Dictation shortcut"></select>
         </div>
+
+        <div class="row">
+          <label class="row-text" for="pillStyle">
+            <span class="row-title">Recording pill</span>
+            <span class="row-desc">Choose your recording indicator. Applies immediately.</span>
+          </label>
+          <select id="pillStyle">
+            <option value="compact">Compact</option>
+            <option value="preview">Preview</option>
+            <option value="minimal">Minimal</option>
+          </select>
+        </div>
+        <div id="pill-preview" data-pill-style="compact" data-dictation-layout="true" aria-label="Recording pill preview">
+      <div  class="recording-pill">
+        <div class="pill-row">
+          <div class="dot"></div>
+          <div class="content"><div class="label" >Recording…</div></div>
+          <div class="waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <span class="elapsed"  aria-label="Recording duration">00:12</span>
+          <button type="button" disabled aria-hidden="true" tabindex="-1">✕</button>
+        </div>
+        <div class="partial">Let’s meet tomorrow to discuss the details.</div>
+        <div class="pill-hint">Release your shortcut to finish</div>
+      </div>
+        </div>
+        <p id="pill-description" class="row-desc"></p>
 
         <h2 class="group-title">Permissions</h2>
         <ul id="permissions" class="perm-list"></ul>

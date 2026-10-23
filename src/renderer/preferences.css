@@ -150,3 +150,8 @@ input.switch:checked::after { transform: translateX(16px); }
 .dict-list li .app-icon { width: 16px; height: 16px; margin-right: 8px; flex: none; }
 .dict-list li .app-icon.blank { visibility: hidden; }
 .app-id { color: var(--muted); font-size: 11px; margin-left: 4px; }
+
+#pill-preview { display: flex; align-items: center; justify-content: center; min-height: 160px; margin: 8px 0; border-radius: 12px; background: var(--bg); overflow: hidden; }
+#pill-preview .waveform i:nth-child(3n) { height: 18px; }
+#pill-preview .waveform i:nth-child(3n+1) { height: 8px; }
+#pill-description { margin-bottom: 16px; }

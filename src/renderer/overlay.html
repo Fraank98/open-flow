@@ -2,18 +2,22 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <link rel="stylesheet" href="./lib/recording-pill.css" />
     <link rel="stylesheet" href="./overlay.css" />
     <title>open-flow</title>
   </head>
   <body>
-    <div id="root" class="state-idle">
-      <div id="pill">
-        <div class="dot"></div>
-        <div class="content">
-          <div class="label" id="label">Idle</div>
-          <div class="partial" id="partial"></div>
+    <div id="root" class="state-idle" data-pill-style="compact" data-dictation-layout="true">
+      <div id="pill" class="recording-pill">
+        <div class="pill-row">
+          <div class="dot"></div>
+          <div class="content"><div class="label" id="label" role="status">Idle</div></div>
+          <div class="waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <span class="elapsed" id="elapsed" aria-label="Recording duration">00:00</span>
+          <button id="cancel" type="button" aria-label="Cancel dictation">✕</button>
         </div>
-        <button id="cancel" type="button">✕</button>
+        <div class="partial" id="partial"></div>
+        <div class="pill-hint" id="pill-hint"></div>
       </div>
       <div id="suggest">
         <div class="gist" id="gist"></div>
@@ -46,6 +50,32 @@
       };
       const BADGES = ["⌘1", "⌘2", "⌘3"];
       let suggesting = false;
+      let currentState = "idle";
+      let recordingStarted = 0;
+      let timer = null;
+      let meterReset = null;
+      const elapsedEl = document.getElementById("elapsed");
+      const bars = [...document.querySelectorAll(".waveform i")];
+      const levels = Array(9).fill(0);
+      function updateElapsed() {
+        const seconds = Math.max(0, Math.floor((performance.now() - recordingStarted) / 1000));
+        elapsedEl.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+      }
+      function renderMeter() {
+        bars.forEach((bar, i) => { bar.style.height = `${3 + levels[i] * 17}px`; });
+      }
+      window.openFlowOverlay.onAppearance(({ style, shortcutLabel }) => {
+        rootEl.dataset.pillStyle = ["compact", "preview", "minimal"].includes(style) ? style : "compact";
+        document.getElementById("pill-hint").textContent = `Release ${shortcutLabel} to finish`;
+      });
+      window.openFlowOverlay.onLevel((level) => {
+        if (currentState !== "recording") return;
+        levels.shift();
+        levels.push(Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0);
+        renderMeter();
+        clearTimeout(meterReset);
+        meterReset = setTimeout(() => { levels.fill(0); renderMeter(); }, 600);
+      });
 
       function clearSuggestions() {
         suggesting = false;
@@ -55,7 +85,23 @@
 
       window.openFlowOverlay.onState((state) => {
         if (state !== "suggesting") clearSuggestions();
+        const previous = currentState;
+        currentState = state;
         rootEl.className = `state-${state}`;
+        rootEl.dataset.dictationLayout = String(["idle", "recording", "transcribing", "cleaning", "injecting"].includes(state));
+        cancelBtn.setAttribute("aria-label", state === "suggesting" ? "Dismiss suggestions" : "Cancel dictation");
+        if (state === "recording" && previous !== "recording") {
+          partialEl.textContent = "";
+          recordingStarted = performance.now();
+          updateElapsed();
+          clearInterval(timer);
+          timer = setInterval(updateElapsed, 250);
+        } else if (state !== "recording") {
+          clearInterval(timer);
+          clearTimeout(meterReset);
+          levels.fill(0);
+          renderMeter();
+        }
         // flash owns the label itself (onFlash sets it); every other state
         // falls back to the fixed TEXT table.
         if (state !== "flash") labelEl.textContent = TEXT[state] ?? state;
@@ -67,7 +113,7 @@
 
       window.openFlowOverlay.onPartial((text) => {
         // Show the latest streaming-whisper transcript as it accumulates.
-        partialEl.textContent = text;
+        if (currentState === "recording") partialEl.textContent = text;
       });
 
       window.openFlowOverlay.onSuggestions((payload) => {
