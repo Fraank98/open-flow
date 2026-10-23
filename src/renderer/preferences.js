@@ -120,6 +120,20 @@ async function init() {
     el.addEventListener("change", () => save({ [key]: el.checked }, tab));
   }
 
+  const shortcutSelect = $("#hotkeyAccelerator");
+  const shortcutInfo = await api.appInfo();
+  for (const shortcut of shortcutInfo.dictationShortcuts) {
+    const option = document.createElement("option");
+    option.value = shortcut.id;
+    option.textContent = shortcut.label;
+    option.selected = shortcut.id === prefs.hotkeyAccelerator;
+    shortcutSelect.appendChild(option);
+  }
+  shortcutSelect.addEventListener("change", async () => {
+    await save({ hotkeyAccelerator: shortcutSelect.value }, "general", "Saved — relaunch to use this shortcut");
+    shortcutSelect.value = prefs.hotkeyAccelerator;
+  });
+
   // Language
   const langSel = $("#language");
   for (const lang of catalog.languages) {

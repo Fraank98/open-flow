@@ -3,9 +3,10 @@ import type { Preferences } from "../preferences-store.js";
 // Fields that the running main process cannot pick up without a relaunch:
 // the Whisper / LLM models are loaded into their servers at boot, and the
 // llama-server is only started at launch when LLM cleanup is enabled.
+// The native dictation monitor is configured at boot too.
 // Everything else (language, dictionary, debug logging, launch-at-login,
 // spoken punctuation) is applied live.
-export const RESTART_REQUIRED_FIELDS = ["whisperModelId", "llmModelId", "useLlmCleanup"] as const;
+export const RESTART_REQUIRED_FIELDS = ["whisperModelId", "llmModelId", "useLlmCleanup", "hotkeyAccelerator"] as const;
 
 /**
  * Which restart-required fields differ between the prefs the app booted with

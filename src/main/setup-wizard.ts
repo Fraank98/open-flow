@@ -1,3 +1,4 @@
+import { dictationShortcut } from "./utils/dictation-shortcut.js";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -166,6 +167,7 @@ export class SetupWizard {
         // Not probed here: the osascript probe raises the macOS Automation prompt
         // if it was never answered, which must only happen when the user asks.
         automationPermission: "unknown" as const,
+        dictationShortcutLabel: dictationShortcut(prefs.hotkeyAccelerator).label,
         setupStep: prefs.setupStep,
         setupTierId: prefs.setupTierId,
         setupReason: prefs.setupReason,

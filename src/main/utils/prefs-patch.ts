@@ -1,13 +1,15 @@
+import { isDictationShortcut } from "./dictation-shortcut.js";
 import { getModelById } from "../model-catalog.js";
 import { isSupportedLanguage } from "./languages.js";
 import { validateReplyAccelerator } from "./reply-hotkey.js";
 import { isBundleId } from "./app-bundle.js";
 import type { Preferences } from "../preferences-store.js";
 
-/** Fields the Settings window may write. Everything else (setup state, hotkey) is main-owned. */
+/** Fields the Settings window may write. Setup state remains main-owned. */
 export type SettingsPatch = Partial<
   Pick<
     Preferences,
+    | "hotkeyAccelerator"
     | "language"
     | "debugLogging"
     | "useLlmCleanup"
@@ -43,6 +45,7 @@ export function sanitizePrefsPatch(input: unknown): SettingsPatch {
   if (typeof input !== "object" || input === null) return {};
   const raw = input as Record<string, unknown>;
   const out: SettingsPatch = {};
+  if (isDictationShortcut(raw.hotkeyAccelerator)) out.hotkeyAccelerator = raw.hotkeyAccelerator;
 
   for (const key of BOOLEAN_FIELDS) {
     if (typeof raw[key] === "boolean") out[key] = raw[key] as boolean;

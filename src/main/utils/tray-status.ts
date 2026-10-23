@@ -10,10 +10,10 @@ export interface TrayArmerState {
 }
 
 /** What the tray shows for each state of the push-to-talk armer. */
-export function trayStateForArmer(state: PttArmState): TrayArmerState {
+export function trayStateForArmer(state: PttArmState, shortcutLabel = "⌥"): TrayArmerState {
   switch (state) {
     case "armed": {
-      const status = "Ready — hold ⌥ to dictate";
+      const status = `Ready — hold ${shortcutLabel} to dictate`;
       return { status, hint: null, readyStatus: status };
     }
     case "waiting":
@@ -22,7 +22,7 @@ export function trayStateForArmer(state: PttArmState): TrayArmerState {
         hint: "Open System Settings › Privacy & Security › Accessibility and turn on open-flow",
       };
     case "armed-after-grant": {
-      const status = "Ready — if Option doesn't respond, choose Relaunch open-flow";
+      const status = `Ready — if ${shortcutLabel === "⌥" ? "Option" : shortcutLabel} doesn't respond, choose Relaunch open-flow`;
       return { status, hint: null, readyStatus: status };
     }
     case "relaunch-needed":

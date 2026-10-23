@@ -43,8 +43,8 @@ Dictation tools that feel instant usually send your voice to a server. open-flow
 <table>
   <tr>
     <td width="50%" valign="top">
-      <b>Push-to-talk on the Option key</b><br>
-      Hold either Option key anywhere, talk, release. No window to focus, no toggle to forget. Option used as a modifier (Option+arrow, Option+letter) never triggers dictation.
+      <b>Choose your push-to-talk shortcut</b><br>
+      Hold either Option key anywhere, talk, release. In Settings → General, choose Option, Control, Shift, or a two-modifier combination; relaunch to apply. No window to focus, no toggle to forget. Typing a key or adding another modifier cancels the recording.
     </td>
     <td width="50%" valign="top">
       <b>Streaming transcription</b><br>

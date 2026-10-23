@@ -17,7 +17,7 @@
       <section id="step-welcome" class="step active" aria-labelledby="welcome-h">
         <h2 id="welcome-h" tabindex="-1">Dictate anywhere on your Mac. Nothing leaves it.</h2>
         <ul>
-          <li>Hold the Option key, speak, release — the text appears where your cursor is.</li>
+          <li>Hold <span data-dictation-shortcut>⌥ Option</span>, speak, release — the text appears where your cursor is.</li>
           <li>Speech recognition and cleanup run on your Mac with Whisper and a small local model. No account, no cloud.</li>
           <li id="welcome-setup">Setup: two macOS permissions, one automation consent, and a one-time download (1–3.7 GB).</li>
         </ul>
@@ -31,7 +31,7 @@
         <div class="perm" id="perm-mic">
           <strong>Microphone</strong>
           <span class="status" id="mic-status" role="status" aria-live="polite">checking…</span>
-          <span class="perm-hint">Records your voice only while you hold Option.</span>
+          <span class="perm-hint">Records your voice only while you hold <span data-dictation-shortcut>⌥ Option</span>.</span>
           <div class="perm-actions">
             <button id="mic-request">Allow microphone</button>
             <button id="mic-open" class="hidden">Open System Settings</button>
@@ -40,7 +40,7 @@
         <div class="perm" id="perm-acc">
           <strong>Accessibility</strong>
           <span class="status" id="acc-status" role="status" aria-live="polite">checking…</span>
-          <span class="perm-hint">Lets open-flow notice when you hold Option and paste with <kbd>⌘V</kbd>. It does not read what you type.</span>
+          <span class="perm-hint">Lets open-flow notice when you hold <span data-dictation-shortcut>⌥ Option</span> and paste with <kbd>⌘V</kbd>. It does not read what you type.</span>
           <div class="perm-actions">
             <button id="acc-open">Open System Settings</button>
           </div>
@@ -106,7 +106,7 @@
           <button id="ready-relaunch" class="primary hidden">Relaunch open-flow</button>
         </div>
         <div id="ready-live" class="hidden">
-          <p>Switch to Notes or any text field, hold <kbd>⌥ Option</kbd>, speak, then release.</p>
+          <p>Switch to Notes or any text field, hold <kbd data-dictation-shortcut>⌥ Option</kbd>, speak, then release.</p>
           <p class="muted">Dictation works in other apps, not in this window.</p>
           <p id="live-status" class="live-status" role="status" aria-live="polite">Waiting for you…</p>
           <p class="muted">Tip: click the microphone icon in the menubar for Pause, Settings and Quit.</p>

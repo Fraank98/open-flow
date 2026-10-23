@@ -216,7 +216,7 @@ describe("prefs:update", () => {
     });
 
     expect(update).toHaveBeenCalledTimes(1);
-    expect(update).toHaveBeenCalledWith({ debugLogging: true });
+    expect(update).toHaveBeenCalledWith({ debugLogging: true, hotkeyAccelerator: "Hold Control" });
 
     await ipcMain.invoke("prefs:update", { language: "it" });
     expect(update).toHaveBeenLastCalledWith({ language: "it" });
@@ -281,7 +281,7 @@ describe("pass-through channels", () => {
     await ipcMain.invoke("prefs:permissions-status", { automation: "yes" });
     await ipcMain.invoke("prefs:permissions-status");
     expect(deps.permissionsStatus.mock.calls.map(([probe]) => probe)).toEqual([true, false, false]);
-    await expect(ipcMain.invoke("prefs:app-info")).resolves.toEqual({ version: "9.9.9" });
+    await expect(ipcMain.invoke("prefs:app-info")).resolves.toMatchObject({ version: "9.9.9" });
     await expect(ipcMain.invoke("prefs:validate-reply-hotkey", "Alt+X")).resolves.toMatchObject({ ok: false });
   });
 });

@@ -36,3 +36,8 @@ describe("trayStateForArmer", () => {
     expect(states.filter((s) => trayStateForArmer(s).readyStatus !== undefined)).toEqual(["armed", "armed-after-grant"]);
   });
 });
+
+it("uses the configured shortcut in ready and permission-recovery hints", () => {
+  expect(trayStateForArmer("armed", "⌃ Control").status).toContain("⌃ Control");
+  expect(trayStateForArmer("armed-after-grant", "⌃ Control").status).toContain("⌃ Control");
+});

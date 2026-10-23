@@ -23,6 +23,7 @@ interface TierInfo {
 }
 
 interface InitialState {
+  dictationShortcutLabel: string;
   hardwareSummary: string;
   micPermission: string;
   accessibilityPermission: string;

@@ -65,7 +65,7 @@ interface PrefsApi {
   revealModels: () => void;
   openProjectPage: () => void;
   resetSetup: () => Promise<boolean>;
-  appInfo: () => Promise<{ version: string }>;
+  appInfo: () => Promise<{ version: string; dictationShortcuts: Array<{ id: string; label: string }> }>;
   onShowTab: (cb: (tab: string) => void) => () => void;
   replyStatus: () => Promise<ReplyStatusInfo>;
   /** Re-applies the reply server (the Retry after a failed start). */
