@@ -71,6 +71,14 @@ export function computeOverlayBounds(displays: readonly DisplayLike[], cursor: P
   // the centering half-width (as this used to) leaves a fractional work
   // area's x still fractional, and left y unrounded entirely.
   const x = Math.round(Math.max(wa.x, wa.x + (wa.width - size.width) / 2));
-  const y = Math.round(Math.max(wa.y, wa.y + wa.height - size.height + SHADOW_MARGIN));
+  let y = Math.round(Math.max(wa.y, wa.y + wa.height - size.height + SHADOW_MARGIN));
+  // The shadow margin hangs below the display. When another display sits
+  // directly underneath (an external screen stacked above the laptop), the
+  // overhang lands on it: macOS then adopts the window on that screen and
+  // parks it at its top-left. Pull the window up so it stays whole.
+  const overhangs = (yy: number) => displays.some((d) => d.id !== display.id
+    && x < d.bounds.x + d.bounds.width && x + size.width > d.bounds.x
+    && yy < d.bounds.y + d.bounds.height && yy + size.height > d.bounds.y);
+  if (overhangs(y)) y = Math.max(wa.y, display.bounds.y + display.bounds.height - size.height);
   return { x, y, width: size.width, height: size.height, displayId: display.id };
 }
