@@ -23,6 +23,19 @@ const LEFT: DisplayLike = {
   workArea: { x: -1920, y: -175, width: 1920, height: 1055 },
 };
 
+/** The reporter's layout: a 3440×1440 external screen stacked ABOVE the laptop
+ *  (negative y), its x range overlapping the laptop's. */
+const ABOVE: DisplayLike = {
+  id: 4,
+  bounds: { x: -1440, y: -1440, width: 3440, height: 1440 },
+  workArea: { x: -1440, y: -1410, width: 3440, height: 1410 },
+};
+const LAPTOP_MENUBAR: DisplayLike = {
+  id: 1,
+  bounds: { x: 0, y: 0, width: 1512, height: 982 },
+  workArea: { x: 0, y: 33, width: 1512, height: 949 },
+};
+
 describe("PILL_WINDOW_SIZE / SUGGEST_WINDOW_SIZE / SHADOW_MARGIN", () => {
   it("are the sizes of the spec: 420x124 for the pill, 480x520 for the suggestions, 24 px of shadow", () => {
     expect(PILL_WINDOW_SIZE).toEqual({ width: 420, height: 124 });
@@ -107,6 +120,19 @@ describe("computeOverlayBounds", () => {
     const b = computeOverlayBounds([tiny], { x: 150, y: 150 }, SUGGEST_WINDOW_SIZE);
     expect(b.x).toBe(100);
     expect(b.y).toBe(100);
+  });
+
+  it("keeps the window inside a display that has another one directly below it (shadow margin must not spill onto it)", () => {
+    // Unclamped, y = -1410 + 1410 - 124 + 24 = -100: the bottom 24 px land on
+    // the laptop, macOS adopts the window there and parks it at its top-left.
+    const b = computeOverlayBounds([LAPTOP_MENUBAR, ABOVE], { x: 802, y: -556 }, PILL_WINDOW_SIZE);
+    expect(b).toEqual({ x: 70, y: -124, width: 420, height: 124, displayId: 4 });
+    expect(b.y + b.height).toBeLessThanOrEqual(ABOVE.bounds.y + ABOVE.bounds.height);
+  });
+
+  it("still lets the shadow hang below when no other display is underneath", () => {
+    const b = computeOverlayBounds([LAPTOP_MENUBAR, ABOVE], { x: 700, y: 400 }, PILL_WINDOW_SIZE);
+    expect(b).toEqual({ x: 546, y: 882, width: 420, height: 124, displayId: 1 });
   });
 
   it("throws RangeError on an empty display list", () => {
