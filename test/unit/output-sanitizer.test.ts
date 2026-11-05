@@ -131,4 +131,33 @@ describe("sanitizeLlmOutput", () => {
     expect(result.text).toBe("Questo è il testo pulito.");
     expect(result.usedFallback).toBe(false);
   });
+
+  it("restores the full November 5 dictation when cleanup drops its requirements", () => {
+    const raw = " I want still the control around the microphones in the sense that there are many microphones on the device and it can detect which microphone is closer to the user so it can light up the ring accordingly, right? So that I want to keep. I want to keep voice recognition in the sense of wake world recognition. I want to keep all these things. Of course not the Alexa wake world recognition but a custom wake world recognition that I will define later but important is that we keep all the drivers and the firmware in order to do that.";
+    const output = "I want to keep voice recognition in the sense of wake world recognition. I want to keep all the drivers and the firmware in order to do that.";
+    expect(sanitizeLlmOutput(output, raw)).toEqual({ text: raw, usedFallback: true });
+  });
+
+  it.each([
+    ["Do not delete the files.", "Do delete the files."],
+    ["Keep 3 microphones and 2 speakers.", "Keep microphones and speakers."],
+    ["Use port 8080.", "Use port 80."],
+    ["I know him well.", "I know him."],
+    ["I like this device.", "I this device."],
+    ["You know the password.", "The password."],
+  ])("rejects deletion or alteration of meaningful content: %s", (raw, output) => {
+    expect(sanitizeLlmOutput(output, raw)).toEqual({ text: raw, usedFallback: true });
+  });
+
+  it.each([
+    ["Uh, hello world.", "Hello world."],
+    ["Well, I was thinking we should leave.", "I was thinking we should leave."],
+    ["You know, it works.", "It works."],
+    ["io— io penso che è giusto.", "io penso che è giusto."],
+    ["vol- volevo dire questo.", "volevo dire questo."],
+    ["Hello. So, we should leave.", "Hello. We should leave."],
+  ])("preserves supported disfluency removal: %s", (raw, output) => {
+    expect(sanitizeLlmOutput(output, raw)).toEqual({ text: output, usedFallback: false });
+  });
+
 });
