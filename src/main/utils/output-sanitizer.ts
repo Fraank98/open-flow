@@ -1,3 +1,5 @@
+import { VERBAL_FILLERS, DISCOURSE_FILLERS } from "./filler-words.js";
+
 export interface SanitizedOutput {
   text: string;
   usedFallback: boolean;
@@ -24,19 +26,51 @@ const NOISY_SUFFIX_PATTERNS: RegExp[] = [
 
 const SHORT_OUTPUT_THRESHOLD = 50; // chars
 
-// True when every word of `output` appears in `input` in the same relative
-// order — i.e. `output` is a word-subsequence of `input`. Words are runs of
-// Unicode letters; case is normalized. Empty output is trivially a subsequence.
-function isWordSubsequence(input: string, output: string): boolean {
-  const inWords = input.toLowerCase().match(/\p{L}+/gu) ?? [];
-  const outWords = output.toLowerCase().match(/\p{L}+/gu) ?? [];
-  let i = 0;
-  for (const w of outWords) {
-    while (i < inWords.length && inWords[i] !== w) i++;
-    if (i >= inWords.length) return false;
-    i++; // consume the matched input word
+// Validate deletions, not just the surviving subsequence. A model summary is
+// also a subsequence, but must never replace the user's full dictation.
+// Keep numbers as tokens too: dropping/changing quantities is content loss.
+function hasOnlyAllowedDeletions(input: string, output: string): boolean {
+  const tokens = [...input.matchAll(/[\p{L}\p{N}]+/gu)];
+  const words = tokens.map((t) => t[0].toLowerCase());
+  const outWords = output.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const verbal = new Set<string>(VERBAL_FILLERS);
+  const discourse = Object.values(DISCOURSE_FILLERS).flat()
+    .map((phrase) => phrase.toLowerCase().match(/\p{L}+/gu)!);
+
+  // Reachable output positions at each input position. Explore both keeping
+  // and removing a filler so repeated words cannot cause a greedy mismatch.
+  const reachable = Array.from({ length: words.length + 1 }, () => new Set<number>());
+  reachable[0]!.add(0);
+  for (let i = 0; i < words.length; i++) {
+    if (reachable[i]!.size === 0) continue;
+    const end = tokens[i]!.index! + tokens[i]![0].length;
+    const previousEnd = i === 0 ? 0 : tokens[i - 1]!.index! + tokens[i - 1]![0].length;
+    const before = input.slice(previousEnd, tokens[i]!.index);
+    const after = input.slice(end, tokens[i + 1]?.index ?? input.length);
+    const skipEnds: number[] = [];
+    if (verbal.has(words[i]!)) skipEnds.push(i + 1);
+
+    // Be conservative with ambiguous discourse words ("like", "well", ...).
+    // Accept only sentence-initial markers explicitly separated by a comma.
+    if (i === 0 || /[.!?]\s*$/.test(before)) {
+      for (const phrase of discourse) {
+        const last = i + phrase.length - 1;
+        if (phrase.every((w, k) => words[i + k] === w) &&
+            /^\s*,/.test(input.slice(tokens[last]!.index! + tokens[last]![0].length))) {
+          skipEnds.push(last + 1);
+        }
+      }
+    }
+    // Only dash-marked repetitions/partial-word starts, never bare duplicates.
+    if (/^\s*[—-]\s*$/.test(after) && words[i + 1]?.startsWith(words[i]!)) {
+      skipEnds.push(i + 1);
+    }
+    for (const j of reachable[i]!) {
+      if (j < outWords.length && words[i] === outWords[j]) reachable[i + 1]!.add(j + 1);
+      for (const next of skipEnds) reachable[next]!.add(j);
+    }
   }
-  return true;
+  return reachable[words.length]!.has(outWords.length);
 }
 
 export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): SanitizedOutput {
@@ -108,16 +142,9 @@ export function sanitizeLlmOutput(rawOutput: string, rawTranscript: string): San
     }
   }
 
-  // Removal-only contract: the cleaned output must be a word-subsequence of the
-  // input — same words, same order, some deleted (fillers). The task never
-  // substitutes, inserts, or reorders words, so anything that breaks the
-  // subsequence is the model mangling content (e.g. finisci→finisco, or moving
-  // a word mid-sentence). Discard and use raw. Case is normalized so
-  // capitalizing the word after a removed sentence-initial filler still matches.
-  // This subsumes the older fraction-based drift heuristic, which let a single
-  // substitution in a short sentence through (1/6 = 17% < 35%) and was blind to
-  // reordering (the word is still "present").
-  if (rawTranscript.trim().length > 0 && !isWordSubsequence(rawTranscript, text)) {
+  // Reject any edit that cannot be explained solely by supported disfluency
+  // removal. On uncertainty, retain the complete original transcript.
+  if (rawTranscript.trim().length > 0 && !hasOnlyAllowedDeletions(rawTranscript, text)) {
     return { text: rawTranscript, usedFallback: true };
   }
 
